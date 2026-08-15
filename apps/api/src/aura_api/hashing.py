@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 
 
-def compute_input_hash(media_sha256: str | None, object_key: str, instrument: str, pipeline_version: str) -> str:
+def compute_input_hash(object_key: str, instrument: str, pipeline_version: str) -> str:
     """Derive input_hash per ARCHITECTURE.md §6.
 
-    media_sha256 is unknown until the worker's probe stage runs, so before that
-    we hash the object_key instead — stable for the same upload, and object_key
-    is already unique per upload.
+    Keyed on object_key rather than the media's sha256: the API must never
+    download media to hash it (§4.2, §7 — no proxying large media through the
+    application process), and sha256 is only known once the worker's probe
+    stage has run. object_key is assigned once at upload time and never
+    changes, so it stays stable across repeated calls for the same upload —
+    unlike sha256, which would silently change the hash basis (and break
+    idempotency) the moment probe finishes.
     """
-    basis = media_sha256 or object_key
-    digest_input = f"{basis}:{instrument}:{pipeline_version}".encode()
+    digest_input = f"{object_key}:{instrument}:{pipeline_version}".encode()
     return hashlib.sha256(digest_input).hexdigest()

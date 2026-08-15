@@ -29,7 +29,6 @@ def create_transcription(
         raise HTTPException(status_code=404, detail="no source media for project")
 
     input_hash = compute_input_hash(
-        media_sha256=asset.sha256,
         object_key=asset.object_key,
         instrument=project.instrument,
         pipeline_version="v1",
