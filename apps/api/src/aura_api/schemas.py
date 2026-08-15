@@ -52,3 +52,8 @@ class ProjectResponse(BaseModel):
     title: str
     instrument: str
     media_asset_id: str
+
+
+class CreateJobResponse(BaseModel):
+    job_id: str
+    status: str
