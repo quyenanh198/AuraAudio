@@ -29,3 +29,26 @@ class CreateUploadResponse(BaseModel):
 
 def make_upload_object_key(filename: str) -> str:
     return f"uploads/{uuid.uuid4()}/{filename}"
+
+
+class CreateProjectRequest(BaseModel):
+    title: str
+    instrument: str
+
+    @field_validator("instrument")
+    @classmethod
+    def instrument_supported(cls, v: str) -> str:
+        if v not in {"guitar", "piano"}:
+            raise ValueError("instrument must be 'guitar' or 'piano'")
+        return v
+
+    object_key: str
+
+
+class ProjectResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: str
+    title: str
+    instrument: str
+    media_asset_id: str
