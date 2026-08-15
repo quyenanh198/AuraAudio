@@ -44,3 +44,38 @@ services:
       mc alias set local http://minio:9000 aura aurasecret &&
       mc mb -p local/aura-media
       "
+
+  api:
+    build:
+      context: ../
+      dockerfile: apps/api/Dockerfile
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg2://aura:aura@postgres:5432/aura
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+    ports: ["8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: ../
+      dockerfile: workers/transcription/Dockerfile
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg2://aura:aura@postgres:5432/aura
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
