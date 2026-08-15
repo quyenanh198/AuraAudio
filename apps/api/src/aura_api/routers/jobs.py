@@ -6,7 +6,7 @@ from aura_api.deps import get_db
 from aura_api.hashing import compute_input_hash
 from aura_api.models import MediaAsset, Project, TranscriptionJob
 from aura_api.queue import enqueue_transcription_job
-from aura_api.schemas import CreateJobResponse
+from aura_api.schemas import CreateJobResponse, JobStatusResponse
 
 router = APIRouter(tags=["jobs"])
 
@@ -66,3 +66,14 @@ def create_transcription(
     enqueue_transcription_job(job.id)
     response.status_code = 201
     return CreateJobResponse(job_id=job.id, status=job.status)
+
+
+@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job(job_id: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+    job = db.get(TranscriptionJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return JobStatusResponse(
+        id=job.id, status=job.status, stage=job.stage, progress=job.progress,
+        error_code=job.error_code, error_detail=job.error_detail,
+    )

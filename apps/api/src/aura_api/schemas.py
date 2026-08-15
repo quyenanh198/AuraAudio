@@ -57,3 +57,19 @@ class ProjectResponse(BaseModel):
 class CreateJobResponse(BaseModel):
     job_id: str
     status: str
+
+
+class JobStatusResponse(BaseModel):
+    id: str
+    status: str
+    stage: str | None
+    progress: int
+    error_code: str | None
+    error_detail: str | None
+
+
+class ExportStatusResponse(BaseModel):
+    id: str
+    format: str
+    status: str
+    download_url: str | None
