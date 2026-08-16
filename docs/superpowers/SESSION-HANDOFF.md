@@ -41,7 +41,7 @@ same process as the three backend sub-projects below):
    process. Backend-only, no UI. 9/9 tasks implemented and verified (2026-08-16); final whole-branch review pending. Spec:
    `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`;
    plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`;
-   all 9 tasks implemented and reviewed clean via
+   executed via
    `subagent-driven-development`. See "Offline desktop app sub-projects"
    below for what changed and how it was verified.
 2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
@@ -57,7 +57,7 @@ same process as the three backend sub-projects below):
    undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
    single piece, builds on 1-3.
 
-Sub-project 1 now has a written spec + plan and is done (see above).
+Sub-project 1 now has a written spec + plan with all 9 tasks implemented and reviewed clean; final whole-branch review pending (see above).
 Sub-projects 2-4 have no written spec yet — only the scoping/technology
 decisions above have been made in conversation.
 
@@ -217,8 +217,8 @@ listed here as "item 4: web client" and a separate PDF-rendering /
 benchmark-harness backlog has been superseded by the offline-desktop-app
 direction — see "Direction change" near the top of this document and
 "Offline desktop app sub-projects" below for the current plan (4
-sequential sub-projects; the first, offline backend adaptation, is now
-done — sub-project 2 is next). PDF rendering and an offline benchmark CI
+sequential sub-projects; the first, offline backend adaptation, has all 9 tasks
+implemented and reviewed clean (final whole-branch review pending) — sub-project 2 is next). PDF rendering and an offline benchmark CI
 harness are still real future work, just not sequenced yet; revisit once
 the desktop app's 4 sub-projects are further along.
 
@@ -277,14 +277,14 @@ Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
 by sub-project 3's final review. Worth a small bounded fix on its own —
 sort each measure's events by `notatedOnset` before building notes — before
 it's forgotten as "always been like that." Sub-project 1 (offline backend
-adaptation) is now done and did not fold this in — still open and
+adaptation), with all tasks implemented and reviewed clean (final whole-branch review pending), did not fold this in — still open and
 unscheduled; a good candidate to knock out on its own before sub-project 4
 (semantic editing) starts building on top of `musicxml/export.py`.
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
 desktop app sub-projects" further down for current status. Sub-project 1
-(offline backend adaptation) is done; pick up sub-project 2 (desktop shell
+(offline backend adaptation) has all 9 tasks implemented and reviewed clean (final whole-branch review pending); pick up sub-project 2 (desktop shell
 + packaging, Tauri) next — no spec exists yet, start with
 `superpowers:brainstorming`.
 
@@ -337,7 +337,7 @@ correct — check it.
 ## Environment gotchas (sandbox-specific, not project design)
 
 - **No external services needed anymore.** Sub-project 1 (offline backend
-  adaptation, done — see "Offline desktop app sub-projects" above) swapped
+  adaptation, all tasks implemented and reviewed clean with final whole-branch review pending — see "Offline desktop app sub-projects" above) swapped
   Postgres → SQLite and S3/MinIO → a local filesystem `LocalStorageClient`,
   and replaced the Redis/RQ job queue with an in-process thread pool.
   `make test` and the API run standalone with the Docker daemon down and
