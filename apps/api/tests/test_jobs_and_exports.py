@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 from fastapi.testclient import TestClient
 
 from aura_api.main import create_app
@@ -53,10 +51,8 @@ def test_get_export_returns_download_url_when_succeeded(db_session):
     db_session.commit()
 
     client = TestClient(create_app())
-    with patch("aura_api.routers.exports.storage_client") as mock_storage:
-        mock_storage.presign_get.return_value = "https://minio.local/signed-download"
-        resp = client.get(f"/v1/exports/{export.id}")
+    resp = client.get(f"/v1/exports/{export.id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "succeeded"
-    assert body["download_url"] == "https://minio.local/signed-download"
+    assert body["download_url"] == f"/v1/exports/{export.id}/download"
