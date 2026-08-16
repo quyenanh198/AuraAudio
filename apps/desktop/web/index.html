@@ -3,8 +3,86 @@
 <head>
   <meta charset="utf-8" />
   <title>AuraAudio</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem;
+    }
+    #status {
+      font-weight: bold;
+    }
+    #status.ok {
+      color: #1a7f37;
+    }
+    #status.error {
+      color: #b62324;
+    }
+    #status.pending {
+      color: #6e7781;
+    }
+    pre {
+      background: #f6f8fa;
+      padding: 0.75rem;
+      border-radius: 6px;
+      max-width: 40rem;
+      overflow-x: auto;
+    }
+  </style>
 </head>
 <body>
   <p>AuraAudio desktop shell placeholder — Tauri window renders successfully.</p>
+  <p>Backend status (<code>GET http://127.0.0.1:8317/healthz</code>): <span id="status" class="pending">checking…</span></p>
+  <pre id="detail"></pre>
+
+  <script>
+    const HEALTH_URL = "http://127.0.0.1:8317/healthz";
+    const MAX_ATTEMPTS = 5;
+    const RETRY_DELAY_MS = 800;
+    const statusEl = document.getElementById("status");
+    const detailEl = document.getElementById("detail");
+
+    function setStatus(cls, text) {
+      statusEl.className = cls;
+      statusEl.textContent = text;
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    // Live fetch against the real running backend — this is the actual
+    // end-to-end proof the whole pipe works, not a hardcoded string. By the
+    // time this window is visible, Rust has already gated its creation on
+    // its own /healthz poll (see apps/desktop/src-tauri/src/backend.rs), so
+    // a single attempt is normally enough; a short client-side retry is
+    // kept anyway so a slow-to-settle connection doesn't read as a false
+    // "unreachable" on the very first paint.
+    async function checkBackendHealth() {
+      let lastError = "";
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        setStatus("pending", `checking… (attempt ${attempt}/${MAX_ATTEMPTS})`);
+        try {
+          const response = await fetch(HEALTH_URL);
+          const body = await response.json();
+          if (response.ok) {
+            setStatus("ok", "reachable");
+            detailEl.textContent = JSON.stringify(body, null, 2);
+            return;
+          }
+          lastError = `unhealthy (HTTP ${response.status})`;
+        } catch (err) {
+          lastError = String(err);
+        }
+        if (attempt < MAX_ATTEMPTS) {
+          await sleep(RETRY_DELAY_MS);
+        }
+      }
+      // Explicit, visible failure state — never a silently broken window.
+      setStatus("error", "unreachable");
+      detailEl.textContent = lastError;
+    }
+
+    checkBackendHealth();
+  </script>
 </body>
 </html>

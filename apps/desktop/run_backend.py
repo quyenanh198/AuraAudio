@@ -32,10 +32,31 @@ os.environ.setdefault("AURA_DATA_DIR", str(_data_dir))
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_data_dir / 'aura.db'}")
 
 import uvicorn  # noqa: E402
-
 from aura_api.main import app  # noqa: E402
+from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 AURA_BACKEND_PORT = 8317
+
+# The Tauri webview loads the frontend from a custom-scheme origin (e.g.
+# `tauri://localhost` on Linux/macOS, `http://tauri.localhost` on Windows),
+# which is cross-origin from this backend's `http://127.0.0.1:8317`. Without
+# CORS headers, the browser accepts the response on the wire (it shows up in
+# this process's own access log) but withholds it from the page's `fetch()`,
+# which then rejects with a generic network error — confirmed by hand during
+# Task 3's desktop-shell-packaging end-to-end verification.
+#
+# A wildcard origin is deliberately scoped to *this* standalone entrypoint
+# only (not `aura_api.main.create_app()`, which is also used for the
+# containerized/networked server deployment): this process only ever binds
+# to 127.0.0.1, is spawned as a per-user child process by the desktop app
+# itself, and currently serves no authenticated/cookie-based endpoints, so a
+# permissive policy here does not widen the shared server's attack surface.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=AURA_BACKEND_PORT)

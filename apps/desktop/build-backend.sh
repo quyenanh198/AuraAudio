@@ -28,3 +28,18 @@ uv run --package aura-api pyinstaller \
   apps/desktop/run_backend.py
 
 echo "Bundle built at apps/desktop/dist/aura-backend/aura-backend"
+
+# Stage the bundle into src-tauri/resources/ so tauri.conf.json's
+# bundle.resources map (Task 3: "resources/aura-backend/" -> "aura-backend/")
+# has a source to copy from. tauri-build's build.rs copies this into
+# target/<profile>/ on every `cargo build`/`tauri dev`/`tauri build`, not
+# just full bundler runs, so this staging step must run before any of those
+# — see apps/desktop/src-tauri/src/backend.rs's module doc comment for how
+# that was confirmed (by reading tauri-build/tauri-utils source, not
+# assumed).
+STAGE_DIR="apps/desktop/src-tauri/resources/aura-backend"
+rm -rf "$STAGE_DIR"
+mkdir -p "$(dirname "$STAGE_DIR")"
+cp -a apps/desktop/dist/aura-backend "$STAGE_DIR"
+
+echo "Bundle staged at $STAGE_DIR/aura-backend"

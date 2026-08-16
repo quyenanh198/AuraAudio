@@ -13,7 +13,8 @@
         "width": 800,
         "height": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
@@ -30,6 +31,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/aura-backend/": "aura-backend/"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
