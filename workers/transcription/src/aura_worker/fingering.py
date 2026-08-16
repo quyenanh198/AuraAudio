@@ -67,3 +67,100 @@ def assign_chord(pitches: list[int]) -> list["StringFret | None"]:
 
     backtrack(0, set(), [])
     return best_result
+
+
+@dataclass
+class _PlacementOption:
+    representative: StringFret
+    assignments: dict[int, StringFret]
+
+
+def _transition_cost(prev: StringFret, curr: StringFret) -> float:
+    cost = FRET_MOVE_WEIGHT * abs(curr.fret - prev.fret)
+    if curr.string != prev.string:
+        cost += STRING_CHANGE_PENALTY
+    cost += RANGE_PENALTY_WEIGHT * max(0, curr.fret - PREFERRED_MAX_FRET)
+    return cost
+
+
+def _entry_cost(sf: StringFret) -> float:
+    return RANGE_PENALTY_WEIGHT * max(0, sf.fret - PREFERRED_MAX_FRET)
+
+
+def _measure_groups(events: list[dict]) -> list[list[int]]:
+    """Group event indices by shared notatedOnset (a chord grouping),
+    preserving first-seen order."""
+    groups: dict[str, list[int]] = {}
+    order: list[str] = []
+    for i, ev in enumerate(events):
+        onset = ev["notatedOnset"]
+        if onset not in groups:
+            groups[onset] = []
+            order.append(onset)
+        groups[onset].append(i)
+    return [groups[o] for o in order]
+
+
+def _options_for_group(events: list[dict], indices: list[int]) -> list[_PlacementOption]:
+    if len(indices) == 1:
+        idx = indices[0]
+        pitch = events[idx]["pitch"]
+        return [
+            _PlacementOption(representative=c, assignments={idx: c})
+            for c in candidates_for_pitch(pitch)
+        ]
+
+    pitches = [events[i]["pitch"] for i in indices]
+    chord_result = assign_chord(pitches)
+    assignments = {
+        indices[j]: sf for j, sf in enumerate(chord_result) if sf is not None
+    }
+    if not assignments:
+        return []
+    representative = min(assignments.values(), key=lambda sf: sf.fret)
+    return [_PlacementOption(representative=representative, assignments=assignments)]
+
+
+def assign_measure(events: list[dict]) -> dict[int, StringFret]:
+    groups = _measure_groups(events)
+    all_steps = [_options_for_group(events, idxs) for idxs in groups]
+    steps = [s for s in all_steps if s]  # drop wholly-unreachable groups
+
+    result: dict[int, StringFret] = {}
+    if not steps:
+        return result
+
+    # dp[i] = list of (cumulative_cost, backpointer_index_into_dp[i-1]) per option in steps[i]
+    dp: list[list[tuple[float, int]]] = []
+    for i, options in enumerate(steps):
+        row: list[tuple[float, int]] = []
+        if i == 0:
+            for opt in options:
+                row.append((_entry_cost(opt.representative), -1))
+        else:
+            prev_options = steps[i - 1]
+            prev_row = dp[i - 1]
+            for opt in options:
+                best_cost = None
+                best_j = -1
+                for j, prev_opt in enumerate(prev_options):
+                    cost = prev_row[j][0] + _transition_cost(prev_opt.representative, opt.representative)
+                    if best_cost is None or cost < best_cost:
+                        best_cost = cost
+                        best_j = j
+                row.append((best_cost, best_j))
+        dp.append(row)
+
+    last_row = dp[-1]
+    best_final = min(range(len(last_row)), key=lambda k: last_row[k][0])
+
+    chosen = [0] * len(steps)
+    idx = best_final
+    for i in range(len(steps) - 1, -1, -1):
+        chosen[i] = idx
+        idx = dp[i][idx][1]
+
+    for i, options in enumerate(steps):
+        result.update(options[chosen[i]].assignments)
+
+    return result
