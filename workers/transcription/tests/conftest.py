@@ -7,14 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 _TEST_DB_PATH = Path(tempfile.gettempdir()) / "aura_worker_test.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
-# Temporary: Task 2 will make these optional. For now, set dummy values for config to load.
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:9000")
-os.environ.setdefault("S3_ACCESS_KEY", "dummy")
-os.environ.setdefault("S3_SECRET_KEY", "dummy")
-os.environ.setdefault("S3_BUCKET", "dummy")
-os.environ.setdefault("S3_REGION", "us-east-1")
+os.environ.setdefault("AURA_DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
 
 from aura_api.db import Base  # noqa: E402
 from aura_api.models import MediaAsset, Project, TranscriptionJob  # noqa: E402

@@ -1,40 +1,36 @@
 from __future__ import annotations
 
-import boto3
+import shutil
+from pathlib import Path
 
 from aura_api.config import settings
 
 
-class StorageClient:
+class LocalStorageClient:
     def __init__(self) -> None:
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=settings.s3_endpoint_url,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-        )
-        self.bucket = settings.s3_bucket
+        self.root = Path(settings.data_dir) / "blobs"
 
-    def presign_put(self, key: str, content_type: str, expires_in: int = 900) -> str:
-        return self._client.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": self.bucket, "Key": key, "ContentType": content_type},
-            ExpiresIn=expires_in,
-        )
+    def path_for(self, key: str) -> Path:
+        return self.root / key
 
-    def presign_get(self, key: str, expires_in: int = 900) -> str:
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self.bucket, "Key": key},
-            ExpiresIn=expires_in,
-        )
+    def put_bytes(self, key: str, data: bytes) -> None:
+        path = self.path_for(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def get_bytes(self, key: str) -> bytes:
+        return self.path_for(key).read_bytes()
+
+    def download_media_asset(self, key: str, dest_path: Path) -> Path:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.path_for(key), dest_path)
+        return dest_path
 
     def head_object(self, key: str) -> dict | None:
-        try:
-            return self._client.head_object(Bucket=self.bucket, Key=key)
-        except self._client.exceptions.ClientError:
+        path = self.path_for(key)
+        if not path.is_file():
             return None
+        return {"ContentLength": path.stat().st_size}
 
 
-storage_client = StorageClient()
+storage_client = LocalStorageClient()
