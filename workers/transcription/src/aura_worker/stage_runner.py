@@ -12,6 +12,7 @@ STAGE_PROGRESS = {
     "probe": 10,
     "normalize": 25,
     "inference": 55,
+    "structure": 65,
     "quantize": 75,
     "export": 100,
 }
