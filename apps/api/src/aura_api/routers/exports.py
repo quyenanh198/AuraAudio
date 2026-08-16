@@ -33,7 +33,12 @@ def download_export(export_id: str, db: Session = Depends(get_db)) -> FileRespon
     if export is None or export.status != "succeeded" or not export.object_key:
         raise HTTPException(status_code=404, detail="export not available")
 
-    path = storage_client.path_for(export.object_key)
+    try:
+        path = storage_client.path_for(export.object_key)
+    except ValueError:
+        # object_key resolved outside the storage root — defensive, since
+        # this key comes from the DB rather than directly from the client.
+        raise HTTPException(status_code=404, detail="export file missing") from None
     if not path.is_file():
         raise HTTPException(status_code=404, detail="export file missing")
 

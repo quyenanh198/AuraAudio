@@ -45,3 +45,19 @@ def test_head_object_returns_none_for_missing_key(client):
 
 def test_path_for_returns_filesystem_path_under_blob_root(client, tmp_path):
     assert client.path_for("a/b.mid") == tmp_path / "blobs" / "a" / "b.mid"
+
+
+def test_path_for_resolves_normal_nested_key(client, tmp_path):
+    # Regression check: the containment fix must not break ordinary nested
+    # keys that stay under the blob root.
+    assert client.path_for("a/b/c.txt") == (tmp_path / "blobs" / "a" / "b" / "c.txt").resolve()
+
+
+def test_path_for_rejects_key_that_escapes_root(client):
+    with pytest.raises(ValueError):
+        client.path_for("../outside")
+
+
+def test_path_for_rejects_absolute_key_that_escapes_root(client):
+    with pytest.raises(ValueError):
+        client.path_for("/etc/passwd")

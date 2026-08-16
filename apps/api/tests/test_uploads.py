@@ -34,3 +34,36 @@ def test_upload_rejects_unsupported_content_type():
         files={"file": ("evil.exe", io.BytesIO(b"x"), "application/x-msdownload")},
     )
     assert resp.status_code == 422
+
+
+def test_upload_sanitizes_path_traversal_filename(tmp_path, monkeypatch):
+    # A malicious multipart filename must never let the client escape the
+    # storage root: only the basename should end up in the object key, and
+    # the file must land inside the blob root, not outside it.
+    monkeypatch.setenv("AURA_DATA_DIR", str(tmp_path))
+    from aura_api import config, storage
+
+    monkeypatch.setattr(config, "settings", config.Settings())
+    monkeypatch.setattr(storage, "settings", config.settings)
+    monkeypatch.setattr(storage, "storage_client", storage.LocalStorageClient())
+    import aura_api.routers.uploads as uploads_module
+
+    monkeypatch.setattr(uploads_module, "storage_client", storage.storage_client)
+
+    client = TestClient(create_app())
+    resp = client.post(
+        "/v1/uploads",
+        files={"file": ("../../evil.wav", io.BytesIO(b"fake-audio-bytes"), "audio/wav")},
+    )
+    assert resp.status_code == 201
+    object_key = resp.json()["object_key"]
+    assert object_key.startswith("uploads/")
+    assert ".." not in object_key
+    assert object_key.endswith("/evil.wav")
+
+    # The file must have been written under the blob root, not escaped it.
+    blob_root = tmp_path / "blobs"
+    written_files = list(blob_root.rglob("evil.wav"))
+    assert len(written_files) == 1
+    assert written_files[0].is_relative_to(blob_root)
+    assert not (tmp_path / "evil.wav").exists()

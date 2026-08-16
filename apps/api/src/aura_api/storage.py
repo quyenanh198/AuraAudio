@@ -9,9 +9,14 @@ from aura_api.config import settings
 class LocalStorageClient:
     def __init__(self) -> None:
         self.root = Path(settings.data_dir) / "blobs"
+        self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, key: str) -> Path:
-        return self.root / key
+        root = self.root.resolve()
+        path = (root / key).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError(f"key escapes storage root: {key!r}")
+        return path
 
     def put_bytes(self, key: str, data: bytes) -> None:
         path = self.path_for(key)

@@ -11,7 +11,12 @@ router = APIRouter(tags=["projects"])
 
 @router.post("/projects", response_model=ProjectResponse, status_code=201)
 def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)) -> ProjectResponse:
-    head = storage_client.head_object(body.object_key)
+    try:
+        head = storage_client.head_object(body.object_key)
+    except ValueError:
+        # object_key resolved outside the storage root (path traversal
+        # attempt) — treat identically to "not found", not a 500.
+        raise HTTPException(status_code=404, detail="uploaded object not found") from None
     if head is None:
         raise HTTPException(status_code=404, detail="uploaded object not found")
 

@@ -61,3 +61,29 @@ def test_create_project_rejects_missing_object(db_session, tmp_path, monkeypatch
         json={"title": "X", "instrument": "piano", "object_key": "uploads/missing.wav"},
     )
     assert resp.status_code == 404
+
+
+def test_create_project_rejects_path_traversal_object_key_with_404(
+    db_session, tmp_path, monkeypatch
+):
+    # A client-supplied object_key that attempts to escape the storage root
+    # (e.g. an absolute path, or "../.." segments) must be treated like a
+    # missing object (404), never surfaced as an unhandled 500.
+    monkeypatch.setenv("AURA_DATA_DIR", str(tmp_path))
+    from aura_api import config, storage
+
+    monkeypatch.setattr(config, "settings", config.Settings())
+    monkeypatch.setattr(storage, "settings", config.settings)
+    monkeypatch.setattr(storage, "storage_client", storage.LocalStorageClient())
+    import aura_api.routers.projects as projects_module
+
+    monkeypatch.setattr(projects_module, "storage_client", storage.storage_client)
+
+    client = TestClient(create_app())
+
+    for escaping_key in ["/etc/passwd", "../../../etc/passwd"]:
+        resp = client.post(
+            "/v1/projects",
+            json={"title": "X", "instrument": "piano", "object_key": escaping_key},
+        )
+        assert resp.status_code == 404, (escaping_key, resp.status_code, resp.text)

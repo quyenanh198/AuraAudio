@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from aura_api.schemas import _ALLOWED_CONTENT_TYPES, CreateUploadResponse, make_upload_object_key
@@ -10,7 +12,7 @@ router = APIRouter(tags=["uploads"])
 async def create_upload(file: UploadFile = File(...)) -> CreateUploadResponse:
     if file.content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=422, detail=f"unsupported content_type: {file.content_type}")
-    object_key = make_upload_object_key(file.filename)
+    object_key = make_upload_object_key(Path(file.filename or "upload").name)
     data = await file.read()
     storage_client.put_bytes(object_key, data)
     return CreateUploadResponse(object_key=object_key)
