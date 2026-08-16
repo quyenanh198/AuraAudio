@@ -14,6 +14,7 @@ STAGE_PROGRESS = {
     "inference": 55,
     "structure": 65,
     "quantize": 75,
+    "assign": 85,
     "export": 100,
 }
 
