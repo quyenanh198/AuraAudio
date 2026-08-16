@@ -122,6 +122,18 @@ root_app = Starlette(
 # second `create_engine(...)` call here: it reads the same `DATABASE_URL`
 # this module already set/inherited above, so schema creation targets
 # exactly the same database file uvicorn's app will serve from.
-if __name__ == "__main__":
+def init_schema() -> None:
+    """Create any tables that don't already exist for `DATABASE_URL`.
+
+    Pulled out into its own function (rather than inlined under the
+    `__main__` guard below) purely so `apps/desktop/tests/test_schema_init.py`
+    can call this exact production code path directly — the guard itself
+    only ever runs when this file is executed as a script, which a test
+    importing the module never triggers.
+    """
     Base.metadata.create_all(get_engine())
+
+
+if __name__ == "__main__":
+    init_schema()
     uvicorn.run(root_app, host="127.0.0.1", port=AURA_BACKEND_PORT)
