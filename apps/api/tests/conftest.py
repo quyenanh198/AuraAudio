@@ -7,8 +7,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 _TEST_DB_PATH = Path(tempfile.gettempdir()) / "aura_api_test.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
-os.environ.setdefault("AURA_DATA_DIR", tempfile.gettempdir())
+# Unconditional (not setdefault): `.envrc` exports DATABASE_URL/AURA_DATA_DIR
+# pointing at the real app's ./data before `make test` even starts pytest,
+# so a plain setdefault would be a no-op and the suite would run against —
+# and truncate — the real application database and blob directory.
+os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
+os.environ["AURA_DATA_DIR"] = tempfile.gettempdir()
 
 from aura_api.db import Base  # noqa: E402
 
