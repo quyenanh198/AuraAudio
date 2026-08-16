@@ -49,20 +49,45 @@ in sync with `origin/main`.
 ## Phase 2 sub-projects remaining (in the order originally proposed)
 
 1. ~~Beat/meter/key intelligence~~ — **done** (above).
-2. **Guitar string/fret + piano hand/staff assignment** — constrained
-   assignment optimizer, `ARCHITECTURE.md` §4.3 already has substantial
-   detail (deterministic constrained optimizer, hard constraints beat soft
-   preferences, bipartite assignment for chords). Backend/worker only, no
-   new subsystem — natural next step, same reasoning as why beat/meter/key
-   went first (unblocks downstream work, no new infra).
-3. **Web client + SVG score preview** — doesn't exist at all yet. Needs its
+2. **Guitar string/fret assignment** — **spec + plan written, not yet
+   executed.** Split from the original "guitar+piano" grouping into guitar
+   first (user's explicit choice — piano hand/staff assignment is now its
+   own separate future sub-project, independent algorithm/domain). Spec:
+   `docs/superpowers/specs/2026-08-16-guitar-fret-assignment-design.md`.
+   Plan: `docs/superpowers/plans/2026-08-16-guitar-fret-assignment.md` (7
+   tasks, self-reviewed, ready to execute via
+   `superpowers:subagent-driven-development` — same process as sub-project
+   1). Design: new `assign` worker stage between `quantize` and `export`;
+   pure algorithm in a new `aura_worker.fingering` module (candidate
+   generation, chord bipartite assignment via backtracking, sequence DP);
+   score schema bumps to v3 (optional `string`/`fret` per event);
+   `musicxml/export.py` renders real tab notation via `music21`'s
+   `articulations.StringIndication`/`FretIndication` — **verified directly
+   against real music21 output before writing the plan** that (a) these
+   articulation classes are the right API (not a `Note` constructor arg),
+   and (b) MusicXML's `<string>` numbering is 1-indexed high-to-low (1 =
+   high E), the *opposite* of this project's internal 0-indexed low-to-high
+   convention — conversion is `musicxml_string = 6 - internal_string`. Get
+   this backwards and it's a silent bug (MusicXML accepts any 1-6 int, no
+   validation catches a mirrored fingering).
+   **If resuming mid-plan:** check `git log` against the plan's task list
+   to see which tasks already have commits; the SDD workspace (per-plan
+   ledger) is git-ignored and gets deleted on completion, so once no
+   `.superpowers/sdd/<plan-name>/` directory exists, either the plan never
+   started or already finished — check `git log --oneline --grep=fingering`
+   or `--grep=assign` to tell which.
+3. **Piano hand/staff assignment** — split out from item 2 above. Own spec
+   needed (hand/staff split-point optimizer, different algorithm than
+   guitar's string/fret DP — see `ARCHITECTURE.md` §4.3).
+4. **Web client + SVG score preview** — doesn't exist at all yet. Needs its
    own product/UI brainstorm from scratch, not just a plan.
-4. **PDF rendering** — new export format, isolated renderer process.
-5. **Offline benchmark pipeline** — CI/scheduled eval harness.
+5. **PDF rendering** — new export format, isolated renderer process.
+6. **Offline benchmark pipeline** — CI/scheduled eval harness.
 
-Recommendation if picking up cold: continue with #2 (guitar/piano
-assignment) — it's the direct continuation of the transcription pipeline
-and needs no new product decisions the user hasn't already made.
+Recommendation if picking up cold: finish executing #2 if it's mid-flight
+(check as above), otherwise start #3 (piano) to close out the assignment
+pair before moving to the web client, which is a much bigger scope jump
+(needs its own brainstorm, not just a plan).
 
 ## Working process (established this session, keep using it)
 
