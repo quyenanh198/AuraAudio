@@ -8,3 +8,4 @@ dist/
 .env
 .envrc
 packages/test_fixtures/fixtures/*.wav
+.superpowers/
