@@ -43,39 +43,49 @@ real values with key-aware enharmonic spelling. Spec:
 `docs/superpowers/specs/2026-08-15-beat-meter-key-detection-design.md`.
 Plan: `docs/superpowers/plans/2026-08-16-beat-meter-key-detection.md`.
 
-Full workspace test suite: **66/66 passing.** Working tree clean, `main`
-in sync with `origin/main`.
+**Phase 2, sub-project 2 — guitar string/fret assignment.** All 7 tasks
+implemented and individually reviewed clean (one real regression found and
+fixed mid-sub-project — see below). Score schema bumped to v3 (optional
+`string`/`fret` per event). New `aura_worker.fingering` module: candidate
+generation, chord assignment via backtracking (distinct-string hard
+constraint, minimize hand stretch), sequence DP (Viterbi-style) over a
+measure via `assign_measure`. New `assign` worker stage between `quantize`
+and `export` (guitar: runs the algorithm; piano: passthrough). MusicXML
+export renders real tab notation via `music21`'s
+`StringIndication`/`FretIndication`, with the verified numbering conversion
+`musicxml_string = 6 - internal_string`. Spec:
+`docs/superpowers/specs/2026-08-16-guitar-fret-assignment-design.md`. Plan:
+`docs/superpowers/plans/2026-08-16-guitar-fret-assignment.md`.
+Manual smoke test confirmed tab data reaches the real exported MusicXML
+end-to-end (9 `<string>/<fret>` pairs via the real API+worker pipeline).
+**Final whole-branch review dispatched, not yet returned as of this
+writing** — check `.superpowers/sdd/2026-08-16-guitar-fret-assignment/` for
+a ledger if it still exists (gets deleted on completion); if that directory
+is gone, the sub-project finished (check `git log --oneline --grep=fingering`
+or `--grep=assign` and look for a `finishing-a-development-branch` decision
+in recent history to confirm).
+Regression found+fixed mid-sub-project (worth knowing about, not a current
+issue): Task 1's schema v2→v3 bump broke a pre-existing test's literal
+`schemaVersion == 2` assertion in `test_quantize.py` (that file wasn't in
+Task 1's own file list, so its own suite run didn't catch it) — caught by
+Task 2's full-suite run, fixed directly on main same session.
+
+Full workspace test suite: **90/90 passing** as of Task 7 (score-schema 17,
+musicxml 14, test-fixtures 6, aura-api 13, aura-worker 40). Working tree
+clean, `main` in sync with `origin/main` (last pushed commit: `7f7439f`).
 
 ## Phase 2 sub-projects remaining (in the order originally proposed)
 
 1. ~~Beat/meter/key intelligence~~ — **done** (above).
-2. **Guitar string/fret assignment** — **spec + plan written, not yet
-   executed.** Split from the original "guitar+piano" grouping into guitar
-   first (user's explicit choice — piano hand/staff assignment is now its
-   own separate future sub-project, independent algorithm/domain). Spec:
-   `docs/superpowers/specs/2026-08-16-guitar-fret-assignment-design.md`.
-   Plan: `docs/superpowers/plans/2026-08-16-guitar-fret-assignment.md` (7
-   tasks, self-reviewed, ready to execute via
-   `superpowers:subagent-driven-development` — same process as sub-project
-   1). Design: new `assign` worker stage between `quantize` and `export`;
-   pure algorithm in a new `aura_worker.fingering` module (candidate
-   generation, chord bipartite assignment via backtracking, sequence DP);
-   score schema bumps to v3 (optional `string`/`fret` per event);
-   `musicxml/export.py` renders real tab notation via `music21`'s
-   `articulations.StringIndication`/`FretIndication` — **verified directly
-   against real music21 output before writing the plan** that (a) these
-   articulation classes are the right API (not a `Note` constructor arg),
-   and (b) MusicXML's `<string>` numbering is 1-indexed high-to-low (1 =
-   high E), the *opposite* of this project's internal 0-indexed low-to-high
-   convention — conversion is `musicxml_string = 6 - internal_string`. Get
-   this backwards and it's a silent bug (MusicXML accepts any 1-6 int, no
-   validation catches a mirrored fingering).
-   **If resuming mid-plan:** check `git log` against the plan's task list
-   to see which tasks already have commits; the SDD workspace (per-plan
-   ledger) is git-ignored and gets deleted on completion, so once no
-   `.superpowers/sdd/<plan-name>/` directory exists, either the plan never
-   started or already finished — check `git log --oneline --grep=fingering`
-   or `--grep=assign` to tell which.
+2. ~~Guitar string/fret assignment~~ — **all 7 tasks done, individually
+   reviewed clean, manual smoke test passed end-to-end.** Final
+   whole-branch review was dispatched but had not returned as of this
+   writing — if `.superpowers/sdd/2026-08-16-guitar-fret-assignment/`
+   still exists, check its ledger tail for the review's outcome and
+   whether a fix wave is in progress; if that directory is gone, the
+   sub-project finished via `finishing-a-development-branch` (check
+   `git log --oneline --grep=fingering` / `--grep=assign` to confirm what
+   landed). See the "Status: what's done" section above for full detail.
 3. **Piano hand/staff assignment** — split out from item 2 above. Own spec
    needed (hand/staff split-point optimizer, different algorithm than
    guitar's string/fret DP — see `ARCHITECTURE.md` §4.3).
@@ -84,10 +94,10 @@ in sync with `origin/main`.
 5. **PDF rendering** — new export format, isolated renderer process.
 6. **Offline benchmark pipeline** — CI/scheduled eval harness.
 
-Recommendation if picking up cold: finish executing #2 if it's mid-flight
-(check as above), otherwise start #3 (piano) to close out the assignment
-pair before moving to the web client, which is a much bigger scope jump
-(needs its own brainstorm, not just a plan).
+Recommendation if picking up cold: confirm #2's final review landed cleanly
+(see above), then start #3 (piano) to close out the assignment pair before
+moving to the web client, which is a much bigger scope jump (needs its own
+brainstorm, not just a plan).
 
 ## Working process (established this session, keep using it)
 
