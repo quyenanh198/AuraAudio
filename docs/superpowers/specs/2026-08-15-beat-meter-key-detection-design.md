@@ -19,7 +19,7 @@ each with a confidence score, and use those values (instead of hardcoded constan
 
 - **Time-varying tempo.** One BPM per clip, not a tempo curve. Real recordings drift, but a global estimate is a large accuracy improvement over a hardcoded constant at a fraction of the implementation and testing cost; time-varying detection is a natural follow-up once this ships and its failure modes on real material are known.
 - **Meters outside {4/4, 3/4}.** The design originally targeted {4/4, 3/4, 6/8, 2/4}; empirical prototyping against synthetic click fixtures (see Architecture) found that `librosa.beat.beat_track` locks onto whatever the *finest* audible pulse in the signal is rather than a stable perceptual tactus, which collapses the subdivision signal a simple/compound (6/8-vs-simple-meter) classifier needs — and that 2/4 is empirically indistinguishable from 4/4 by the same accent-periodicity technique that separates 4/4 from 3/4 cleanly (a 2/4 measure is just half of a 4/4 measure with the same accent pattern repeated). Both are dropped from v1. 4/4 and 3/4 alone still cover a large share of the target repertoire; 6/8/2/4 (and meters beyond) are a later, better-funded pass — likely via a note-event/velocity-accent-based technique using basic-pitch's own output instead of raw-audio onset analysis.
-- **True multi-voice notation.** Notes sharing an onset become a chord in voice 1. Notes that overlap with *different* onset/offset and genuinely can't share a voice are trimmed to fit and a warning is logged on the `StageArtifact.metrics`, rather than split into independent voices.
+- **True multi-voice notation.** Every note is placed in voice 1 regardless of overlap — notes sharing an onset become a chord; notes that overlap with *different* onset/offset simply coexist in voice 1 rather than being split into independent voices. (This sub-project does not add overlap trimming or a metrics warning for the latter case — that remains a gap, not just a deferred nicety, and is a candidate for a future sub-project alongside true multi-voice support.)
 - **Triplet/tuplet detection.** Quantization stays on a straight 16th-note grid.
 - **Any correction UI.** There is no web client yet (Phase 3+). Low-confidence results are stored with their confidence value, not surfaced for correction — that's a later phase's concern once an editing surface exists.
 - **Schema migration tooling for the v1 → v2 score schema bump.** No production data exists yet (pre-launch). The version bump is a breaking change to the canonical score schema, accepted as such; migration tooling is deferred until real persisted scores exist.
@@ -58,7 +58,7 @@ probe -> normalize -> inference -> structure -> quantize -> export
    - Key: build a `music21.stream.Stream` from the note pitches (rhythm-agnostic), call `.analyze('krumhansl')` (not the bare `'key'` method — see the library-choice table above), read `.tonic.name` / `.mode` / `.correlationCoefficient` (clipped to `[0, 1]`).
    - Cache via the existing `find_cached_artifact`/`save_artifact` pattern (stage `"structure"`, version 1) — same resume-on-retry behavior every other stage already has.
    - If `beat_track` returns fewer than 2 beats (near-silent or too-short clip — not enough to compute an inter-beat interval or score a meter candidate), raise `JobFailure(JobErrorCode.MODEL_FAILED, ...)` — reuses the existing error code, no new one needed.
-2. `quantize.run` takes the `StructureResult` (tempo, meter, key) as a new parameter, replacing its hardcoded `BPM`/`GRID_BEATS` module constants with values derived from it.
+2. `quantize.run` takes the `StructureResult` (tempo, meter, key) as a new parameter, replacing its hardcoded `BPM` module constant with the detected tempo. `GRID_BEATS` (the fixed 16th-note grid) is *not* derived from the `StructureResult` — it stays a constant, per the "Canonical score schema (v2)" section below and the Non-Goals list (no triplet/tuplet detection).
 3. `export.run` passes the score's tempo/meter/key through to `musicxml.export.score_json_to_musicxml`, which builds `TimeSignature(meter)`, `MetronomeMark(number=tempo_bpm)`, and a `Key` object instead of hardcoding them.
 
 ### Canonical score schema (v2)
@@ -82,7 +82,7 @@ probe -> normalize -> inference -> structure -> quantize -> export
 
 ### Enharmonic spelling
 
-Notes are spelled using `music21`'s key-aware pitch spelling once the part's `Key` is known — a pitch class like MIDI 66 spells as D♯ in a key where D is the more natural scale step and as E♭ where E-flat fits better, rather than Phase 1's arbitrary default. Exact `music21` API surface (`pitch.Pitch.getEnharmonic()` vs. building notes inside a keyed `Stream` and letting `makeNotation` resolve spelling) is an implementation-time decision, not fixed here.
+Notes are spelled using `music21`'s key-aware pitch spelling once the part's `Key` is known — a pitch class like MIDI 66 spells as F♯ in a key where F♯ is the diatonic scale step (e.g. D major) and as G♭ where G♭ fits better (e.g. F major), rather than Phase 1's arbitrary default. Exact `music21` API surface (`pitch.Pitch.getEnharmonic()` vs. building notes inside a keyed `Stream` and letting `makeNotation` resolve spelling) is an implementation-time decision, not fixed here.
 
 ## Testing
 
