@@ -38,7 +38,7 @@ dependency-ordered — each gets its own brainstorm → spec → plan cycle,
 same process as the three backend sub-projects below):
 1. **Offline backend adaptation** — Postgres→SQLite, S3→local filesystem,
    confirm the existing pipeline runs fully offline as a standalone local
-   process. Backend-only, no UI. 9/9 tasks implemented and verified (2026-08-16); final whole-branch review pending. Spec:
+   process. Backend-only, no UI. **DONE (2026-08-16), including final whole-branch review and its fix wave** (one Critical security finding — path traversal via upload filename — plus 3 Important cross-task gaps, all fixed; one residual regression the fix itself introduced was caught by the scoped re-review and closed with a targeted follow-up commit). Spec:
    `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`;
    plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`;
    executed via
@@ -57,7 +57,7 @@ same process as the three backend sub-projects below):
    undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
    single piece, builds on 1-3.
 
-Sub-project 1 now has a written spec + plan with all 9 tasks implemented and reviewed clean; final whole-branch review pending (see above).
+Sub-project 1 is DONE, including final whole-branch review and its fix wave (see above).
 Sub-projects 2-4 have no written spec yet — only the scoping/technology
 decisions above have been made in conversation.
 
@@ -217,8 +217,8 @@ listed here as "item 4: web client" and a separate PDF-rendering /
 benchmark-harness backlog has been superseded by the offline-desktop-app
 direction — see "Direction change" near the top of this document and
 "Offline desktop app sub-projects" below for the current plan (4
-sequential sub-projects; the first, offline backend adaptation, has all 9 tasks
-implemented and reviewed clean (final whole-branch review pending) — sub-project 2 is next). PDF rendering and an offline benchmark CI
+sequential sub-projects; the first, offline backend adaptation, is done —
+sub-project 2 is next). PDF rendering and an offline benchmark CI
 harness are still real future work, just not sequenced yet; revisit once
 the desktop app's 4 sub-projects are further along.
 
@@ -227,9 +227,8 @@ the desktop app's 4 sub-projects are further along.
 The four sub-projects from "Direction change" above, tracked here as they
 complete (same pattern as "Phase 2 backend sub-projects" above).
 
-1. **Offline backend adaptation.** All 9 tasks implemented (task 9's
-   full-workspace verification: 126/126 passing); final whole-branch
-   review pending. Swapped the backend off a cloud-service
+1. **Offline backend adaptation. DONE, including final whole-branch
+   review and its fix wave.** Swapped the backend off a cloud-service
    stack (Postgres/Redis/S3/MinIO) onto a fully offline, single-process
    local app: Postgres → SQLite (`DATABASE_URL=sqlite:///./data/aura.db`),
    S3 → a filesystem-backed `LocalStorageClient` (consolidated so the API
@@ -245,7 +244,22 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    surfaced and fixed two real pre-existing bugs along the way: a numpy
    2.x / tensorflow 2.14 ABI incompatibility (`numpy` now pinned `<2` in
    `workers/transcription`) and a job-dispatch race condition in the
-   thread-pool path. Spec:
+   thread-pool path. The final whole-branch review caught one Critical
+   finding — a path-traversal vulnerability created by the S3→filesystem
+   swap (an unsanitized upload filename / `object_key` could escape the
+   blob root; `LocalStorageClient.path_for` now enforces containment) —
+   plus 3 Important cross-task gaps (fresh clone couldn't start because
+   nothing created `./data`; `source .envrc && make test`, the project's
+   own documented workflow, silently wiped the real app's SQLite DB and
+   blobs because the test conftests used `setdefault` instead of an
+   unconditional override; a doc claim about containerized deployment
+   still working was false). All fixed in one dispatched fix wave; the
+   scoped re-review of that wave caught one more regression the fix
+   itself introduced (a filename of exactly `".."` bypassed the basename
+   sanitization and could permanently brick the upload endpoint) — closed
+   with one targeted follow-up commit rather than a second full review
+   cycle, per this process's "no second fix wave" rule. Full detail in
+   the SDD ledger. Spec:
    `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`.
    Plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`.
    All 9 tasks implemented and reviewed clean via
@@ -277,14 +291,14 @@ Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
 by sub-project 3's final review. Worth a small bounded fix on its own —
 sort each measure's events by `notatedOnset` before building notes — before
 it's forgotten as "always been like that." Sub-project 1 (offline backend
-adaptation), with all tasks implemented and reviewed clean (final whole-branch review pending), did not fold this in — still open and
+adaptation, done) did not fold this in — still open and
 unscheduled; a good candidate to knock out on its own before sub-project 4
 (semantic editing) starts building on top of `musicxml/export.py`.
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
 desktop app sub-projects" further down for current status. Sub-project 1
-(offline backend adaptation) has all 9 tasks implemented and reviewed clean (final whole-branch review pending); pick up sub-project 2 (desktop shell
+(offline backend adaptation) is done; pick up sub-project 2 (desktop shell
 + packaging, Tauri) next — no spec exists yet, start with
 `superpowers:brainstorming`.
 
@@ -337,7 +351,7 @@ correct — check it.
 ## Environment gotchas (sandbox-specific, not project design)
 
 - **No external services needed anymore.** Sub-project 1 (offline backend
-  adaptation, all tasks implemented and reviewed clean with final whole-branch review pending — see "Offline desktop app sub-projects" above) swapped
+  adaptation, done — see "Offline desktop app sub-projects" above) swapped
   Postgres → SQLite and S3/MinIO → a local filesystem `LocalStorageClient`,
   and replaced the Redis/RQ job queue with an in-process thread pool.
   `make test` and the API run standalone with the Docker daemon down and
