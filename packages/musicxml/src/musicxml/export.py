@@ -17,11 +17,13 @@ def _spell_pitch(midi_number: int, key_obj: m21_key.Key) -> m21_pitch.Pitch:
     """Spell a MIDI pitch using the detected key's diatonic collection where
     possible, falling back to the key's sharp/flat preference for chromatic
     (non-diatonic) tones."""
-    octave = midi_number // 12 - 1
     pc = midi_number % 12
     diatonic_by_pc = {p.pitchClass: p.name for p in key_obj.pitches[:7]}
     if pc in diatonic_by_pc:
-        return m21_pitch.Pitch(f"{diatonic_by_pc[pc]}{octave}")
+        p = m21_pitch.Pitch(diatonic_by_pc[pc])
+        p.octave = 4
+        p.octave += round((midi_number - p.midi) / 12)
+        return p
 
     default = m21_pitch.Pitch(ps=midi_number)  # sharp-preferred by default
     if key_obj.sharps < 0 and default.accidental is not None and default.accidental.name == "sharp":

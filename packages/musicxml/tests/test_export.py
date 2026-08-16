@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import music21
 from score_schema.models import build_score
 
 from musicxml.export import score_json_to_musicxml
@@ -91,3 +92,49 @@ def test_score_json_to_musicxml_spells_pitch_using_key_context(tmp_path: Path):
     out_path2 = tmp_path / "flat.musicxml"
     score_json_to_musicxml(score_flat_key, out_path2)
     assert "<step>G</step>" in out_path2.read_text()
+
+
+def test_score_json_to_musicxml_spells_bsharp_leading_tone_at_correct_octave(tmp_path: Path):
+    # In C# major, MIDI 60 (C4) is diatonic as B# (the leading tone), which
+    # sounds a semitone below C4 — i.e. B#3, not B#4. Round-tripping the
+    # exported file through music21 must recover MIDI 60, not 72.
+    score = _sample_score(key="C# major")
+    score["parts"][0]["measures"][0]["events"] = [{
+        "id": "note_00", "pitch": 60, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+        "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+        "confidence": 0.9, "locked": False,
+    }]
+    out_path = tmp_path / "bsharp.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<step>B</step>" in content
+    assert "<alter>1</alter>" in content
+    assert "<octave>3</octave>" in content
+
+    reopened = music21.converter.parse(str(out_path))
+    reopened_notes = list(reopened.flatten().notes)
+    assert len(reopened_notes) == 1
+    assert reopened_notes[0].pitch.midi == 60
+
+
+def test_score_json_to_musicxml_spells_cflat_at_correct_octave(tmp_path: Path):
+    # In E- minor, MIDI 71 (B4) is diatonic as C- (Cb), the flat second
+    # degree of the harmonic-minor-derived collection, sounding as B4 —
+    # i.e. C-5, not C-4. Round-tripping must recover MIDI 71, not 59.
+    score = _sample_score(key="E- minor")
+    score["parts"][0]["measures"][0]["events"] = [{
+        "id": "note_00", "pitch": 71, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+        "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+        "confidence": 0.9, "locked": False,
+    }]
+    out_path = tmp_path / "cflat.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<step>C</step>" in content
+    assert "<alter>-1</alter>" in content
+    assert "<octave>5</octave>" in content
+
+    reopened = music21.converter.parse(str(out_path))
+    reopened_notes = list(reopened.flatten().notes)
+    assert len(reopened_notes) == 1
+    assert reopened_notes[0].pitch.midi == 71
