@@ -18,6 +18,8 @@ _EVENT_SCHEMA = {
         "voice": {"type": "integer", "minimum": 1},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "locked": {"type": "boolean"},
+        "string": {"type": ["integer", "null"], "minimum": 0, "maximum": 5},
+        "fret": {"type": ["integer", "null"], "minimum": 0, "maximum": 20},
     },
     "additionalProperties": False,
 }
@@ -37,7 +39,7 @@ _SCORE_SCHEMA = {
     "type": "object",
     "required": ["schemaVersion", "timeMap", "parts"],
     "properties": {
-        "schemaVersion": {"const": 2},
+        "schemaVersion": {"const": 3},
         "timeMap": {
             "type": "array",
             "items": {

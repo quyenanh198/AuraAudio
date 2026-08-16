@@ -83,3 +83,44 @@ def test_flat_key_with_music21_notation_is_accepted():
     score = _valid_score()
     score["parts"][0]["key"] = "B- major"
     validate_score(score)  # must not raise — "-" is music21's native flat notation
+
+
+def test_schema_v2_is_rejected():
+    score = _valid_score()
+    score["schemaVersion"] = 2
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_event_without_string_or_fret_is_accepted():
+    validate_score(_valid_score())  # _valid_score()'s event has no string/fret keys at all
+
+
+def test_event_with_null_string_and_fret_is_accepted():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = None
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = None
+    validate_score(score)  # must not raise
+
+
+def test_event_with_valid_string_and_fret_is_accepted():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = 2
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = 5
+    validate_score(score)  # must not raise
+
+
+def test_event_with_out_of_range_string_is_rejected():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = 6
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = 0
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_event_with_out_of_range_fret_is_rejected():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = 0
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = 21
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
