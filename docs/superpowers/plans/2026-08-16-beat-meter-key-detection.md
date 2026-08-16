@@ -1575,17 +1575,19 @@ Expected: every package's suite passes, including the untouched `apps/api/tests/
 
 - [ ] **Step 3: Spot-check one full run's MusicXML output**
 
+**Corrected during execution:** `write_metronome_pulse_wav`'s output is pure percussive clicks with no pitched content — verified directly that `basic-pitch` inference returns 0 notes on it, which raises `NO_MUSIC_DETECTED` before the job ever reaches the `structure`/`quantize`/`export` stages this step means to exercise. The metronome fixture only works for `structure.py`'s own unit tests (Task 3), which bypass inference and pass synthetic `NoteEvent`s directly. Use `write_diatonic_melody_wav` instead — it has real pitched content, so inference succeeds, and it still exercises key detection meaningfully (it has no strong metronomic pulse, so treat the meter/tempo result as "did it complete and produce a plausible value," not a precision check — that precision check is what Task 3's own metronome-fixture tests already cover in isolation).
+
 Run (adjust paths/venv activation to match however the Phase 1 plan's execution set up the local environment):
 
 ```bash
 uv run --package test-fixtures python -c "
 from pathlib import Path
-from test_fixtures.generate import write_metronome_pulse_wav
-write_metronome_pulse_wav(Path('/tmp/rhythm_check.wav'), bpm=100.0, meter='3/4', duration_s=8.0)
+from test_fixtures.generate import write_diatonic_melody_wav
+write_diatonic_melody_wav(Path('/tmp/melody_check.wav'), key='D major', duration_s=4.0, sample_rate=44100)
 "
 ```
 
-Then run this fixture through the pipeline exactly as the Phase 1 plan's Task 19 manual smoke test did (`POST /v1/uploads` → upload bytes → `POST /v1/projects` → `POST /v1/projects/{id}/transcriptions` → poll `GET /v1/jobs/{id}` until `succeeded` → `GET /v1/exports/{id}` for the `musicxml` format → download and open the file). Confirm it contains `<beats>3</beats>` and a `<per-minute>` value near 100 — this is the manual equivalent of Task 18's automated e2e test, run once against a rhythmically well-defined fixture (unlike the automated test's arrhythmic Phase 1 fixture) as a final sanity check that detection actually works end-to-end, not just in isolated stage tests.
+Then run this fixture through the pipeline exactly as the Phase 1 plan's Task 19 manual smoke test did (`POST /v1/uploads` → upload bytes → `POST /v1/projects` → `POST /v1/projects/{id}/transcriptions` → poll `GET /v1/jobs/{id}` until `succeeded` → `GET /v1/exports/{id}` for the `musicxml` format → download and open the file). Confirm it contains `<fifths>2</fifths>` and `<mode>major</mode>` (D major has 2 sharps) — this is the manual equivalent of Task 18's automated e2e test, run once against a tonally well-defined fixture (unlike the automated test's atonal Phase 1 fixture) as a final sanity check that key detection actually reaches the exported file end-to-end, not just in isolated stage tests. (Verified live during planning: this exact run produced `<fifths>2</fifths><mode>major</mode><beats>4</beats><beat-type>4</beat-type><per-minute>117.45...</per-minute>` — key correct, meter defaulted to 4/4 as expected for a fixture with no strong beat pattern, tempo a real `beat_track` estimate rather than the old hardcoded 120.)
 
 - [ ] **Step 4: Update the Phase 1 plan's task list status (optional bookkeeping)**
 
