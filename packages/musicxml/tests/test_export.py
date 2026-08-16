@@ -171,3 +171,76 @@ def test_score_json_to_musicxml_omits_technical_block_when_keys_absent(tmp_path:
     score_json_to_musicxml(score, out_path)
     content = out_path.read_text()
     assert "<technical>" not in content
+
+
+def _piano_score(events_by_measure: list[list[dict]]):
+    return build_score(
+        instrument="piano",
+        tempo_bpm=120.0,
+        meter="4/4",
+        key="C major",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
+        time_map=[{"beat": 0, "seconds": 0.0}],
+        measures=[
+            {"number": i + 1, "events": events}
+            for i, events in enumerate(events_by_measure)
+        ],
+    )
+
+
+def _piano_event(id_: str, pitch: int, hand, onset: str) -> dict:
+    return {
+        "id": id_, "pitch": pitch, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+        "notatedOnset": onset, "notatedDuration": "1/4", "voice": 1,
+        "confidence": 0.9, "locked": False, "hand": hand,
+    }
+
+
+def test_score_json_to_musicxml_renders_piano_grand_staff(tmp_path: Path):
+    score = _piano_score([[
+        _piano_event("note_00", 40, "left", "0/1"),
+        _piano_event("note_01", 76, "right", "1/4"),
+    ]])
+    out_path = tmp_path / "piano.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+
+    assert "<staves>2</staves>" in content
+    # verified directly: treble (right hand) is clef number 1 (G clef),
+    # bass (left hand) is clef number 2 (F clef)
+    assert content.index('<clef number="1">') < content.index('<clef number="2">')
+    assert "<sign>G</sign>" in content
+    assert "<sign>F</sign>" in content
+
+    reopened = music21.converter.parse(str(out_path))
+    reopened_notes = list(reopened.flatten().notes)
+    assert len(reopened_notes) == 2
+    assert {n.pitch.midi for n in reopened_notes} == {40, 76}
+
+
+def test_score_json_to_musicxml_piano_out_of_range_note_still_renders(tmp_path: Path):
+    # A note with hand: null (out of STANDARD_PIANO_RANGE) must still
+    # appear in the file, clamped to the nearer staff — never silently
+    # dropped, per the spec's explicit rule.
+    score = _piano_score([[
+        _piano_event("note_00", 10, None, "0/1"),  # below range -> clamps to left/bass
+        _piano_event("note_01", 76, "right", "1/4"),
+    ]])
+    out_path = tmp_path / "piano_clamp.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+
+    reopened = music21.converter.parse(str(out_path))
+    reopened_notes = list(reopened.flatten().notes)
+    assert len(reopened_notes) == 2  # not dropped
+    assert {n.pitch.midi for n in reopened_notes} == {10, 76}
+
+
+def test_score_json_to_musicxml_guitar_export_unaffected_by_piano_branch(tmp_path: Path):
+    # Regression check: guitar's single-staff path must still produce
+    # exactly one <part> with no <staves> element at all.
+    out_path = tmp_path / "guitar_regression.musicxml"
+    score_json_to_musicxml(_sample_score(), out_path)
+    content = out_path.read_text()
+    assert "<staves>" not in content
+    assert content.count("<part ") == 1
