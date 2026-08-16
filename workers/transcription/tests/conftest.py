@@ -7,7 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 _TEST_DB_PATH = Path(tempfile.gettempdir()) / "aura_worker_test.db"
-os.environ.setdefault("AURA_DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
+os.environ.setdefault("AURA_DATA_DIR", tempfile.gettempdir())
 
 from aura_api.db import Base  # noqa: E402
 from aura_api.models import MediaAsset, Project, TranscriptionJob  # noqa: E402
