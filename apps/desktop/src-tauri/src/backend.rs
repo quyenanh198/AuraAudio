@@ -22,9 +22,17 @@
 //!   during a normal `cargo build`/`tauri dev`/`tauri build`.
 //! - Spawn it as a child process on the fixed port baked into the bundle
 //!   (`apps/desktop/run_backend.py` hardcodes 8317 — no CLI flag needed).
+//!   Spawning (`spawn_backend_process`) happens synchronously on the main/
+//!   event-loop thread; only the health polling and window-showing that
+//!   follow (`poll_health_and_gate_window`) run on a background thread. See
+//!   `spawn_backend_process`'s doc comment for why that split matters.
 //! - Poll `GET /healthz` until it succeeds or a bounded timeout elapses.
 //! - Show the main window once healthy, or emit an explicit failure event
 //!   the placeholder page renders as an error state, per the brief's Step 3.
+//! - Terminate the child on a clean app quit (`shutdown_backend`, wired to
+//!   `RunEvent::ExitRequested` in `lib.rs`) and, independently, on a hard
+//!   `kill -9` of this process via a Linux parent-death-signal registration
+//!   made in the child at spawn time (see `spawn_backend_process`).
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -32,6 +40,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
@@ -60,17 +71,23 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub struct BackendProcess(pub Mutex<Option<Child>>);
 
-/// Spawns the bundled backend, polls its health endpoint, and shows (or
-/// reports failure for) the main window. Intended to run on a background
-/// thread so it never blocks Tauri's event loop.
-pub fn spawn_backend_and_gate_window(app: &AppHandle) {
+/// Resolves the backend paths and spawns the bundled backend as a child
+/// process, storing the handle in managed state.
+///
+/// MUST be called from the main/event-loop thread (i.e. synchronously from
+/// `.setup()` in `lib.rs`), not from the background health-polling thread —
+/// see the long comment on the `pre_exec` registration below for why.
+/// Returns `true` if the child was spawned successfully; on `false` an
+/// error has already been logged, emitted to the frontend, and the main
+/// window has already been shown, so the caller has nothing further to do.
+pub fn spawn_backend_process(app: &AppHandle) -> bool {
   let exe_path = match resolve_backend_executable(app) {
     Ok(path) => path,
     Err(err) => {
       log::error!("could not locate bundled backend executable: {err}");
       let _ = app.emit("backend-health-failed", err);
       show_main_window(app);
-      return;
+      return false;
     }
   };
 
@@ -80,7 +97,7 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
       log::error!("could not resolve app data directory: {err}");
       let _ = app.emit("backend-health-failed", err);
       show_main_window(app);
-      return;
+      return false;
     }
   };
   let database_url = format!("sqlite:///{}/aura.db", data_dir.display());
@@ -90,15 +107,50 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
     exe_path.display(),
     data_dir.display()
   );
-  let spawn_result = Command::new(&exe_path)
+  let mut command = Command::new(&exe_path);
+  command
     .current_dir(
       exe_path
         .parent()
         .expect("bundled executable path has a parent directory"),
     )
     .env("AURA_DATA_DIR", &data_dir)
-    .env("DATABASE_URL", &database_url)
-    .spawn();
+    .env("DATABASE_URL", &database_url);
+
+  // Linux-only orphan guard for the case Tauri itself can't run any of its
+  // own shutdown code at all: a hard `kill -9` (or crash) of this process.
+  // SIGKILL can't be caught or handled by us, so `RunEvent::ExitRequested`
+  // (used for a normal quit, see `shutdown_backend` below) never fires for
+  // it. Instead, register the child's Linux `prctl(2)` parent-death signal
+  // *in the child itself* (via `pre_exec`, which runs post-fork/pre-exec in
+  // the child) so the kernel — not our process — sends the child SIGTERM
+  // the moment its parent thread dies, including via SIGKILL. See
+  // `PR_SET_PDEATHSIG` in
+  // `libc-0.2.189/src/unix/linux_like/linux_l4re_shared.rs:1036`.
+  //
+  // Documented gotcha, CONFIRMED BY REAL TESTING for this task (see
+  // task-5-report.md): the "parent" `prctl` tracks is the specific OS
+  // *thread* that called fork(), not the process as a whole. An earlier
+  // version of this function ran on the short-lived background
+  // health-polling thread; real `ps aux` output showed the backend being
+  // killed and left as a `<defunct>` zombie ~1-2s after a *successful*
+  // health check, as soon as that thread returned — while the app process
+  // itself was still very much alive. Moving the actual `spawn()` call to
+  // the main/event-loop thread (which only ever dies together with the
+  // whole process) fixed it; only the health-polling and window-showing
+  // that don't need fork-thread longevity now run on the background
+  // thread (see `poll_health_and_gate_window`).
+  #[cfg(target_os = "linux")]
+  unsafe {
+    command.pre_exec(|| {
+      if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+        return Err(std::io::Error::last_os_error());
+      }
+      Ok(())
+    });
+  }
+
+  let spawn_result = command.spawn();
 
   let child = match spawn_result {
     Ok(child) => child,
@@ -107,7 +159,7 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
       log::error!("{message}");
       let _ = app.emit("backend-health-failed", message);
       show_main_window(app);
-      return;
+      return false;
     }
   };
 
@@ -115,6 +167,17 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
     *state.0.lock().expect("backend process mutex poisoned") = Some(child);
   }
 
+  true
+}
+
+/// Polls the backend's health endpoint and shows (or reports failure for)
+/// the main window. Intended to run on a background thread so it never
+/// blocks Tauri's event loop.
+///
+/// Must only be called after a successful `spawn_backend_process` — see
+/// that function's doc comment for why the two are split across different
+/// threads.
+pub fn poll_health_and_gate_window(app: &AppHandle) {
   let started = Instant::now();
   if poll_health(BACKEND_PORT, HEALTH_TIMEOUT, HEALTH_POLL_INTERVAL) {
     log::info!(
@@ -132,6 +195,46 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
   }
 
   show_main_window(app);
+}
+
+/// Terminates the spawned backend child process, if one is running.
+///
+/// Called from the `RunEvent::ExitRequested` handler in `lib.rs` on a
+/// normal app quit (all windows closed, or a programmatic
+/// `AppHandle::exit`/`restart`). This covers the *clean* shutdown path;
+/// the crash/hard-kill path (`kill -9` on this process itself) is handled
+/// separately and unconditionally by the `pre_exec` parent-death-signal
+/// registration in `spawn_backend_process` above, since no code in this
+/// process runs at all when it receives SIGKILL.
+///
+/// Takes the child out of managed state (leaving `None` behind) so a
+/// second call — e.g. if both `ExitRequested` and `Exit` end up wired to
+/// this in the future — is a harmless no-op rather than a double-kill.
+pub fn shutdown_backend(app: &AppHandle) {
+  let Some(state) = app.try_state::<BackendProcess>() else {
+    return;
+  };
+  let mut guard = state.0.lock().expect("backend process mutex poisoned");
+  let Some(mut child) = guard.take() else {
+    log::info!("shutdown_backend: no backend child process to terminate");
+    return;
+  };
+
+  match child.kill() {
+    Ok(()) => log::info!("sent kill signal to backend child process (pid {})", child.id()),
+    Err(err) => {
+      // `kill()` on Unix returns an error for `ESRCH` (already exited) too
+      // — that's not a problem, just log it and still reap below.
+      log::warn!("failed to signal backend child process: {err}");
+    }
+  }
+
+  // Reap the process so it doesn't linger as a zombie waiting for the
+  // parent to collect its exit status.
+  match child.wait() {
+    Ok(status) => log::info!("backend child process exited with {status}"),
+    Err(err) => log::warn!("failed to wait on backend child process: {err}"),
+  }
 }
 
 /// Resolves the real on-disk path to the bundled `aura-backend` executable.
