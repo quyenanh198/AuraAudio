@@ -4,13 +4,70 @@ Read this first in any new session picking up AuraAudio work. It exists so a
 fresh session (with no memory of prior conversations) can orient in one read
 instead of re-deriving decisions from `git log`.
 
+## Direction change (read this before anything else below)
+
+The user has redirected the project away from `ARCHITECTURE.md`'s original
+cloud-service client model (web app + Postgres + S3, Phase 2 item 4 = "web
+client + SVG preview", Phase 3 = separate later editing effort) toward a
+**fully offline desktop app**, with editing pulled forward into scope
+rather than deferred. The backend transcription pipeline built in Phase 1
+and Phase 2 sub-projects 1-3 (below) is unaffected and is being reused as-
+is — this is a client/packaging/storage pivot, not a rewrite of the
+algorithms. `ARCHITECTURE.md`'s phase numbering is now superseded for
+everything client-facing; treat it as historical record of the backend
+design rationale (still accurate for probe/inference/structure/quantize/
+assign/export), not as the current plan for what ships next.
+
+**Decisions made so far** (via `superpowers:brainstorming`, architectural
+path, not yet written to a spec file):
+- Reuse the existing FastAPI + SQLAlchemy backend, bundled and run locally
+  as a sidecar process — not rewritten in another language. Swap
+  Postgres → SQLite, S3 → local filesystem.
+- Desktop shell: **Tauri** (Rust shell + system webview), chosen over
+  Electron (better UI/UX ceiling via bundled-Chromium consistency, but
+  larger footprint) and pywebview (simplest, but weakest fit for a
+  rich interactive score-editing surface). Adds a Rust toolchain
+  alongside the existing Python one.
+- Scope: **full editing pulled forward** into this effort, not deferred —
+  the user explicitly chose this over a preview-only v1, so the semantic
+  edit-operation model (originally Phase 3) is now part of the plan, not a
+  future phase.
+
+**Decomposition into sequential sub-projects** (approved by the user,
+dependency-ordered — each gets its own brainstorm → spec → plan cycle,
+same process as the three backend sub-projects below):
+1. **Offline backend adaptation** — Postgres→SQLite, S3→local filesystem,
+   confirm the existing pipeline runs fully offline as a standalone local
+   process. Backend-only, no UI. **This is the sub-project currently being
+   brainstormed** — check for a spec at
+   `docs/superpowers/specs/*offline-backend*` or a plan at
+   `docs/superpowers/plans/*offline-backend*`; if neither exists yet, the
+   brainstorming conversation itself is the only record of progress so far
+   (see the bullet list above) and needs to be resumed/redone.
+2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
+   backend as a managed sidecar, native window at localhost. No real UI.
+3. **Score preview + playback UI** — upload flow, SVG notation rendering
+   (likely via an existing MusicXML-to-SVG renderer rather than building
+   one from scratch — not yet decided) synced to audio playback, export.
+   Real product/UI design work; plan to use the brainstorming skill's
+   visual companion tool for this one.
+4. **Semantic editing** — edit-operation model (add/delete/move note,
+   undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
+   single piece, builds on 1-3.
+
+None of the four have a written spec yet as of this update — only the
+scoping/technology decisions above have been made in conversation.
+
 ## What AuraAudio is
 
 Converts an uploaded guitar/piano audio clip into an editable score
 (MusicXML + MIDI). Full product design lives in `ARCHITECTURE.md` (repo
-root) — a 4-phase plan. **Phase 1 (vertical slice) is done and merged.**
-Phase 2 is in progress, built as independent sub-projects, each with its own
-spec → plan → implementation cycle (see "Working process" below).
+root) — a 4-phase plan, **now superseded for the client/packaging model,
+see "Direction change" above; still accurate for the backend pipeline.**
+**Phase 1 (vertical slice) is done and merged.** Phase 2's backend
+intelligence work (sub-projects 1-3 below) is done. Phase 2's original
+client plan (item 4) and Phase 3 (editing) have been superseded by the
+offline desktop app direction above.
 
 ## Repo layout
 
@@ -142,7 +199,7 @@ Two things worth knowing about (not current issues, already resolved):
 Full workspace test suite: **112/112 passing.** Working tree clean, `main`
 in sync with `origin/main` (last pushed commit: `eb58113`).
 
-## Phase 2 sub-projects remaining (in the order originally proposed)
+## Phase 2 backend sub-projects (all done — this list is now historical)
 
 1. ~~Beat/meter/key intelligence~~ — **done** (above).
 2. ~~Guitar string/fret assignment~~ — **fully done**, including the final
@@ -151,10 +208,15 @@ in sync with `origin/main` (last pushed commit: `eb58113`).
 3. ~~Piano hand/staff assignment~~ — **fully done**, including the final
    whole-branch review and its fix wave. See the "Status: what's done"
    section above for full detail.
-4. **Web client + SVG score preview** — doesn't exist at all yet. Needs its
-   own product/UI brainstorm from scratch, not just a plan.
-5. **PDF rendering** — new export format, isolated renderer process.
-6. **Offline benchmark pipeline** — CI/scheduled eval harness.
+
+All backend transcription-intelligence work is done. What used to be
+listed here as "item 4: web client" and a separate PDF-rendering /
+benchmark-harness backlog has been superseded by the offline-desktop-app
+direction — see "Direction change" near the top of this document for the
+current plan (4 sequential sub-projects, first one — offline backend
+adaptation — is being brainstormed now). PDF rendering and an offline
+benchmark CI harness are still real future work, just not sequenced yet;
+revisit once the desktop app's 4 sub-projects are further along.
 
 **Known follow-up, not yet its own sub-project:** `musicxml/export.py`
 appends notes to each measure/staff in list order rather than sorting by
@@ -164,15 +226,13 @@ exported rhythm can come out scrambled for both guitar and piano today.
 Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
 by sub-project 3's final review. Worth a small bounded fix on its own —
 sort each measure's events by `notatedOnset` before building notes — before
-it's forgotten as "always been like that."
+it's forgotten as "always been like that." Good candidate to fold into
+sub-project 1 (offline backend adaptation) or knock out separately first,
+since it's small and bounded either way.
 
-Recommendation if picking up cold: the guitar/piano assignment pair (items
-1-3) is fully done. Either knock out the onset-ordering fix above first
-(small, bounded, no brainstorming needed — just a plan) or move to #4 (web
-client), which is a much bigger scope jump needing its own product/UI
-brainstorm from scratch. Use the same process as sub-projects 1-3:
-brainstorming → spec → plan → subagent-driven-development → final
-whole-branch review.
+Recommendation if picking up cold: read "Direction change" at the top of
+this document first — it supersedes the framing below. Resume brainstorming
+sub-project 1 (offline backend adaptation) if no spec exists yet for it.
 
 ## Working process (established this session, keep using it)
 
