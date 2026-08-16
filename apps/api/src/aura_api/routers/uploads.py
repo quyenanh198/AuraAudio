@@ -12,7 +12,8 @@ router = APIRouter(tags=["uploads"])
 async def create_upload(file: UploadFile = File(...)) -> CreateUploadResponse:
     if file.content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=422, detail=f"unsupported content_type: {file.content_type}")
-    object_key = make_upload_object_key(Path(file.filename or "upload").name)
+    name = Path(file.filename or "").name
+    object_key = make_upload_object_key(name if name not in ("", ".", "..") else "upload")
     data = await file.read()
     storage_client.put_bytes(object_key, data)
     return CreateUploadResponse(object_key=object_key)
