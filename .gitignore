@@ -9,3 +9,4 @@ dist/
 .envrc
 packages/test_fixtures/fixtures/*.wav
 .superpowers/
+dump.rdb
