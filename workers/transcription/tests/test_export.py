@@ -1,3 +1,6 @@
+import mido
+import pytest
+
 from score_schema.models import NoteEvent, build_score
 
 from aura_worker.stage_runner import StageContext
@@ -15,10 +18,13 @@ class FakeStorage:
         return self.objects[key]
 
 
-def test_export_stage_writes_midi_and_musicxml_and_creates_export_rows(db_session, sample_job, workdir):
-    notes = [NoteEvent(pitch=64, onset_s=0.0, offset_s=0.5, velocity=90, confidence=0.9)]
-    score = build_score(
+def _sample_score(tempo_bpm: float = 120.0):
+    return build_score(
         instrument="guitar",
+        tempo_bpm=tempo_bpm,
+        meter="4/4",
+        key="C major",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
         time_map=[{"beat": 0, "seconds": 0.0}],
         measures=[{
             "number": 1,
@@ -29,6 +35,11 @@ def test_export_stage_writes_midi_and_musicxml_and_creates_export_rows(db_sessio
             }],
         }],
     )
+
+
+def test_export_stage_writes_midi_and_musicxml_and_creates_export_rows(db_session, sample_job, workdir):
+    notes = [NoteEvent(pitch=64, onset_s=0.0, offset_s=0.5, velocity=90, confidence=0.9)]
+    score = _sample_score()
 
     storage = FakeStorage()
     ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
@@ -49,3 +60,20 @@ def test_export_stage_writes_midi_and_musicxml_and_creates_export_rows(db_sessio
 
     refreshed_job = db_session.get(TranscriptionJob, sample_job.id)
     assert refreshed_job.status == "succeeded"
+
+
+def test_export_stage_midi_uses_detected_tempo(db_session, sample_job, workdir):
+    notes = [NoteEvent(pitch=64, onset_s=0.0, offset_s=0.5, velocity=90, confidence=0.9)]
+    score = _sample_score(tempo_bpm=90.0)
+
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    result = export_stage.run(ctx, notes=notes, score=score)
+
+    midi_bytes = storage.objects[result["midi_key"]]
+    (workdir / "check.mid").write_bytes(midi_bytes)
+    mid = mido.MidiFile(str(workdir / "check.mid"))
+    tempo_messages = [msg for track in mid.tracks for msg in track if msg.type == "set_tempo"]
+    assert len(tempo_messages) == 1
+    assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(90.0, abs=0.01)

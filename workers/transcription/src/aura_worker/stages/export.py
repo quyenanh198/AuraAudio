@@ -7,14 +7,14 @@ from musicxml.validate import MusicXmlValidationError, reopen_and_check
 from score_schema.models import JobErrorCode, NoteEvent
 
 
-def _write_midi(notes: list[NoteEvent], out_path) -> None:
+def _write_midi(notes: list[NoteEvent], out_path, tempo_bpm: float) -> None:
     import mido
 
     mid = mido.MidiFile()
     track = mido.MidiTrack()
     mid.tracks.append(track)
     ticks_per_beat = mid.ticks_per_beat  # default 480
-    tempo_us = mido.bpm2tempo(120)
+    tempo_us = mido.bpm2tempo(tempo_bpm)
     track.append(mido.MetaMessage("set_tempo", tempo=tempo_us, time=0))
 
     events = []
@@ -39,10 +39,11 @@ def _write_midi(notes: list[NoteEvent], out_path) -> None:
 def run(ctx: StageContext, notes: list[NoteEvent], score: dict) -> dict:
     from aura_api.models import Export
 
+    tempo_bpm = score["parts"][0]["tempoBpm"]
     midi_path = ctx.workdir / "output.mid"
     musicxml_path = ctx.workdir / "output.musicxml"
 
-    _write_midi(notes, midi_path)
+    _write_midi(notes, midi_path, tempo_bpm)
     score_json_to_musicxml(score, musicxml_path)
 
     expected_note_count = sum(

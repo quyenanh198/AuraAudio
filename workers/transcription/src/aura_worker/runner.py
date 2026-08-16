@@ -11,7 +11,7 @@ from aura_api.models import TranscriptionJob
 from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext
 from aura_worker.stages import export as export_stage
-from aura_worker.stages import inference, normalize, probe, quantize
+from aura_worker.stages import inference, normalize, probe, quantize, structure
 from aura_worker.storage import WorkerStorageClient
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,8 @@ def run_transcription_job(job_id: str) -> None:
             # convention, not a return value) so normalize.run can find it on resume.
             normalized_path = normalize.run(ctx, source_path=ctx.workdir / "source" / "input")
             notes = inference.run(ctx, normalized_path=normalized_path)
-            score = quantize.run(ctx, notes)
+            structure_result = structure.run(ctx, normalized_path=normalized_path, notes=notes)
+            score = quantize.run(ctx, notes, structure_result)
             export_stage.run(ctx, notes=notes, score=score)
 
     except JobFailure as exc:
