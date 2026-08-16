@@ -138,3 +138,36 @@ def test_score_json_to_musicxml_spells_cflat_at_correct_octave(tmp_path: Path):
     reopened_notes = list(reopened.flatten().notes)
     assert len(reopened_notes) == 1
     assert reopened_notes[0].pitch.midi == 71
+
+
+def test_score_json_to_musicxml_renders_string_and_fret(tmp_path: Path):
+    score = _sample_score()
+    # internal string=2 (low-to-high, 0-indexed) -> MusicXML string 6-2=4
+    score["parts"][0]["measures"][0]["events"][0]["string"] = 2
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = 5
+    out_path = tmp_path / "tab.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<string>4</string>" in content
+    assert "<fret>5</fret>" in content
+
+
+def test_score_json_to_musicxml_omits_technical_block_when_unassigned(tmp_path: Path):
+    score = _sample_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = None
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = None
+    out_path = tmp_path / "no_tab.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<technical>" not in content
+
+
+def test_score_json_to_musicxml_omits_technical_block_when_keys_absent(tmp_path: Path):
+    # A score built without ever running the assign stage (e.g. a piano
+    # score, or a guitar score from before assign ran) has no string/fret
+    # keys on its events at all — export must not crash on the missing keys.
+    score = _sample_score()
+    out_path = tmp_path / "no_keys.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<technical>" not in content

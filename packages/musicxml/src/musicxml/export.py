@@ -4,7 +4,7 @@ from __future__ import annotations
 from fractions import Fraction
 from pathlib import Path
 
-from music21 import duration, instrument, key as m21_key, meter as m21_meter, note, pitch as m21_pitch, stream, tempo
+from music21 import articulations, duration, instrument, key as m21_key, meter as m21_meter, note, pitch as m21_pitch, stream, tempo
 
 
 def _notated_fraction_to_quarter_length(value: str) -> float:
@@ -53,6 +53,12 @@ def score_json_to_musicxml(score: dict, out_path: Path) -> Path:
         for event in measure_data["events"]:
             n = note.Note(_spell_pitch(event["pitch"], key_obj))
             n.duration = duration.Duration(_notated_fraction_to_quarter_length(event["notatedDuration"]))
+            internal_string = event.get("string")
+            fret = event.get("fret")
+            if internal_string is not None and fret is not None:
+                musicxml_string = 6 - internal_string
+                n.articulations.append(articulations.StringIndication(musicxml_string))
+                n.articulations.append(articulations.FretIndication(fret))
             m21_measure.append(n)
         m21_part.append(m21_measure)
 
