@@ -38,7 +38,7 @@ dependency-ordered — each gets its own brainstorm → spec → plan cycle,
 same process as the three backend sub-projects below):
 1. **Offline backend adaptation** — Postgres→SQLite, S3→local filesystem,
    confirm the existing pipeline runs fully offline as a standalone local
-   process. Backend-only, no UI. **DONE** (2026-08-16) — spec:
+   process. Backend-only, no UI. 9/9 tasks implemented and verified (2026-08-16); final whole-branch review pending. Spec:
    `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`;
    plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`;
    all 9 tasks implemented and reviewed clean via
@@ -227,8 +227,9 @@ the desktop app's 4 sub-projects are further along.
 The four sub-projects from "Direction change" above, tracked here as they
 complete (same pattern as "Phase 2 backend sub-projects" above).
 
-1. **Offline backend adaptation. DONE, including final full-workspace
-   verification (task 9 of 9).** Swapped the backend off a cloud-service
+1. **Offline backend adaptation.** All 9 tasks implemented (task 9's
+   full-workspace verification: 126/126 passing); final whole-branch
+   review pending. Swapped the backend off a cloud-service
    stack (Postgres/Redis/S3/MinIO) onto a fully offline, single-process
    local app: Postgres → SQLite (`DATABASE_URL=sqlite:///./data/aura.db`),
    S3 → a filesystem-backed `LocalStorageClient` (consolidated so the API
