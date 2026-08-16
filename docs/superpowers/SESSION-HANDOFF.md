@@ -43,61 +43,66 @@ real values with key-aware enharmonic spelling. Spec:
 `docs/superpowers/specs/2026-08-15-beat-meter-key-detection-design.md`.
 Plan: `docs/superpowers/plans/2026-08-16-beat-meter-key-detection.md`.
 
-**Phase 2, sub-project 2 — guitar string/fret assignment.** All 7 tasks
-implemented and individually reviewed clean (one real regression found and
-fixed mid-sub-project — see below). Score schema bumped to v3 (optional
-`string`/`fret` per event). New `aura_worker.fingering` module: candidate
-generation, chord assignment via backtracking (distinct-string hard
-constraint, minimize hand stretch), sequence DP (Viterbi-style) over a
-measure via `assign_measure`. New `assign` worker stage between `quantize`
-and `export` (guitar: runs the algorithm; piano: passthrough). MusicXML
-export renders real tab notation via `music21`'s
+**Phase 2, sub-project 2 — guitar string/fret assignment. DONE, including
+final whole-branch review and its fix wave.** Score schema bumped to v3
+(optional `string`/`fret` per event). New `aura_worker.fingering` module:
+candidate generation, chord assignment via backtracking (distinct-string
+hard constraint, minimize hand stretch, then prefer the lowest-fret
+position among ties), sequence DP (Viterbi-style) over a measure via
+`assign_measure`. New `assign` worker stage between `quantize` and
+`export` (guitar: runs the algorithm; piano: passthrough). MusicXML export
+renders real tab notation via `music21`'s
 `StringIndication`/`FretIndication`, with the verified numbering conversion
-`musicxml_string = 6 - internal_string`. Spec:
+`musicxml_string = 6 - internal_string` (independently re-verified three
+separate times across the sub-project). Spec:
 `docs/superpowers/specs/2026-08-16-guitar-fret-assignment-design.md`. Plan:
 `docs/superpowers/plans/2026-08-16-guitar-fret-assignment.md`.
-Manual smoke test confirmed tab data reaches the real exported MusicXML
-end-to-end (9 `<string>/<fret>` pairs via the real API+worker pipeline).
-**Final whole-branch review dispatched, not yet returned as of this
-writing** — check `.superpowers/sdd/2026-08-16-guitar-fret-assignment/` for
-a ledger if it still exists (gets deleted on completion); if that directory
-is gone, the sub-project finished (check `git log --oneline --grep=fingering`
-or `--grep=assign` and look for a `finishing-a-development-branch` decision
-in recent history to confirm).
-Regression found+fixed mid-sub-project (worth knowing about, not a current
-issue): Task 1's schema v2→v3 bump broke a pre-existing test's literal
-`schemaVersion == 2` assertion in `test_quantize.py` (that file wasn't in
-Task 1's own file list, so its own suite run didn't catch it) — caught by
-Task 2's full-suite run, fixed directly on main same session.
+Manual smoke test + a committed e2e assertion both confirm tab data reaches
+the real exported MusicXML end-to-end via the real API+worker pipeline.
+The SDD workspace (`.superpowers/sdd/2026-08-16-guitar-fret-assignment/`)
+has been deleted — this sub-project's process is fully closed out.
 
-Full workspace test suite: **90/90 passing** as of Task 7 (score-schema 17,
-musicxml 14, test-fixtures 6, aura-api 13, aura-worker 40). Working tree
-clean, `main` in sync with `origin/main` (last pushed commit: `7f7439f`).
+Two things worth knowing about (not current issues, already resolved):
+1. Task 1's schema v2→v3 bump broke a pre-existing test's literal
+   `schemaVersion == 2` assertion in `test_quantize.py` (that file wasn't
+   in Task 1's own file list, so its own suite run didn't catch it) —
+   caught by Task 2's full-suite run, fixed directly on main same session.
+2. The final whole-branch review found 3 Important (non-blocking) gaps,
+   all fixed in one follow-up commit: (a) `assign_chord`'s tie-break among
+   equal-stretch chord voicings now also prefers the lowest fret position
+   (previously some open-position chords could land needlessly high on the
+   neck — e.g. C major at frets 8-10 instead of an equally-valid 3-5); (b)
+   the spec's distinct-string property test (previously only run ad hoc by
+   a reviewer) is now a committed, seeded, 750-trial test; (c) the existing
+   e2e pipeline test now asserts `<technical>` actually appears in the
+   exported MusicXML, not just that the MIDI export succeeds — this
+   assertion was stress-tested by deliberately breaking the assign->export
+   seam and confirming the test catches it. 6 further Minor findings were
+   reviewed and explicitly parked (pre-existing precedent or out of scope
+   per the spec's Non-Goals) — not re-litigated in a future sub-project.
+
+Full workspace test suite: **92/92 passing.** Working tree clean, `main`
+in sync with `origin/main` (last pushed commit: `15305e4`).
 
 ## Phase 2 sub-projects remaining (in the order originally proposed)
 
 1. ~~Beat/meter/key intelligence~~ — **done** (above).
-2. ~~Guitar string/fret assignment~~ — **all 7 tasks done, individually
-   reviewed clean, manual smoke test passed end-to-end.** Final
-   whole-branch review was dispatched but had not returned as of this
-   writing — if `.superpowers/sdd/2026-08-16-guitar-fret-assignment/`
-   still exists, check its ledger tail for the review's outcome and
-   whether a fix wave is in progress; if that directory is gone, the
-   sub-project finished via `finishing-a-development-branch` (check
-   `git log --oneline --grep=fingering` / `--grep=assign` to confirm what
-   landed). See the "Status: what's done" section above for full detail.
+2. ~~Guitar string/fret assignment~~ — **fully done**, including the final
+   whole-branch review and its fix wave. See the "Status: what's done"
+   section above for full detail.
 3. **Piano hand/staff assignment** — split out from item 2 above. Own spec
    needed (hand/staff split-point optimizer, different algorithm than
-   guitar's string/fret DP — see `ARCHITECTURE.md` §4.3).
+   guitar's string/fret DP — see `ARCHITECTURE.md` §4.3). Not started.
 4. **Web client + SVG score preview** — doesn't exist at all yet. Needs its
    own product/UI brainstorm from scratch, not just a plan.
 5. **PDF rendering** — new export format, isolated renderer process.
 6. **Offline benchmark pipeline** — CI/scheduled eval harness.
 
-Recommendation if picking up cold: confirm #2's final review landed cleanly
-(see above), then start #3 (piano) to close out the assignment pair before
-moving to the web client, which is a much bigger scope jump (needs its own
-brainstorm, not just a plan).
+Recommendation if picking up cold: start #3 (piano hand/staff assignment)
+to close out the assignment pair before moving to the web client, which is
+a much bigger scope jump (needs its own brainstorm, not just a plan). Use
+the same process as sub-projects 1 and 2: brainstorming → spec → plan →
+subagent-driven-development → final whole-branch review.
 
 ## Working process (established this session, keep using it)
 
