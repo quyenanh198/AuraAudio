@@ -6,7 +6,15 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://aura:aura@localhost:5432/aura")
+_TEST_DB_PATH = Path(tempfile.gettempdir()) / "aura_worker_test.db"
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TEST_DB_PATH}")
+# Temporary: Task 2 will make these optional. For now, set dummy values for config to load.
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:9000")
+os.environ.setdefault("S3_ACCESS_KEY", "dummy")
+os.environ.setdefault("S3_SECRET_KEY", "dummy")
+os.environ.setdefault("S3_BUCKET", "dummy")
+os.environ.setdefault("S3_REGION", "us-east-1")
 
 from aura_api.db import Base  # noqa: E402
 from aura_api.models import MediaAsset, Project, TranscriptionJob  # noqa: E402
@@ -14,7 +22,7 @@ from aura_api.models import MediaAsset, Project, TranscriptionJob  # noqa: E402
 
 @pytest.fixture()
 def db_session():
-    engine = create_engine(os.environ["DATABASE_URL"])
+    engine = create_engine(os.environ["DATABASE_URL"], connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
