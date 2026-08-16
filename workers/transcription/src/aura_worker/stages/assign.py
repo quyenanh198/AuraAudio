@@ -4,11 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 
-from aura_worker.fingering import assign_measure
+from aura_worker.fingering import assign_measure as assign_string_fret
+from aura_worker.piano_hands import assign_measure as assign_hands
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
 from score_schema.validate import validate_score
 
-STAGE_VERSION = 1
+STAGE_VERSION = 2
 
 
 def run(ctx: StageContext, score: dict) -> dict:
@@ -17,16 +18,18 @@ def run(ctx: StageContext, score: dict) -> dict:
         return json.loads(ctx.storage.get_bytes(cached.object_key))
 
     part = score["parts"][0]
+    instrument = part["instrument"]
     for measure in part["measures"]:
         events = measure["events"]
-        if part["instrument"] == "guitar":
-            assignments = assign_measure(events)
-        else:
-            assignments = {}
+
+        string_fret_assignments = assign_string_fret(events) if instrument == "guitar" else {}
+        hand_assignments = assign_hands(events) if instrument == "piano" else {}
+
         for i, event in enumerate(events):
-            sf = assignments.get(i)
+            sf = string_fret_assignments.get(i)
             event["string"] = sf.string if sf is not None else None
             event["fret"] = sf.fret if sf is not None else None
+            event["hand"] = hand_assignments.get(i)
 
     validate_score(score)
 
