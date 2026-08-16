@@ -12,7 +12,7 @@ from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext
 from aura_worker.stages import export as export_stage
 from aura_worker.stages import assign, inference, normalize, probe, quantize, structure
-from aura_worker.storage import WorkerStorageClient
+from aura_api.storage import LocalStorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ _SessionLocal = sessionmaker(bind=get_engine())
 
 def run_transcription_job(job_id: str) -> None:
     session: Session = _SessionLocal()
-    storage = WorkerStorageClient()
+    storage = LocalStorageClient()
     try:
         job = session.get(TranscriptionJob, job_id)
         if job is None:
