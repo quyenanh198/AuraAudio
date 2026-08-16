@@ -11,3 +11,4 @@ packages/test_fixtures/fixtures/*.wav
 .superpowers/
 dump.rdb
 /data/
+apps/desktop/build/
