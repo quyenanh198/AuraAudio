@@ -1,6 +1,5 @@
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from aura_api.main import create_app

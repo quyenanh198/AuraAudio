@@ -1,5 +1,3 @@
-import os
-
 from sqlalchemy import text
 
 from aura_api.db import get_engine
