@@ -804,7 +804,9 @@ def _detect_key(notes: list[NoteEvent]) -> tuple[str, float]:
     s = stream.Stream()
     for n in notes:
         s.append(m21_note.Note(n.pitch))
-    analyzed = s.analyze("key")
+    analyzed = s.analyze("krumhansl")  # NOT "key" — verified during implementation that
+    # the bare 'key' method name does not actually use Krumhansl-Schmuckler weighting and
+    # misclassifies clean major scales as their relative minor; request the algorithm by name.
     key_str = f"{analyzed.tonic.name} {analyzed.mode}"
     confidence = float(np.clip(analyzed.correlationCoefficient, 0.0, 1.0))
     return key_str, confidence
