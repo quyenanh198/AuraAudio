@@ -33,7 +33,11 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_data_dir / 'aura.db'}")
 
 import uvicorn  # noqa: E402
 from aura_api.main import app  # noqa: E402
+from starlette.applications import Starlette  # noqa: E402
+from starlette.middleware import Middleware  # noqa: E402
 from starlette.middleware.cors import CORSMiddleware  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+from starlette.routing import Mount, Route  # noqa: E402
 
 AURA_BACKEND_PORT = 8317
 
@@ -45,18 +49,60 @@ AURA_BACKEND_PORT = 8317
 # which then rejects with a generic network error — confirmed by hand during
 # Task 3's desktop-shell-packaging end-to-end verification.
 #
-# A wildcard origin is deliberately scoped to *this* standalone entrypoint
-# only (not `aura_api.main.create_app()`, which is also used for the
-# containerized/networked server deployment): this process only ever binds
-# to 127.0.0.1, is spawned as a per-user child process by the desktop app
-# itself, and currently serves no authenticated/cookie-based endpoints, so a
-# permissive policy here does not widen the shared server's attack surface.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET"],
-    allow_headers=["*"],
+# IMPORTANT: the wildcard CORS policy below must NOT be applied to the whole
+# `aura_api.main.app` (as an earlier revision of this file did). That app
+# also serves real user-data routes (`/v1/jobs/{id}`, `/v1/exports/{id}`,
+# `/v1/exports/{id}/download`, etc.) — applying `CORSMiddleware` to the
+# entire app would let *any* webpage open in *any* browser tab on the same
+# machine (not just this Tauri webview) `fetch()` those routes cross-origin
+# and read job/export contents, as long as it can reach 127.0.0.1:8317 and
+# guesses/knows an id. That's a real widening of local attack surface that
+# only `/healthz` needs.
+#
+# Fix: build a tiny root ASGI app with two routes, matched in this order:
+#   1. `/healthz` — an explicit Starlette `Route` with `CORSMiddleware`
+#      attached only to *that route* (Starlette's `Route`/`Mount` both take
+#      a `middleware=` kwarg, confirmed against this project's installed
+#      starlette by reading `Route.__init__`'s signature directly, not
+#      assumed).
+#   2. `/` — a `Mount` of the full, unmodified `aura_api.main.app`, with no
+#      CORS middleware anywhere on it — identical to how that app behaves in
+#      the containerized/networked deployment (same-origin only).
+# Because Starlette matches routes in registration order and `/healthz` is
+# listed first, a request to `/healthz` is served by the CORS-enabled route
+# and never reaches the mounted app's own `/healthz`; every other path falls
+# through to the mount, completely un-CORS'd. Verified directly with
+# `starlette.testclient.TestClient` (see `apps/desktop/tests/test_cors_scope.py`):
+# a cross-origin `GET /healthz` gets `access-control-allow-origin: *`, a
+# cross-origin `GET /v1/jobs/{id}` gets no CORS headers at all.
+#
+# A wildcard origin is acceptable for the `/healthz` route specifically:
+# it's the only route reachable this way, returns no user data (just a
+# static `{"status": "ok"}`), and this process only ever binds 127.0.0.1.
+
+
+async def _cors_healthz(request):  # noqa: ARG001 - Starlette endpoint signature
+    return JSONResponse({"status": "ok"})
+
+
+root_app = Starlette(
+    routes=[
+        Route(
+            "/healthz",
+            _cors_healthz,
+            methods=["GET"],
+            middleware=[
+                Middleware(
+                    CORSMiddleware,
+                    allow_origins=["*"],
+                    allow_methods=["GET"],
+                    allow_headers=["*"],
+                )
+            ],
+        ),
+        Mount("/", app=app),
+    ]
 )
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=AURA_BACKEND_PORT)
+    uvicorn.run(root_app, host="127.0.0.1", port=AURA_BACKEND_PORT)
