@@ -24,7 +24,7 @@ def _structure_120_four_four() -> StructureResult:
     )
 
 
-def test_quantize_snaps_notes_to_sixteenth_grid_and_produces_valid_v2_score(db_session, sample_job, workdir):
+def test_quantize_snaps_notes_to_sixteenth_grid_and_produces_valid_v3_score(db_session, sample_job, workdir):
     notes = [
         NoteEvent(pitch=64, onset_s=0.02, offset_s=0.48, velocity=90, confidence=0.9),
         NoteEvent(pitch=67, onset_s=0.53, offset_s=0.97, velocity=85, confidence=0.85),
@@ -49,7 +49,7 @@ def test_quantize_snaps_notes_to_sixteenth_grid_and_produces_valid_v2_score(db_s
     from aura_api.models import ScoreRevision
     revision = db_session.query(ScoreRevision).filter_by(project_id=sample_job.project_id).one()
     assert revision.revision == 0
-    assert revision.score_json["schemaVersion"] == 2
+    assert revision.score_json["schemaVersion"] == 3
 
 
 def test_quantize_places_far_notes_in_later_measures(db_session, sample_job, workdir):
