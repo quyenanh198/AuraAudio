@@ -38,14 +38,16 @@ dependency-ordered — each gets its own brainstorm → spec → plan cycle,
 same process as the three backend sub-projects below):
 1. **Offline backend adaptation** — Postgres→SQLite, S3→local filesystem,
    confirm the existing pipeline runs fully offline as a standalone local
-   process. Backend-only, no UI. **This is the sub-project currently being
-   brainstormed** — check for a spec at
-   `docs/superpowers/specs/*offline-backend*` or a plan at
-   `docs/superpowers/plans/*offline-backend*`; if neither exists yet, the
-   brainstorming conversation itself is the only record of progress so far
-   (see the bullet list above) and needs to be resumed/redone.
+   process. Backend-only, no UI. **DONE** (2026-08-16) — spec:
+   `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`;
+   plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`;
+   all 9 tasks implemented and reviewed clean via
+   `subagent-driven-development`. See "Offline desktop app sub-projects"
+   below for what changed and how it was verified.
 2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
    backend as a managed sidecar, native window at localhost. No real UI.
+   **This is the next sub-project to pick up** — no spec or plan exists
+   yet; start with `superpowers:brainstorming`.
 3. **Score preview + playback UI** — upload flow, SVG notation rendering
    (likely via an existing MusicXML-to-SVG renderer rather than building
    one from scratch — not yet decided) synced to audio playback, export.
@@ -55,8 +57,9 @@ same process as the three backend sub-projects below):
    undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
    single piece, builds on 1-3.
 
-None of the four have a written spec yet as of this update — only the
-scoping/technology decisions above have been made in conversation.
+Sub-project 1 now has a written spec + plan and is done (see above).
+Sub-projects 2-4 have no written spec yet — only the scoping/technology
+decisions above have been made in conversation.
 
 ## What AuraAudio is
 
@@ -212,11 +215,57 @@ in sync with `origin/main` (last pushed commit: `eb58113`).
 All backend transcription-intelligence work is done. What used to be
 listed here as "item 4: web client" and a separate PDF-rendering /
 benchmark-harness backlog has been superseded by the offline-desktop-app
-direction — see "Direction change" near the top of this document for the
-current plan (4 sequential sub-projects, first one — offline backend
-adaptation — is being brainstormed now). PDF rendering and an offline
-benchmark CI harness are still real future work, just not sequenced yet;
-revisit once the desktop app's 4 sub-projects are further along.
+direction — see "Direction change" near the top of this document and
+"Offline desktop app sub-projects" below for the current plan (4
+sequential sub-projects; the first, offline backend adaptation, is now
+done — sub-project 2 is next). PDF rendering and an offline benchmark CI
+harness are still real future work, just not sequenced yet; revisit once
+the desktop app's 4 sub-projects are further along.
+
+## Offline desktop app sub-projects
+
+The four sub-projects from "Direction change" above, tracked here as they
+complete (same pattern as "Phase 2 backend sub-projects" above).
+
+1. **Offline backend adaptation. DONE, including final full-workspace
+   verification (task 9 of 9).** Swapped the backend off a cloud-service
+   stack (Postgres/Redis/S3/MinIO) onto a fully offline, single-process
+   local app: Postgres → SQLite (`DATABASE_URL=sqlite:///./data/aura.db`),
+   S3 → a filesystem-backed `LocalStorageClient` (consolidated so the API
+   and worker share one implementation instead of two separate S3
+   clients), presigned S3 upload/download → direct multipart upload
+   (`POST /v1/uploads`) and a direct `FileResponse` download
+   (`GET /v1/exports/{id}/download`), Redis/RQ job queue → in-process
+   thread-pool dispatch on job creation. `boto3`, `rq`, `redis`, and
+   `psycopg2-binary` are gone from both `apps/api` and
+   `workers/transcription`'s dependencies; `python-multipart` was added
+   to `apps/api`. Both guitar and piano e2e pipeline tests were migrated
+   off S3/boto3 mocking onto the new local stack, which incidentally
+   surfaced and fixed two real pre-existing bugs along the way: a numpy
+   2.x / tensorflow 2.14 ABI incompatibility (`numpy` now pinned `<2` in
+   `workers/transcription`) and a job-dispatch race condition in the
+   thread-pool path. Spec:
+   `docs/superpowers/specs/2026-08-16-offline-backend-adaptation-design.md`.
+   Plan: `docs/superpowers/plans/2026-08-16-offline-backend-adaptation.md`.
+   All 9 tasks implemented and reviewed clean via
+   `subagent-driven-development` (SDD workspace:
+   `.superpowers/sdd/2026-08-16-offline-backend-adaptation/` — a brief +
+   report per task, plus a final task-9 verification report). Task 9's
+   verification: the full workspace suite (126/126 across all five
+   packages, both e2e tests included) passes with the Docker daemon down
+   and zero Postgres/Redis/MinIO running; a manual smoke test then drove
+   the standalone `uvicorn` API process end-to-end through `curl` only —
+   upload, project creation, transcription job, polling to `succeeded`,
+   and downloading real MIDI + MusicXML export bytes — confirming the app
+   works as one local process with no external services.
+2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
+   backend as a managed sidecar, native window at localhost. No real UI.
+   **Next up.** No spec or plan written yet — start with
+   `superpowers:brainstorming`.
+3. **Score preview + playback UI** — not started. See "Direction change"
+   above for scope notes.
+4. **Semantic editing** — not started. See "Direction change" above for
+   scope notes.
 
 **Known follow-up, not yet its own sub-project:** `musicxml/export.py`
 appends notes to each measure/staff in list order rather than sorting by
@@ -226,13 +275,17 @@ exported rhythm can come out scrambled for both guitar and piano today.
 Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
 by sub-project 3's final review. Worth a small bounded fix on its own —
 sort each measure's events by `notatedOnset` before building notes — before
-it's forgotten as "always been like that." Good candidate to fold into
-sub-project 1 (offline backend adaptation) or knock out separately first,
-since it's small and bounded either way.
+it's forgotten as "always been like that." Sub-project 1 (offline backend
+adaptation) is now done and did not fold this in — still open and
+unscheduled; a good candidate to knock out on its own before sub-project 4
+(semantic editing) starts building on top of `musicxml/export.py`.
 
 Recommendation if picking up cold: read "Direction change" at the top of
-this document first — it supersedes the framing below. Resume brainstorming
-sub-project 1 (offline backend adaptation) if no spec exists yet for it.
+this document first — it supersedes the framing below, and see "Offline
+desktop app sub-projects" further down for current status. Sub-project 1
+(offline backend adaptation) is done; pick up sub-project 2 (desktop shell
++ packaging, Tauri) next — no spec exists yet, start with
+`superpowers:brainstorming`.
 
 ## Working process (established this session, keep using it)
 
@@ -282,39 +335,41 @@ correct — check it.
 
 ## Environment gotchas (sandbox-specific, not project design)
 
+- **No external services needed anymore.** Sub-project 1 (offline backend
+  adaptation, done — see "Offline desktop app sub-projects" above) swapped
+  Postgres → SQLite and S3/MinIO → a local filesystem `LocalStorageClient`,
+  and replaced the Redis/RQ job queue with an in-process thread pool.
+  `make test` and the API run standalone with the Docker daemon down and
+  zero Postgres/Redis/MinIO — proven directly by that sub-project's task 9
+  (full suite green, manual curl smoke test through a standalone
+  `uvicorn` process). Older revisions of this doc described native
+  `postgres`/`redis-server`/`moto[server]` setup steps for local dev/test;
+  those are now historical and no longer needed.
 - **Docker Hub image pulls are blocked** by this sandbox's egress policy
-  (`production.cloudfront.docker.com` denied). `docker-compose.yml` and
-  both Dockerfiles are correct for real deployment but were never build-
-  verified live here. Local dev/test substitutes: native `postgres`
-  (`service postgresql start`), native `redis-server`
-  (`service redis-server start`), and `moto[server]` as an S3-compatible
-  MinIO stand-in (`/opt/moto-venv/bin/moto_server -p 9000` — needs its own
-  venv since it conflicts with system Python packages; bucket `aura-media`
-  must be created once per restart via boto3).
-- **These services do not persist across session/container restarts** —
-  if `redis-cli ping`, `pg_isready`, or `curl 127.0.0.1:9000` fail at the
-  start of a new session, restart them with the commands above before
-  running tests.
-- **`.envrc`** at repo root holds `DATABASE_URL`/`REDIS_URL`/`S3_*` env
-  vars. Bash tool shell state does not persist between tool calls in this
-  harness — every test-running command needs `source .envrc &&` prefixed,
-  and use absolute paths for pytest file arguments (`uv run --package X`
-  resolves relative paths against the invoked package's own directory in
-  a way that's easy to get wrong).
+  (`production.cloudfront.docker.com` denied). `infra/docker-compose.yml`
+  and both Dockerfiles are still correct for real containerized
+  deployment, but were never build-verified live here — irrelevant to
+  local dev/test now that it needs no external services (see above).
+- **`.envrc`** at repo root now holds only `DATABASE_URL`
+  (`sqlite:///./data/aura.db`) and `AURA_DATA_DIR`. Bash tool shell state
+  does not persist between tool calls in this harness — every
+  test-running command needs `source .envrc &&` prefixed, and use
+  absolute paths for pytest file arguments (`uv run --package X` resolves
+  relative paths against the invoked package's own directory in a way
+  that's easy to get wrong).
 - `setuptools<81` is pinned in `workers/transcription/pyproject.toml` —
   newer setuptools dropped `pkg_resources`, which `basic-pitch`'s
   `librosa`/`numba`/`resampy` chain still imports at runtime.
+- `numpy<2` is pinned in `workers/transcription/pyproject.toml` — the
+  `tensorflow` version pulled in by `basic-pitch` is ABI-incompatible with
+  numpy 2.x; found and fixed during sub-project 1's e2e test migration
+  (task 8).
 
 ## Quick start for a fresh session
 
 ```bash
 cd /home/user/AuraAudio
-service postgresql start && service redis-server start
-(/opt/moto-venv/bin/moto_server -p 9000 &) ; sleep 2
-/opt/moto-venv/bin/python -c "
-import boto3
-c = boto3.client('s3', endpoint_url='http://127.0.0.1:9000', aws_access_key_id='aura', aws_secret_access_key='aurasecret', region_name='us-east-1')
-c.create_bucket(Bucket='aura-media')
-"
-source .envrc && make test   # expect 112/112 passing
+source .envrc && make test   # expect all five packages green (126/126 as of sub-project 1's task 9)
 ```
+
+No external services to start first — see "Environment gotchas" above.
