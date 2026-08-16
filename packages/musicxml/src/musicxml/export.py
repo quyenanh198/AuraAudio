@@ -1,9 +1,10 @@
+# packages/musicxml/src/musicxml/export.py — full replacement
 from __future__ import annotations
 
 from fractions import Fraction
 from pathlib import Path
 
-from music21 import duration, instrument, meter, note, stream, tempo
+from music21 import duration, instrument, key as m21_key, meter as m21_meter, note, pitch as m21_pitch, stream, tempo
 
 
 def _notated_fraction_to_quarter_length(value: str) -> float:
@@ -12,17 +13,43 @@ def _notated_fraction_to_quarter_length(value: str) -> float:
     return float(Fraction(value) * 4)
 
 
+def _spell_pitch(midi_number: int, key_obj: m21_key.Key) -> m21_pitch.Pitch:
+    """Spell a MIDI pitch using the detected key's diatonic collection where
+    possible, falling back to the key's sharp/flat preference for chromatic
+    (non-diatonic) tones."""
+    octave = midi_number // 12 - 1
+    pc = midi_number % 12
+    diatonic_by_pc = {p.pitchClass: p.name for p in key_obj.pitches[:7]}
+    if pc in diatonic_by_pc:
+        return m21_pitch.Pitch(f"{diatonic_by_pc[pc]}{octave}")
+
+    default = m21_pitch.Pitch(ps=midi_number)  # sharp-preferred by default
+    if key_obj.sharps < 0 and default.accidental is not None and default.accidental.name == "sharp":
+        return default.getEnharmonic()
+    return default
+
+
 def score_json_to_musicxml(score: dict, out_path: Path) -> Path:
     part_data = score["parts"][0]
+    tonic_name, mode = part_data["key"].split(" ")
+    key_obj = m21_key.Key(tonic_name, mode)
+
     m21_part = stream.Part()
-    m21_part.insert(0, meter.TimeSignature("4/4"))
-    m21_part.insert(0, tempo.MetronomeMark(number=120))
+    m21_part.insert(0, m21_meter.TimeSignature(part_data["meter"]))
+    m21_part.insert(0, key_obj)
     m21_part.insert(0, instrument.Guitar() if part_data["instrument"] == "guitar" else instrument.Piano())
 
+    is_first_measure = True
     for measure_data in part_data["measures"]:
         m21_measure = stream.Measure(number=measure_data["number"])
+        if is_first_measure:
+            # MetronomeMark must live in the Measure, not the Part — see the
+            # "Validated design notes" in the implementation plan: inserting
+            # it at the Part level silently drops it from the exported XML.
+            m21_measure.insert(0, tempo.MetronomeMark(number=part_data["tempoBpm"]))
+            is_first_measure = False
         for event in measure_data["events"]:
-            n = note.Note(event["pitch"])
+            n = note.Note(_spell_pitch(event["pitch"], key_obj))
             n.duration = duration.Duration(_notated_fraction_to_quarter_length(event["notatedDuration"]))
             m21_measure.append(n)
         m21_part.append(m21_measure)

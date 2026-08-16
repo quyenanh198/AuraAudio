@@ -35,6 +35,10 @@ def test_reopen_and_check_counts_a_barline_crossing_note_once(tmp_path: Path):
     # into measure 2; music21 ties it into two <note> elements on write.
     score = build_score(
         instrument="guitar",
+        tempo_bpm=120.0,
+        meter="4/4",
+        key="C major",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
         time_map=[{"beat": 0, "seconds": 0.0}],
         measures=[{
             "number": 1,
