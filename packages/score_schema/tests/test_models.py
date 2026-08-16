@@ -12,7 +12,7 @@ def test_job_error_code_values_match_spec():
     assert JobErrorCode.NO_MUSIC_DETECTED == "NO_MUSIC_DETECTED"
 
 
-def test_build_score_produces_schema_v3_shape():
+def test_build_score_produces_schema_v4_shape():
     score = build_score(
         instrument="guitar",
         tempo_bpm=128.0,
@@ -39,7 +39,7 @@ def test_build_score_produces_schema_v3_shape():
             }
         ],
     )
-    assert score["schemaVersion"] == 3
+    assert score["schemaVersion"] == 4
     part = score["parts"][0]
     assert part["instrument"] == "guitar"
     assert part["tempoBpm"] == 128.0

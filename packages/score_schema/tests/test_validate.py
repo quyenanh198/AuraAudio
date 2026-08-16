@@ -124,3 +124,35 @@ def test_event_with_out_of_range_fret_is_rejected():
     score["parts"][0]["measures"][0]["events"][0]["fret"] = 21
     with pytest.raises(ScoreValidationError):
         validate_score(score)
+
+
+def test_schema_v3_is_rejected():
+    score = _valid_score()
+    score["schemaVersion"] = 3
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_event_without_hand_is_accepted():
+    validate_score(_valid_score())  # _valid_score()'s event has no hand key at all
+
+
+def test_event_with_null_hand_is_accepted():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["hand"] = None
+    validate_score(score)  # must not raise
+
+
+def test_event_with_valid_hand_values_is_accepted():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["hand"] = "left"
+    validate_score(score)  # must not raise
+    score["parts"][0]["measures"][0]["events"][0]["hand"] = "right"
+    validate_score(score)  # must not raise
+
+
+def test_event_with_invalid_hand_value_is_rejected():
+    score = _valid_score()
+    score["parts"][0]["measures"][0]["events"][0]["hand"] = "both"
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)

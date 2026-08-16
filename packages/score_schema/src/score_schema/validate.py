@@ -20,6 +20,7 @@ _EVENT_SCHEMA = {
         "locked": {"type": "boolean"},
         "string": {"type": ["integer", "null"], "minimum": 0, "maximum": 5},
         "fret": {"type": ["integer", "null"], "minimum": 0, "maximum": 20},
+        "hand": {"enum": ["left", "right", None]},
     },
     "additionalProperties": False,
 }
@@ -39,7 +40,7 @@ _SCORE_SCHEMA = {
     "type": "object",
     "required": ["schemaVersion", "timeMap", "parts"],
     "properties": {
-        "schemaVersion": {"const": 3},
+        "schemaVersion": {"const": 4},
         "timeMap": {
             "type": "array",
             "items": {

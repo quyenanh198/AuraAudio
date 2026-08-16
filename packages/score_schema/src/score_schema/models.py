@@ -34,10 +34,10 @@ def build_score(
     time_map: list[dict],
     measures: list[dict],
 ) -> dict:
-    """Assemble the canonical schemaVersion-3 score JSON (ARCHITECTURE.md §5,
+    """Assemble the canonical schemaVersion-4 score JSON (ARCHITECTURE.md §5,
     extended per docs/superpowers/specs/2026-08-15-beat-meter-key-detection-design.md)."""
     return {
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "timeMap": time_map,
         "parts": [
             {
