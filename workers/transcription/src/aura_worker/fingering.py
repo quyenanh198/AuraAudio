@@ -37,16 +37,27 @@ def assign_chord(pitches: list[int]) -> list["StringFret | None"]:
     best_result: list[StringFret | None] = [None] * n
     best_count = -1
     best_stretch: float | None = None
+    best_max_fret: int | None = None
 
     def backtrack(i: int, used_strings: set[int], current: list[StringFret | None]) -> None:
-        nonlocal best_result, best_count, best_stretch
+        nonlocal best_result, best_count, best_stretch, best_max_fret
         if i == n:
             count = sum(1 for x in current if x is not None)
             frets = [x.fret for x in current if x is not None]
             stretch = (max(frets) - min(frets)) if frets else 0
-            if count > best_count or (count == best_count and (best_stretch is None or stretch < best_stretch)):
+            max_fret = max(frets) if frets else 0
+            is_better = count > best_count or (
+                count == best_count
+                and (
+                    best_stretch is None
+                    or stretch < best_stretch
+                    or (stretch == best_stretch and (best_max_fret is None or max_fret < best_max_fret))
+                )
+            )
+            if is_better:
                 best_count = count
                 best_stretch = stretch
+                best_max_fret = max_fret
                 best_result = list(current)
             return
 

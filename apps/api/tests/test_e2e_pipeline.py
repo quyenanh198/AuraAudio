@@ -67,6 +67,16 @@ def test_full_pipeline_upload_to_export_is_idempotent(db_session, tmp_path, s3_c
         midi_bytes = f.read()
     assert midi_bytes[:4] == b"MThd"  # valid MIDI file header
 
+    musicxml_export_id = next(e.id for e in exports if e.format == "musicxml")
+    musicxml_export_resp = client.get(f"/v1/exports/{musicxml_export_id}")
+    assert musicxml_export_resp.status_code == 200
+    musicxml_download_url = musicxml_export_resp.json()["download_url"]
+    assert musicxml_download_url is not None
+
+    with urllib.request.urlopen(musicxml_download_url) as f:
+        musicxml_bytes = f.read()
+    assert "<technical>" in musicxml_bytes.decode("utf-8")
+
     # Re-request transcription for the same project: must return the same job,
     # and re-running the worker on an already-succeeded job must not recompute
     # any stage (StageArtifact rows are reused) or create duplicate exports.

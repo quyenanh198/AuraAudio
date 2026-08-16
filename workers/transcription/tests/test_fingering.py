@@ -1,3 +1,5 @@
+import random
+
 from aura_worker.fingering import StringFret, candidates_for_pitch, assign_chord
 
 
@@ -53,6 +55,42 @@ def test_assign_chord_partial_when_too_many_pitches_for_strings():
     assert len(assigned) == 6
     strings = [sf.string for sf in assigned]
     assert len(set(strings)) == 6
+
+
+def test_assign_chord_prefers_low_frets_among_equal_stretch_options():
+    # C major triad: C4=60, E4=64, G4=67. There are two distinct-string
+    # assignments tied for minimal stretch (2): a high-position one around
+    # frets 8-10, and a low-position one around frets 3-5. The low-position
+    # option should win the tie-break, per the spec's "prefers lower, more
+    # accessible frets" goal.
+    result = assign_chord([60, 64, 67])
+    assert result == [
+        StringFret(string=3, fret=5),
+        StringFret(string=4, fret=5),
+        StringFret(string=5, fret=3),
+    ]
+    strings = [sf.string for sf in result]
+    assert len(set(strings)) == len(strings)
+    frets = [sf.fret for sf in result]
+    assert max(frets) - min(frets) == 2  # still minimal stretch
+    assert max(frets) <= 5  # low position, not the 8-10 high-position tie
+
+
+def test_assign_chord_distinct_strings_property():
+    # Property test (spec Testing bullet 5 / ARCHITECTURE.md §9): for any
+    # randomly generated set of simultaneous pitches within guitar range and
+    # count <= 6, the assigned strings (excluding nulls) must always be
+    # distinct. Seeded for reproducibility; keep trial count modest so the
+    # suite stays fast.
+    rng = random.Random(42)
+    for _ in range(750):
+        count = rng.randint(1, 6)
+        pitches = [rng.randint(30, 90) for _ in range(count)]
+        result = assign_chord(pitches)
+        assigned_strings = [sf.string for sf in result if sf is not None]
+        assert len(set(assigned_strings)) == len(assigned_strings), (
+            f"duplicate string assigned for pitches={pitches!r}, result={result!r}"
+        )
 
 
 def test_assign_chord_returns_none_for_unreachable_pitch_only():
