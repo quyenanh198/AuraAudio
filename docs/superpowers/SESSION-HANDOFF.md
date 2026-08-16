@@ -348,9 +348,13 @@ correct — check it.
   those are now historical and no longer needed.
 - **Docker Hub image pulls are blocked** by this sandbox's egress policy
   (`production.cloudfront.docker.com` denied). `infra/docker-compose.yml`
-  and both Dockerfiles are still correct for real containerized
-  deployment, but were never build-verified live here — irrelevant to
-  local dev/test now that it needs no external services (see above).
+  and both Dockerfiles now target the superseded cloud (Postgres/S3/Redis)
+  architecture and are currently broken/unverified against this
+  sub-project's changes (e.g. `workers/transcription/Dockerfile` still
+  runs `rq worker`, though `rq` was removed from the worker's
+  dependencies) — pending removal or rework, not fixed here since that was
+  ruled out of scope for this sub-project. Irrelevant to local dev/test
+  now that it needs no external services (see above).
 - **`.envrc`** at repo root now holds only `DATABASE_URL`
   (`sqlite:///./data/aura.db`) and `AURA_DATA_DIR`. Bash tool shell state
   does not persist between tool calls in this harness — every
