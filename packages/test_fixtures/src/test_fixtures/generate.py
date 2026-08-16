@@ -20,9 +20,7 @@ def write_guitar_pluck_wav(path: Path, duration_s: float = 2.0, sample_rate: int
         end = start + note_len
         mask = (t >= start) & (t < end)
         local_t = t[mask] - start
-        envelope = np.exp(-3.0 * local_t)
-        harmonic = sum(np.sin(2 * np.pi * freq * (h + 1) * local_t) / (h + 1) for h in range(4))
-        signal[mask] = envelope * harmonic
+        signal[mask] = _decaying_harmonic(local_t, freq)
     signal = (signal / np.max(np.abs(signal)) * 0.8 * 32767).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
     wavfile.write(str(path), sample_rate, signal)
@@ -39,6 +37,25 @@ def _click(duration: float, freq: float, amp: float, sample_rate: int) -> np.nda
     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
     envelope = np.exp(-200 * t)
     return amp * envelope * np.sin(2 * np.pi * freq * t)
+
+
+def _decaying_harmonic(
+    local_t: np.ndarray, freq: float, num_harmonics: int = 4, decay_rate: float = 3.0
+) -> np.ndarray:
+    """Synthesize a decaying harmonic signal at a given frequency.
+
+    Args:
+        local_t: Time array (relative to note start) in seconds.
+        freq: Fundamental frequency in Hz.
+        num_harmonics: Number of harmonics to include (default 4).
+        decay_rate: Exponential decay rate (default 3.0).
+
+    Returns:
+        The envelope-modulated harmonic signal as a numpy array.
+    """
+    envelope = np.exp(-decay_rate * local_t)
+    harmonic = sum(np.sin(2 * np.pi * freq * (h + 1) * local_t) / (h + 1) for h in range(num_harmonics))
+    return envelope * harmonic
 
 
 def write_metronome_pulse_wav(
@@ -102,9 +119,7 @@ def write_diatonic_melody_wav(
         start = i * note_len
         mask = (t_full >= start) & (t_full < start + note_len)
         local_t = t_full[mask] - start
-        envelope = np.exp(-3.0 * local_t)
-        harmonic = sum(np.sin(2 * np.pi * freq * (h + 1) * local_t) / (h + 1) for h in range(4))
-        signal[mask] = envelope * harmonic
+        signal[mask] = _decaying_harmonic(local_t, freq)
     signal = (signal / np.max(np.abs(signal)) * 0.8 * 32767).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
     wavfile.write(str(path), sample_rate, signal)
