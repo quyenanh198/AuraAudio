@@ -36,10 +36,27 @@
 
   <script>
     const HEALTH_URL = "http://127.0.0.1:8317/healthz";
-    const MAX_ATTEMPTS = 5;
+    // The Rust side (apps/desktop/src-tauri/src/backend.rs) polls /healthz
+    // for up to HEALTH_TIMEOUT = 30s before giving up and showing the
+    // window anyway. This page's own script starts running as soon as the
+    // (still-hidden) window's content loads — which happens immediately at
+    // launch, independent of and in parallel with the Rust-side health
+    // poll, not only once the window becomes visible. So this loop's own
+    // retry budget must be comfortably >= 30s: on a host where the backend
+    // takes, say, 6-10s to boot (well within Rust's 30s tolerance), the
+    // window still only becomes visible once genuinely healthy, but if this
+    // loop's budget were shorter than that boot time it would already have
+    // exhausted its attempts and be stuck on a stale "unreachable" by the
+    // time the window is shown, with nothing left to re-trigger it.
+    // 40 attempts * 800ms = 32s, matching/exceeding the Rust timeout with a
+    // small margin (plus each attempt's own fetch round-trip time on top).
+    const MAX_ATTEMPTS = 40;
     const RETRY_DELAY_MS = 800;
     const statusEl = document.getElementById("status");
     const detailEl = document.getElementById("detail");
+
+    let checkInFlight = false;
+    let everSucceeded = false;
 
     function setStatus(cls, text) {
       statusEl.className = cls;
@@ -51,38 +68,56 @@
     }
 
     // Live fetch against the real running backend — this is the actual
-    // end-to-end proof the whole pipe works, not a hardcoded string. By the
-    // time this window is visible, Rust has already gated its creation on
-    // its own /healthz poll (see apps/desktop/src-tauri/src/backend.rs), so
-    // a single attempt is normally enough; a short client-side retry is
-    // kept anyway so a slow-to-settle connection doesn't read as a false
-    // "unreachable" on the very first paint.
+    // end-to-end proof the whole pipe works, not a hardcoded string.
     async function checkBackendHealth() {
-      let lastError = "";
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-        setStatus("pending", `checking… (attempt ${attempt}/${MAX_ATTEMPTS})`);
-        try {
-          const response = await fetch(HEALTH_URL);
-          const body = await response.json();
-          if (response.ok) {
-            setStatus("ok", "reachable");
-            detailEl.textContent = JSON.stringify(body, null, 2);
-            return;
-          }
-          lastError = `unhealthy (HTTP ${response.status})`;
-        } catch (err) {
-          lastError = String(err);
-        }
-        if (attempt < MAX_ATTEMPTS) {
-          await sleep(RETRY_DELAY_MS);
-        }
+      if (checkInFlight || everSucceeded) {
+        return;
       }
-      // Explicit, visible failure state — never a silently broken window.
-      setStatus("error", "unreachable");
-      detailEl.textContent = lastError;
+      checkInFlight = true;
+      let lastError = "";
+      try {
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+          setStatus("pending", `checking… (attempt ${attempt}/${MAX_ATTEMPTS})`);
+          try {
+            const response = await fetch(HEALTH_URL);
+            const body = await response.json();
+            if (response.ok) {
+              setStatus("ok", "reachable");
+              detailEl.textContent = JSON.stringify(body, null, 2);
+              everSucceeded = true;
+              return;
+            }
+            lastError = `unhealthy (HTTP ${response.status})`;
+          } catch (err) {
+            lastError = String(err);
+          }
+          if (attempt < MAX_ATTEMPTS) {
+            await sleep(RETRY_DELAY_MS);
+          }
+        }
+        // Explicit, visible failure state — never a silently broken window.
+        setStatus("error", "unreachable");
+        detailEl.textContent = lastError;
+      } finally {
+        checkInFlight = false;
+      }
     }
 
     checkBackendHealth();
+
+    // Defensive re-arm: if this page's own budget above ever runs out
+    // before the window is actually shown to the user (e.g. a host slow
+    // enough to approach Rust's 30s ceiling, or a webview that throttles
+    // timers while hidden), re-run the check once the document actually
+    // becomes visible. This uses only the standard Page Visibility API —
+    // no `window.__TAURI__` global and no IPC event ACL grants, matching
+    // this task's earlier, deliberate decision (see task-3-report.md) to
+    // avoid depending on `app.withGlobalTauri`.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && !everSucceeded) {
+        checkBackendHealth();
+      }
+    });
   </script>
 </body>
 </html>
