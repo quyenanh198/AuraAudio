@@ -217,6 +217,18 @@ def test_score_json_to_musicxml_renders_piano_grand_staff(tmp_path: Path):
     assert len(reopened_notes) == 2
     assert {n.pitch.midi for n in reopened_notes} == {40, 76}
 
+    # Pin each note to its *specific* staff, not just "staff 2 appears
+    # somewhere" — reopening splits the merged part back into two
+    # PartStaff objects, one per staff, named "...-Staff1"/"...-Staff2".
+    # This distinguishes "hand assignment worked" from "hand assignment
+    # was disabled" (which would push everything onto staff 1/right).
+    notes_by_staff = {
+        part.id.rsplit("-", 1)[-1]: {n.pitch.midi for n in part.recurse().notes}
+        for part in reopened.parts
+    }
+    assert notes_by_staff["Staff1"] == {76}  # right hand -> treble/staff 1
+    assert notes_by_staff["Staff2"] == {40}  # left hand -> bass/staff 2
+
 
 def test_score_json_to_musicxml_piano_out_of_range_note_still_renders(tmp_path: Path):
     # A note with hand: null (out of STANDARD_PIANO_RANGE) must still
@@ -234,6 +246,16 @@ def test_score_json_to_musicxml_piano_out_of_range_note_still_renders(tmp_path: 
     reopened_notes = list(reopened.flatten().notes)
     assert len(reopened_notes) == 2  # not dropped
     assert {n.pitch.midi for n in reopened_notes} == {10, 76}
+
+    # Not just "both notes exist somewhere" — the clamped out-of-range note
+    # (pitch 10) must specifically land on staff 2/bass, and the in-range
+    # right-hand note stays on staff 1/treble.
+    notes_by_staff = {
+        part.id.rsplit("-", 1)[-1]: {n.pitch.midi for n in part.recurse().notes}
+        for part in reopened.parts
+    }
+    assert notes_by_staff["Staff1"] == {76}
+    assert notes_by_staff["Staff2"] == {10}
 
 
 def test_score_json_to_musicxml_guitar_export_unaffected_by_piano_branch(tmp_path: Path):

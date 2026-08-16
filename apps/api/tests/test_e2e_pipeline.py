@@ -130,4 +130,12 @@ def test_full_pipeline_piano_renders_grand_staff(db_session, tmp_path, s3_client
 
     with urllib.request.urlopen(download_url) as f:
         musicxml_bytes = f.read()
-    assert "<staves>2</staves>" in musicxml_bytes.decode("utf-8")
+    musicxml_text = musicxml_bytes.decode("utf-8")
+    assert "<staves>2</staves>" in musicxml_text
+    # <staves>2</staves> alone only proves the grand-staff *structure* was
+    # emitted (which depends only on instrument == "piano"), not that any
+    # note actually landed on staff 2 — i.e. it stays true even if hand
+    # assignment silently produced hand: null for every event. Require at
+    # least one real note on staff 2 too, so a disabled/no-op hand
+    # assignment (all notes falling through to staff 1) fails this test.
+    assert "<staff>2</staff>" in musicxml_text
