@@ -74,13 +74,30 @@ pub fn spawn_backend_and_gate_window(app: &AppHandle) {
     }
   };
 
-  log::info!("spawning bundled backend at {}", exe_path.display());
+  let data_dir = match resolve_app_data_dir(app) {
+    Ok(path) => path,
+    Err(err) => {
+      log::error!("could not resolve app data directory: {err}");
+      let _ = app.emit("backend-health-failed", err);
+      show_main_window(app);
+      return;
+    }
+  };
+  let database_url = format!("sqlite:///{}/aura.db", data_dir.display());
+
+  log::info!(
+    "spawning bundled backend at {} with AURA_DATA_DIR={}",
+    exe_path.display(),
+    data_dir.display()
+  );
   let spawn_result = Command::new(&exe_path)
     .current_dir(
       exe_path
         .parent()
         .expect("bundled executable path has a parent directory"),
     )
+    .env("AURA_DATA_DIR", &data_dir)
+    .env("DATABASE_URL", &database_url)
     .spawn();
 
   let child = match spawn_result {
@@ -146,6 +163,25 @@ fn resolve_backend_executable(app: &AppHandle) -> Result<PathBuf, String> {
     "bundled backend executable not found via Tauri resource resolution or at fallback path \
      {dev_path:?}; run apps/desktop/build-backend.sh first"
   ))
+}
+
+/// Resolves the real, per-OS app-data directory for the current platform
+/// (e.g. `~/.local/share/com.auraaudio.desktop` on Linux, via `app.path()`'s
+/// `app_data_dir()` — confirmed against `tauri-2.11.5/src/path/desktop.rs:247`,
+/// which resolves to `dirs::data_dir()/${bundle_identifier}`; the identifier
+/// is `com.auraaudio.desktop` per `tauri.conf.json`), creating it (and any
+/// missing parents) if it doesn't already exist so the child process can rely
+/// on it being present the moment it starts.
+fn resolve_app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+  let dir = app
+    .path()
+    .app_data_dir()
+    .map_err(|err| format!("could not resolve app data directory: {err}"))?;
+
+  std::fs::create_dir_all(&dir)
+    .map_err(|err| format!("could not create app data directory {dir:?}: {err}"))?;
+
+  Ok(dir)
 }
 
 fn show_main_window(app: &AppHandle) {
