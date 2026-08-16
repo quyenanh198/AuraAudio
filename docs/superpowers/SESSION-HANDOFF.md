@@ -17,8 +17,8 @@ spec → plan → implementation cycle (see "Working process" below).
 ```text
 apps/api/                      FastAPI service: projects, jobs, exports
 workers/transcription/          Worker: probe -> normalize -> inference ->
-                                structure -> quantize -> export
-packages/score_schema/          Canonical score JSON contract (schemaVersion 2)
+                                structure -> quantize -> assign -> export
+packages/score_schema/          Canonical score JSON contract (schemaVersion 4)
 packages/musicxml/               MusicXML export + reopen validation
 packages/test_fixtures/          Synthetic audio generators for tests
 infra/docker-compose.yml         Postgres, Redis, MinIO (real deployment)
@@ -81,8 +81,66 @@ Two things worth knowing about (not current issues, already resolved):
    reviewed and explicitly parked (pre-existing precedent or out of scope
    per the spec's Non-Goals) — not re-litigated in a future sub-project.
 
-Full workspace test suite: **92/92 passing.** Working tree clean, `main`
-in sync with `origin/main` (last pushed commit: `15305e4`).
+**Phase 2, sub-project 3 — piano hand/staff assignment. DONE, including
+final whole-branch review and its fix wave.** Score schema bumped to v4
+(optional `hand`: `"left"`/`"right"`/`null` per event). New
+`aura_worker.piano_hands` module: candidate split generation (per onset,
+every way to divide the chord's sorted pitches between hands is a valid
+candidate — no hard "unreachable" case, unlike guitar frets), sequence DP
+(Viterbi-style, same shape as guitar's `assign_measure`) minimizing hand
+movement + a soft hand-span penalty + a *weak* pull toward middle C (per
+`ARCHITECTURE.md`'s "middle-C is a weak prior, not a hard boundary").
+`assign` worker stage's previously-no-op piano branch now fills in real
+`hand` values (guitar's branch untouched; both branches coexist in the
+same file via aliased imports — `assign_string_fret`/`assign_hands` — to
+avoid a real function-name collision between `aura_worker.fingering` and
+`aura_worker.piano_hands`, both of which export `assign_measure`).
+MusicXML export gained a genuinely different rendering path for piano: two
+`music21.stream.PartStaff` objects (treble/right=staff 1, bass/left=staff
+2) grouped into one real grand staff via `layout.StaffGroup(symbol="brace")`
+— verified directly against real `music21` output (staff dedup of shared
+`<attributes>`, tempo-mark-once-not-duplicated, auto-inserted rests for an
+empty-handed measure) before any of it was written into the spec or plan.
+Out-of-range notes (outside the standard 88-key range, MIDI 21-108) get
+`hand: null` in the JSON but are still rendered, clamped to the nearer
+staff for display only — the JSON's `null` is never mutated. Spec:
+`docs/superpowers/specs/2026-08-16-piano-hand-staff-assignment-design.md`.
+Plan: `docs/superpowers/plans/2026-08-16-piano-hand-staff-assignment.md`.
+Manual smoke test + committed e2e/unit assertions all confirm the grand
+staff reaches the real exported MusicXML end-to-end, with per-note staff
+placement pinned (not just staff-count presence) — see point 2 below for
+why that distinction mattered. The SDD workspace has been deleted.
+
+Two things worth knowing about (not current issues, already resolved):
+1. Same category of regression as sub-project 2's Task 2 finding: Task 1's
+   schema v3→v4 bump broke a pre-existing test's literal `schemaVersion ==
+   3` assertion in `test_quantize.py` — caught by Task 4's full-suite run,
+   fixed directly on main same session.
+2. The final whole-branch review found 1 Important (non-blocking) gap: the
+   committed e2e test for piano (added proactively in Task 6, specifically
+   to avoid the *kind* of gap sub-project 2 found after the fact) turned
+   out to still be insensitive to the actual algorithm — it only asserted
+   `<staves>2</staves>` presence, which stays true even with piano hand
+   assignment completely disabled (every note would clamp to one staff via
+   the out-of-range fallback, but the file would still structurally have
+   two staves). The reviewer proved this by literally disabling the
+   algorithm and watching the test still pass. Fixed by pinning assertions
+   to specific notes landing on specific staves (both at the e2e level and
+   the `test_export.py` unit level), verified by reproducing the exact
+   disable-and-check methodology twice more (once by the fix-wave
+   implementer, once independently by the scoped re-reviewer) before
+   calling it closed. 6 further Minor findings were reviewed and explicitly
+   parked (pre-existing precedent, out of this sub-project's Definition of
+   Done, or already-accepted design tradeoffs) — not re-litigated in a
+   future sub-project. One parked Minor (a genuinely pre-existing bug,
+   predating this sub-project: MusicXML export doesn't sort by
+   `notatedOnset`, so exported rhythm can come out in the wrong order for
+   *both* instruments) is worth flagging here since it's a real defect —
+   just correctly out of scope for this sub-project's structural DoD.
+   Worth its own future bounded fix.
+
+Full workspace test suite: **112/112 passing.** Working tree clean, `main`
+in sync with `origin/main` (last pushed commit: `eb58113`).
 
 ## Phase 2 sub-projects remaining (in the order originally proposed)
 
@@ -90,19 +148,31 @@ in sync with `origin/main` (last pushed commit: `15305e4`).
 2. ~~Guitar string/fret assignment~~ — **fully done**, including the final
    whole-branch review and its fix wave. See the "Status: what's done"
    section above for full detail.
-3. **Piano hand/staff assignment** — split out from item 2 above. Own spec
-   needed (hand/staff split-point optimizer, different algorithm than
-   guitar's string/fret DP — see `ARCHITECTURE.md` §4.3). Not started.
+3. ~~Piano hand/staff assignment~~ — **fully done**, including the final
+   whole-branch review and its fix wave. See the "Status: what's done"
+   section above for full detail.
 4. **Web client + SVG score preview** — doesn't exist at all yet. Needs its
    own product/UI brainstorm from scratch, not just a plan.
 5. **PDF rendering** — new export format, isolated renderer process.
 6. **Offline benchmark pipeline** — CI/scheduled eval harness.
 
-Recommendation if picking up cold: start #3 (piano hand/staff assignment)
-to close out the assignment pair before moving to the web client, which is
-a much bigger scope jump (needs its own brainstorm, not just a plan). Use
-the same process as sub-projects 1 and 2: brainstorming → spec → plan →
-subagent-driven-development → final whole-branch review.
+**Known follow-up, not yet its own sub-project:** `musicxml/export.py`
+appends notes to each measure/staff in list order rather than sorting by
+`notatedOnset` first — real transcribed audio's event list isn't
+guaranteed to already be onset-sorted (confirmed via a real e2e run), so
+exported rhythm can come out scrambled for both guitar and piano today.
+Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
+by sub-project 3's final review. Worth a small bounded fix on its own —
+sort each measure's events by `notatedOnset` before building notes — before
+it's forgotten as "always been like that."
+
+Recommendation if picking up cold: the guitar/piano assignment pair (items
+1-3) is fully done. Either knock out the onset-ordering fix above first
+(small, bounded, no brainstorming needed — just a plan) or move to #4 (web
+client), which is a much bigger scope jump needing its own product/UI
+brainstorm from scratch. Use the same process as sub-projects 1-3:
+brainstorming → spec → plan → subagent-driven-development → final
+whole-branch review.
 
 ## Working process (established this session, keep using it)
 
@@ -186,5 +256,5 @@ import boto3
 c = boto3.client('s3', endpoint_url='http://127.0.0.1:9000', aws_access_key_id='aura', aws_secret_access_key='aurasecret', region_name='us-east-1')
 c.create_bucket(Bucket='aura-media')
 "
-source .envrc && make test   # expect 66/66 passing
+source .envrc && make test   # expect 112/112 passing
 ```
