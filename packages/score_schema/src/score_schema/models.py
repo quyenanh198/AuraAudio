@@ -27,16 +27,25 @@ class NoteEvent:
 
 def build_score(
     instrument: str,
+    tempo_bpm: float,
+    meter: str,
+    key: str,
+    confidence: dict,
     time_map: list[dict],
     measures: list[dict],
 ) -> dict:
-    """Assemble the canonical schemaVersion-1 score JSON (ARCHITECTURE.md §5)."""
+    """Assemble the canonical schemaVersion-2 score JSON (ARCHITECTURE.md §5,
+    extended per docs/superpowers/specs/2026-08-15-beat-meter-key-detection-design.md)."""
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "timeMap": time_map,
         "parts": [
             {
                 "instrument": instrument,
+                "tempoBpm": tempo_bpm,
+                "meter": meter,
+                "key": key,
+                "confidence": confidence,
                 "measures": measures,
             }
         ],

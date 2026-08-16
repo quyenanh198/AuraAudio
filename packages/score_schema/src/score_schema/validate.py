@@ -22,11 +22,22 @@ _EVENT_SCHEMA = {
     "additionalProperties": False,
 }
 
+_CONFIDENCE_SCHEMA = {
+    "type": "object",
+    "required": ["tempo", "meter", "key"],
+    "properties": {
+        "tempo": {"type": "number", "minimum": 0, "maximum": 1},
+        "meter": {"type": "number", "minimum": 0, "maximum": 1},
+        "key": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "additionalProperties": False,
+}
+
 _SCORE_SCHEMA = {
     "type": "object",
     "required": ["schemaVersion", "timeMap", "parts"],
     "properties": {
-        "schemaVersion": {"const": 1},
+        "schemaVersion": {"const": 2},
         "timeMap": {
             "type": "array",
             "items": {
@@ -43,9 +54,13 @@ _SCORE_SCHEMA = {
             "minItems": 1,
             "items": {
                 "type": "object",
-                "required": ["instrument", "measures"],
+                "required": ["instrument", "tempoBpm", "meter", "key", "confidence", "measures"],
                 "properties": {
                     "instrument": {"enum": ["guitar", "piano"]},
+                    "tempoBpm": {"type": "number", "exclusiveMinimum": 0},
+                    "meter": {"enum": ["4/4", "3/4"]},
+                    "key": {"type": "string", "pattern": "^[A-G](#|-)? (major|minor)$"},
+                    "confidence": _CONFIDENCE_SCHEMA,
                     "measures": {
                         "type": "array",
                         "items": {

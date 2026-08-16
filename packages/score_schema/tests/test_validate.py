@@ -7,6 +7,10 @@ from score_schema.validate import ScoreValidationError, validate_score
 def _valid_score():
     return build_score(
         instrument="piano",
+        tempo_bpm=100.0,
+        meter="3/4",
+        key="A minor",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.6},
         time_map=[{"beat": 0, "seconds": 0.0}],
         measures=[
             {
@@ -47,8 +51,35 @@ def test_out_of_range_confidence_is_rejected():
         validate_score(score)
 
 
-def test_wrong_schema_version_is_rejected():
+def test_schema_v1_is_rejected():
     score = _valid_score()
-    score["schemaVersion"] = 2
+    score["schemaVersion"] = 1
     with pytest.raises(ScoreValidationError):
         validate_score(score)
+
+
+def test_part_missing_tempo_bpm_is_rejected():
+    score = _valid_score()
+    del score["parts"][0]["tempoBpm"]
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_part_missing_confidence_is_rejected():
+    score = _valid_score()
+    del score["parts"][0]["confidence"]
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_meter_outside_candidate_set_is_rejected():
+    score = _valid_score()
+    score["parts"][0]["meter"] = "6/8"
+    with pytest.raises(ScoreValidationError):
+        validate_score(score)
+
+
+def test_flat_key_with_music21_notation_is_accepted():
+    score = _valid_score()
+    score["parts"][0]["key"] = "B- major"
+    validate_score(score)  # must not raise — "-" is music21's native flat notation
