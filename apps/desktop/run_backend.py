@@ -32,6 +32,7 @@ os.environ.setdefault("AURA_DATA_DIR", str(_data_dir))
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_data_dir / 'aura.db'}")
 
 import uvicorn  # noqa: E402
+from aura_api.db import Base, get_engine  # noqa: E402
 from aura_api.main import app  # noqa: E402
 from starlette.applications import Starlette  # noqa: E402
 from starlette.middleware import Middleware  # noqa: E402
@@ -104,5 +105,23 @@ root_app = Starlette(
     ]
 )
 
+# A fresh install has no `aura.db` at all (Task 4's app-data-dir resolution
+# only creates the *directory*, not the file/schema) — the first request
+# would otherwise fail with e.g. `sqlite3.OperationalError: no such table:
+# projects`. `Base.metadata.create_all` only creates tables that don't
+# already exist; it never alters existing ones, so this is intentionally not
+# a migration system. That's fine for this app today: there is exactly one
+# schema version in play and no installed base to migrate, so wiring up
+# Alembic here would be over-engineering for what this task needs. By the
+# time this runs, `from aura_api.main import app` above has already pulled in
+# every router (`projects`, `uploads`, `jobs`, `exports`), which import
+# `aura_api.models`, which registers every table on `Base.metadata` — so
+# every real table is present here, not just a subset.
+#
+# `get_engine()` (from `aura_api.db`) is used instead of constructing a
+# second `create_engine(...)` call here: it reads the same `DATABASE_URL`
+# this module already set/inherited above, so schema creation targets
+# exactly the same database file uvicorn's app will serve from.
 if __name__ == "__main__":
+    Base.metadata.create_all(get_engine())
     uvicorn.run(root_app, host="127.0.0.1", port=AURA_BACKEND_PORT)
