@@ -46,19 +46,26 @@ same process as the three backend sub-projects below):
    below for what changed and how it was verified.
 2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
    backend as a managed sidecar, native window at localhost. No real UI.
-   **This is the next sub-project to pick up** — no spec or plan exists
-   yet; start with `superpowers:brainstorming`.
+   8/8 tasks (7 planned + 1 inserted mid-plan) implemented and reviewed
+   clean (2026-08-17); final whole-branch review pending. Spec:
+   `docs/superpowers/specs/2026-08-16-desktop-shell-packaging-design.md`;
+   plan: `docs/superpowers/plans/2026-08-16-desktop-shell-packaging.md`.
+   See "Offline desktop app sub-projects" below for what changed and how
+   it was verified.
 3. **Score preview + playback UI** — upload flow, SVG notation rendering
    (likely via an existing MusicXML-to-SVG renderer rather than building
    one from scratch — not yet decided) synced to audio playback, export.
    Real product/UI design work; plan to use the brainstorming skill's
-   visual companion tool for this one.
+   visual companion tool for this one. **Next up after sub-project 2's
+   final whole-branch review completes** — no spec or plan exists yet.
 4. **Semantic editing** — edit-operation model (add/delete/move note,
    undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
    single piece, builds on 1-3.
 
 Sub-project 1 is DONE, including final whole-branch review and its fix wave (see above).
-Sub-projects 2-4 have no written spec yet — only the scoping/technology
+Sub-project 2 has a written spec + plan with all 8 tasks implemented and
+reviewed clean; final whole-branch review pending (see above).
+Sub-projects 3-4 have no written spec yet — only the scoping/technology
 decisions above have been made in conversation.
 
 ## What AuraAudio is
@@ -217,8 +224,10 @@ listed here as "item 4: web client" and a separate PDF-rendering /
 benchmark-harness backlog has been superseded by the offline-desktop-app
 direction — see "Direction change" near the top of this document and
 "Offline desktop app sub-projects" below for the current plan (4
-sequential sub-projects; the first, offline backend adaptation, is done —
-sub-project 2 is next). PDF rendering and an offline benchmark CI
+sequential sub-projects; the first, offline backend adaptation, is done;
+the second, desktop shell + packaging, has all 8 tasks implemented and
+reviewed clean with final whole-branch review pending — sub-project 3 is
+next after that review). PDF rendering and an offline benchmark CI
 harness are still real future work, just not sequenced yet; revisit once
 the desktop app's 4 sub-projects are further along.
 
@@ -273,10 +282,73 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    upload, project creation, transcription job, polling to `succeeded`,
    and downloading real MIDI + MusicXML export bytes — confirming the app
    works as one local process with no external services.
-2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
-   backend as a managed sidecar, native window at localhost. No real UI.
-   **Next up.** No spec or plan written yet — start with
-   `superpowers:brainstorming`.
+2. **Desktop shell + packaging.** 8/8 tasks (7 planned + 1 inserted,
+   task 4b) implemented and reviewed clean; **final whole-branch review
+   pending** — do not mark this DONE until that review (and its fix wave,
+   if any) has actually run, same process as sub-project 1 above. Built a
+   Tauri v2 wrapper that spawns the existing FastAPI backend (already
+   adapted to run fully offline by sub-project 1) as a managed sidecar
+   process instead of rewriting any client logic: a PyInstaller `--onedir`
+   bundle of `apps/api`'s full real dependency tree, including
+   tensorflow/basic-pitch (verified via a real inference smoke test, not
+   just a trivial import); a Rust `backend.rs` module that resolves the
+   bundled executable via Tauri's resource resolver, spawns it, polls
+   `GET /healthz` with a 30s budget, and gates showing the main window on
+   a successful health check; CORS scoped to only the `/healthz` route
+   (a security fix — the first draft wildcarded CORS across the whole
+   backend app, which would have let any local webpage read real
+   `/v1/jobs`/`/v1/exports` responses); `AURA_DATA_DIR`/`DATABASE_URL`
+   resolved to a real per-OS path via Tauri's own `app_data_dir()` API
+   (e.g. `~/.local/share/com.auraaudio.desktop` on Linux), not a
+   repo-relative placeholder; a fix for a real gap task 4's own
+   verification surfaced — a fresh install had no DB schema at all, only
+   the data *directory*, so the first `POST /v1/projects` 500ed — closed
+   by an inserted task 4b (`Base.metadata.create_all` on first launch, no
+   migration tooling needed yet since there's exactly one schema version
+   in play); clean shutdown wired to `RunEvent::ExitRequested` for a
+   normal quit, plus a Linux `PR_SET_PDEATHSIG` orphan guard registered in
+   the spawned child itself so a hard `kill -9` of the Tauri process still
+   reaps the backend (SIGKILL can't be caught by the parent, so nothing
+   else could handle this case); and a real `tauri build` Linux `.deb`
+   package, verified to run standalone in a genuinely clean container with
+   no Python toolchain reachable on `PATH`. **macOS/Windows are configured
+   in `tauri.conf.json` but explicitly NOT build-verified anywhere in this
+   repo's history** — Linux is the only platform with a real, tested
+   artifact; don't let that caveat get lost. RPM packaging was attempted
+   and could not be verified in this sandbox (no `rpmbuild` binary
+   present) — an environmental limitation, not a defect in the packaging
+   config; not worth re-attempting in this same sandbox. Spec:
+   `docs/superpowers/specs/2026-08-16-desktop-shell-packaging-design.md`.
+   Plan: `docs/superpowers/plans/2026-08-16-desktop-shell-packaging.md`.
+   SDD workspace: `.superpowers/sdd/2026-08-16-desktop-shell-packaging/`
+   (a brief + report per task, including task 4b, plus this task-7
+   re-verification report). Task 7's re-verification (2026-08-17), run
+   fresh rather than trusted from prior reports: `cargo build` in
+   `apps/desktop/src-tauri` still succeeds cleanly; the full
+   `apps/desktop/tests/` suite still passes 4/4 (3 CORS-scoping tests + 1
+   schema-init regression test); a live `Xvfb` + `tauri dev` launch still
+   spawns the real bundled backend and gates the window on a real health
+   check, screenshot-confirmed showing "Backend status: reachable" with
+   the live `{"status": "ok"}` body; both shutdown paths were
+   re-exercised via real process inspection — a clean quit
+   (`xdotool windowclose`) leaves no orphan, and a hard `kill -9` of the
+   Tauri process still reaps the backend via the orphan guard — confirming
+   no regression across Task 4's app-data-dir change, Task 4b's schema
+   init, Task 5's shutdown handling, and Task 6's build changes, which all
+   touch overlapping areas of `backend.rs`. One false alarm during
+   re-verification, not a real regression: running the desktop test suite
+   with `.envrc` sourced first made one CORS test fail (404 instead of an
+   expected 200/500), because `run_backend.py`'s test-time env vars use
+   `os.environ.setdefault(...)` — with `.envrc` already exporting
+   `AURA_DATA_DIR`/`DATABASE_URL`, the test silently targeted the real
+   `./data/aura.db` (which already has a schema from earlier manual
+   smoke tests) instead of its intended throwaway path. Re-running without
+   sourcing `.envrc` (matching how every prior task in this sub-project
+   invoked this suite) gave a clean 4/4 pass; no data was affected either
+   way since schema creation is idempotent. Worth fixing properly (an
+   unconditional override, same pattern already applied to the main
+   suite's conftest by sub-project 1) before this test suite grows, but
+   out of scope for this verification-only task.
 3. **Score preview + playback UI** — not started. See "Direction change"
    above for scope notes.
 4. **Semantic editing** — not started. See "Direction change" above for
@@ -291,16 +363,23 @@ Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
 by sub-project 3's final review. Worth a small bounded fix on its own —
 sort each measure's events by `notatedOnset` before building notes — before
 it's forgotten as "always been like that." Sub-project 1 (offline backend
-adaptation, done) did not fold this in — still open and
-unscheduled; a good candidate to knock out on its own before sub-project 4
-(semantic editing) starts building on top of `musicxml/export.py`.
+adaptation, done) did not fold this in, nor did sub-project 2 (desktop
+shell + packaging, no reason to touch `musicxml/export.py`) — still open
+and unscheduled; a good candidate to knock out on its own before
+sub-project 4 (semantic editing) starts building on top of
+`musicxml/export.py`.
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
 desktop app sub-projects" further down for current status. Sub-project 1
-(offline backend adaptation) is done; pick up sub-project 2 (desktop shell
-+ packaging, Tauri) next — no spec exists yet, start with
-`superpowers:brainstorming`.
+(offline backend adaptation) is done. Sub-project 2 (desktop shell +
+packaging, Tauri) has all 8 tasks implemented and reviewed clean; its
+final whole-branch review has NOT run yet — that's the immediate next
+step (same `subagent-driven-development` process sub-project 1 used for
+its own final review), before sub-project 2 can be marked done. Once that
+review (and any fix wave it produces) completes, pick up sub-project 3
+(score preview + playback UI) next — no spec exists yet for it, start
+with `superpowers:brainstorming`.
 
 ## Working process (established this session, keep using it)
 
