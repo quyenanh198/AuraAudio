@@ -483,20 +483,30 @@ enum HealthPollOutcome {
 /// port `port` is already bound by something else (e.g. a second instance
 /// of the app, or a stale backend left running from an earlier crash), our
 /// own child exits immediately (uvicorn exits nonzero when it can't bind
-/// its port) but polling would otherwise keep succeeding against whoever
-/// else is actually listening — silently talking to a process that isn't
-/// ours, possibly with a different `AURA_DATA_DIR`/`DATABASE_URL`. Checking
-/// `try_wait()` between poll attempts catches that case (and any other
-/// startup death, e.g. bad data-dir permissions or a PyInstaller import
-/// failure) and reports it precisely instead.
+/// its port), but a bare HTTP 200 from `/healthz` can't tell us whose
+/// process actually answered it — polling would otherwise keep "succeeding"
+/// against whoever else is listening on that port, silently talking to a
+/// process that isn't ours, possibly with a different
+/// `AURA_DATA_DIR`/`DATABASE_URL`. That's why `child_exit_status` (via
+/// `try_wait()`) is checked FIRST on every loop iteration, before
+/// `check_health_once` is even called: a child that has already exited must
+/// never be shadowed by a coincidental 200 from someone else's backend on
+/// the same port. This also catches any other startup death (bad data-dir
+/// permissions, a PyInstaller import failure, etc.) and reports it
+/// precisely instead of that case timing out after `HEALTH_TIMEOUT`.
 fn poll_health(app: &AppHandle, port: u16, timeout: Duration, interval: Duration) -> HealthPollOutcome {
   let deadline = Instant::now() + timeout;
   loop {
-    if check_health_once(port) {
-      return HealthPollOutcome::Healthy;
-    }
+    // Checked BEFORE the health check, not after: a 200 from `/healthz`
+    // alone can't tell us whose process answered it. If our own child has
+    // already exited, port `port` is necessarily being answered by someone
+    // else (a first instance's backend, a stale leftover, etc.) — that must
+    // never be reported as `Healthy`, no matter what the HTTP check says.
     if let Some(status) = child_exit_status(app) {
       return HealthPollOutcome::ChildExited(status);
+    }
+    if check_health_once(port) {
+      return HealthPollOutcome::Healthy;
     }
     if Instant::now() >= deadline {
       return HealthPollOutcome::Timeout;

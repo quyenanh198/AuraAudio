@@ -34,8 +34,10 @@ pub fn run() {
           backend::poll_health_and_gate_window(&app_handle);
         });
       }
-      // else: spawn_backend_process already emitted the failure event and
-      // shown the main window itself.
+      // else: spawn_backend_process has already logged the specific error
+      // and shown the main window itself (see its doc comment) — there is
+      // no event to emit today, since nothing on the frontend listens for
+      // one yet.
 
       Ok(())
     })
