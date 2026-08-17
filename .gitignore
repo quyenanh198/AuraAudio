@@ -12,4 +12,5 @@ packages/test_fixtures/fixtures/*.wav
 dump.rdb
 /data/
 apps/desktop/build/
+apps/desktop/data/
 apps/desktop/src-tauri/resources/

@@ -84,6 +84,24 @@ def test_v1_routes_are_not_reachable_cross_origin() -> None:
         assert "access-control-allow-credentials" not in response.headers
 
 
+def test_cors_healthz_body_matches_real_app_healthz() -> None:
+    """Pins the desktop shell's hardcoded `/healthz` duplicate to the real one.
+
+    `run_backend._cors_healthz` is a separate, hand-maintained handler (see
+    the module docstring's explanation of why `/healthz` can't just be
+    reached through the mounted `aura_api.main.app` directly), so nothing
+    forces it to stay in sync with `aura_api.main.app`'s own `/healthz` if
+    that ever gains real logic. This test fails immediately if they drift,
+    instead of the drift going unnoticed.
+    """
+    from aura_api.main import app as real_app
+
+    cors_response = _client().get("/healthz", headers={"Origin": CROSS_ORIGIN})
+    real_response = TestClient(real_app).get("/healthz")
+
+    assert cors_response.json() == real_response.json()
+
+
 def test_v1_routes_still_respond_same_origin() -> None:
     """Scoping CORS must not break the routes themselves (same-origin)."""
     response = _client().get("/v1/jobs/some-job-id")
