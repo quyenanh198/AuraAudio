@@ -329,12 +329,45 @@ pub fn shutdown_backend(app: &AppHandle) {
 /// wait here would hang the whole app's shutdown.
 #[cfg(target_os = "linux")]
 fn terminate_child(child: &mut Child) {
+  // Guard against signaling an already-reaped pid. `try_wait()` (used by
+  // `child_exit_status` during health polling, and possibly called
+  // elsewhere in the future) REAPS the child the moment it observes it has
+  // exited — per `std::process::Child`'s documented semantics, once that
+  // happens the OS is free to recycle this pid for a completely unrelated
+  // process. Unlike `Child::kill()` (used here before this guard existed),
+  // the raw `libc::kill()` call below has no such protection built in, so
+  // it must never run against a pid we haven't just confirmed is still
+  // ours. This is an expected, non-error outcome (e.g. the backend crashed
+  // during startup — see `poll_health`'s dead-child handling — and the app
+  // kept running with an unhealthy window until the user quit), not a bug.
+  match child.try_wait() {
+    Ok(Some(status)) => {
+      log::info!(
+        "backend child process already exited with {status} before shutdown; \
+         nothing to terminate"
+      );
+      return;
+    }
+    Ok(None) => {}
+    Err(err) => {
+      // Can't confirm liveness either way; proceed with the signal as
+      // before rather than silently skipping shutdown on a fluky
+      // `try_wait()` error.
+      log::warn!(
+        "failed to check backend child liveness before sending SIGTERM: {err}; \
+         proceeding with signal anyway"
+      );
+    }
+  }
+
   let pid = child.id() as i32;
 
   // SAFETY: `pid` is our own live child's pid — we hold the only `Child`
   // handle for it (via the `BackendProcess` mutex, already locked by the
-  // caller) — and `SIGTERM` is a well-defined signal number, so this
-  // syscall has no undefined behavior.
+  // caller), and the `try_wait()` check just above confirmed it has not
+  // already exited (and thus not been reaped), so this pid cannot have been
+  // recycled for an unrelated process. `SIGTERM` is a well-defined signal
+  // number, so this syscall has no undefined behavior.
   let result = unsafe { libc::kill(pid, libc::SIGTERM) };
   if result != 0 {
     let err = std::io::Error::last_os_error();
