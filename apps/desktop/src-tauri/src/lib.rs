@@ -43,19 +43,22 @@ pub fn run() {
     // shortcut, because we need the `RunEvent` callback to terminate the
     // sidecar on app exit — `Builder::run(context)` (see
     // `tauri-2.11.5/src/app.rs:2449`) is a no-callback convenience wrapper
-    // that can't express that. `RunEvent::ExitRequested` (fired for both
-    // "last window closed" and a programmatic exit/restart — confirmed at
-    // `tauri-runtime-wry-2.11.4/src/lib.rs:4307-4367`) is the normal-quit
-    // hook. It does NOT cover a hard `kill -9` of this process (no Rust
-    // code runs at all for SIGKILL); that path is handled independently in
-    // `backend.rs` via a Linux `PR_SET_PDEATHSIG` registration made in the
-    // child itself at spawn time. See `backend::shutdown_backend` and
+    // that can't express that. `RunEvent::Exit` (Tauri's unconditional,
+    // final teardown event, fired after any pending `ExitRequested` has
+    // resolved) is the normal-quit hook. `RunEvent::ExitRequested` is
+    // deliberately NOT used here even though nothing today calls its
+    // `prevent_exit()` cancellation hook: `Exit` is the semantically
+    // correct "this is really happening" event to tie process teardown to.
+    // Neither covers a hard `kill -9` of this process (no Rust code runs at
+    // all for SIGKILL); that path is handled independently in `backend.rs`
+    // via a Linux `PR_SET_PDEATHSIG` registration made in the child itself
+    // at spawn time. See `backend::shutdown_backend` and
     // `backend::spawn_backend_process` for the full reasoning, confirmed
     // against real process-inspection testing in task-5-report.md.
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
     .run(|app_handle, event| {
-      if let tauri::RunEvent::ExitRequested { .. } = event {
+      if let tauri::RunEvent::Exit = event {
         backend::shutdown_backend(app_handle);
       }
     });
