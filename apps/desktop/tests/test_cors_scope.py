@@ -22,11 +22,17 @@ import os
 import sys
 from pathlib import Path
 
-# `run_backend.py` sets these env var defaults at import time (see its
-# module docstring) before importing `aura_api.main`, which requires them.
-# Point them at a throwaway location so this test never touches real data.
-os.environ.setdefault("AURA_DATA_DIR", "/tmp/aura-desktop-cors-test-data")
-os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/aura-desktop-cors-test-data/aura.db")
+# `run_backend.py` sets these env vars (via `setdefault`) at import time
+# (see its module docstring) before importing `aura_api.main`, which
+# requires them. Set them unconditionally here (not `setdefault`): if a
+# developer has `.envrc` sourced before running this test — exactly the
+# shell state `make test` runs from — it exports real values for both vars,
+# and a `setdefault` would then be a no-op, silently pointing this test at
+# the real app database/data directory instead of a throwaway one. Mirrors
+# the same unconditional-assignment pattern (and reasoning) already used in
+# `apps/api/tests/conftest.py`.
+os.environ["AURA_DATA_DIR"] = "/tmp/aura-desktop-cors-test-data"
+os.environ["DATABASE_URL"] = "sqlite:////tmp/aura-desktop-cors-test-data/aura.db"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

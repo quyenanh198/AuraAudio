@@ -9,6 +9,7 @@ test:
 	uv run --package test-fixtures pytest packages/test_fixtures/tests
 	uv run --package aura-api pytest apps/api/tests
 	uv run --package aura-worker pytest workers/transcription/tests
+	uv run --package aura-api pytest apps/desktop/tests
 
 lint:
 	uv run ruff check .
