@@ -46,8 +46,15 @@ same process as the three backend sub-projects below):
    below for what changed and how it was verified.
 2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
    backend as a managed sidecar, native window at localhost. No real UI.
-   8/8 tasks (7 planned + 1 inserted mid-plan) implemented and reviewed
-   clean (2026-08-17); final whole-branch review pending. Spec:
+   **DONE (2026-08-17), including final whole-branch review and both its
+   fix waves** (3 Important cross-task findings — a health gate that
+   trusted port liveness over child liveness, `apps/desktop/tests` unwired
+   from any CI entrypoint, a shutdown signal severity backwards from the
+   crash path — plus several cheap cleanups, all fixed; the scoped
+   re-review then caught the health-gate fix hadn't actually closed its
+   target scenario, plus a new pid-reuse hazard the fix itself introduced,
+   both closed in one small targeted follow-up, independently
+   re-verified). Spec:
    `docs/superpowers/specs/2026-08-16-desktop-shell-packaging-design.md`;
    plan: `docs/superpowers/plans/2026-08-16-desktop-shell-packaging.md`.
    See "Offline desktop app sub-projects" below for what changed and how
@@ -56,15 +63,15 @@ same process as the three backend sub-projects below):
    (likely via an existing MusicXML-to-SVG renderer rather than building
    one from scratch — not yet decided) synced to audio playback, export.
    Real product/UI design work; plan to use the brainstorming skill's
-   visual companion tool for this one. **Next up after sub-project 2's
-   final whole-branch review completes** — no spec or plan exists yet.
+   visual companion tool for this one. **Next up now that sub-project 2 is
+   done** — no spec or plan exists yet; start with
+   `superpowers:brainstorming`.
 4. **Semantic editing** — edit-operation model (add/delete/move note,
    undo/redo, optimistic locking, locks) plus the UI to drive it. Biggest
    single piece, builds on 1-3.
 
 Sub-project 1 is DONE, including final whole-branch review and its fix wave (see above).
-Sub-project 2 has a written spec + plan with all 8 tasks implemented and
-reviewed clean; final whole-branch review pending (see above).
+Sub-project 2 is DONE, including final whole-branch review and both its fix waves (see above).
 Sub-projects 3-4 have no written spec yet — only the scoping/technology
 decisions above have been made in conversation.
 
@@ -225,9 +232,8 @@ benchmark-harness backlog has been superseded by the offline-desktop-app
 direction — see "Direction change" near the top of this document and
 "Offline desktop app sub-projects" below for the current plan (4
 sequential sub-projects; the first, offline backend adaptation, is done;
-the second, desktop shell + packaging, has all 8 tasks implemented and
-reviewed clean with final whole-branch review pending — sub-project 3 is
-next after that review). PDF rendering and an offline benchmark CI
+the second, desktop shell + packaging, is also done — sub-project 3 is
+next). PDF rendering and an offline benchmark CI
 harness are still real future work, just not sequenced yet; revisit once
 the desktop app's 4 sub-projects are further along.
 
@@ -282,10 +288,8 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    upload, project creation, transcription job, polling to `succeeded`,
    and downloading real MIDI + MusicXML export bytes — confirming the app
    works as one local process with no external services.
-2. **Desktop shell + packaging.** 8/8 tasks (7 planned + 1 inserted,
-   task 4b) implemented and reviewed clean; **final whole-branch review
-   pending** — do not mark this DONE until that review (and its fix wave,
-   if any) has actually run, same process as sub-project 1 above. Built a
+2. **Desktop shell + packaging. DONE, including final whole-branch review
+   and both its fix waves.** Built a
    Tauri v2 wrapper that spawns the existing FastAPI backend (already
    adapted to run fully offline by sub-project 1) as a managed sidecar
    process instead of rewriting any client logic: a PyInstaller `--onedir`
@@ -345,10 +349,46 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    smoke tests) instead of its intended throwaway path. Re-running without
    sourcing `.envrc` (matching how every prior task in this sub-project
    invoked this suite) gave a clean 4/4 pass; no data was affected either
-   way since schema creation is idempotent. Worth fixing properly (an
-   unconditional override, same pattern already applied to the main
-   suite's conftest by sub-project 1) before this test suite grows, but
-   out of scope for this verification-only task.
+   way since schema creation is idempotent. Fixed for real in the final
+   whole-branch review's fix wave (see below), not left as a follow-up.
+
+   **Final whole-branch review** (most capable model, full branch diff):
+   no Critical findings, explicit security scan for the path-traversal
+   class that shipped in sub-project 1 found nothing comparable here. 3
+   Important, all genuinely cross-cutting (exactly what a per-task review
+   can't see): (a) the health-check gate trusted "something answered on
+   port 8317" rather than "my own spawned child is still alive" — a second
+   app instance whose backend died on the already-bound port would have
+   its health poll silently succeed against the *first* instance's
+   backend; (b) `apps/desktop/tests/` was never wired into `make test` or
+   any CI entrypoint, so the schema-init regression test built specifically
+   because "nothing would catch this" was itself unreachable by any command
+   anyone runs; (c) shutdown signal severity was backwards — clean quit
+   sent `SIGKILL` (zero chance for graceful shutdown) while a hard crash of
+   the parent ended up delivering the gentler `SIGTERM` via the PDEATHSIG
+   guard, latent today but would abort in-flight transcription work the
+   moment sub-project 3 exists. All three fixed in one dispatched fix wave
+   (`try_wait()`-based child-liveness checking + captured stderr logging;
+   tests wired into `make test` together with fixing the `setdefault`
+   isolation gap in the same commit, since shipping one without the other
+   would have made the gap more likely to bite; SIGTERM-then-bounded-wait-
+   then-SIGKILL shutdown, moved to the actually-unconditional
+   `RunEvent::Exit`), plus several cheap cleanups (dead Tauri event emits
+   removed, stale doc comments fixed, `apps/desktop/data/` gitignored, the
+   generated PyInstaller spec file documented as such, a real `// SAFETY:`
+   invariant written for the process's one `unsafe` block, a `/healthz`
+   drift-detection pinning test added). The scoped re-review of that fix
+   wave then caught two real residual issues — the health-gate fix hadn't
+   actually closed its target scenario (the liveness check only ran on the
+   HTTP-failure path, which the two-instance case never takes, since the
+   *other* instance's backend answers 200), and the fix itself introduced a
+   new pid-reuse hazard (`try_wait()` reaps a dead child, and the new raw
+   `libc::kill()` shutdown call had no guard against signaling an
+   already-reaped, potentially-OS-recycled pid, unlike the `Child::kill()`
+   it replaced). Per this process's "no second fix wave" rule, both were
+   closed with one small, targeted, independently-verified follow-up
+   rather than a third full review cycle — matching exactly how
+   sub-project 1 closed its own equivalent residual finding.
 3. **Score preview + playback UI** — not started. See "Direction change"
    above for scope notes.
 4. **Semantic editing** — not started. See "Direction change" above for
