@@ -281,10 +281,65 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    works as one local process with no external services.
 2. **Desktop shell + packaging** — Tauri wrapper spawning the Python
    backend as a managed sidecar, native window at localhost. No real UI.
-   **Next up.** No spec or plan written yet — start with
-   `superpowers:brainstorming`.
+   **Spec and plan written (2026-08-18), not yet executed.** Spec:
+   `docs/superpowers/specs/2026-08-18-desktop-shell-packaging-design.md`;
+   plan: `docs/superpowers/plans/2026-08-18-desktop-shell-packaging.md`.
+   Scoping decisions made with the user: spec the shell against the
+   current TensorFlow bundle (ONNX swap proven but deliberately deferred,
+   see below); produce written artifacts only, since the session had no
+   Rust toolchain and no display. Two design decisions were delegated and
+   are argued in the spec — sidecar packaging via a relocatable
+   `python-build-standalone` interpreter rather than PyInstaller (this
+   dependency tree is close to a worst case for a freezer: music21 and
+   basic_pitch both locate data files relative to their package dirs,
+   numba/llvmlite JIT at runtime, resampy imports `pkg_resources`), and
+   loopback binding **plus** a per-launch token, because loopback alone
+   does not stop a browser page POSTing to `127.0.0.1` (CORS blocks
+   reading the response, not sending the request).
+
+   **Tasks 1-4 of that plan are backend-only, fully testable without a
+   desktop, and fix a live bug — do them first even if the shell work
+   slips.** Task 1 in particular: **a fresh install is broken today.**
+   Nothing runs Alembic at startup (only `tests/conftest.py` creates the
+   schema, via `create_all`), so on a clean data directory `/healthz` is
+   ok and `POST /v1/uploads` returns 201 — it only touches the filesystem
+   — and then `POST /v1/projects` returns **500,
+   `sqlite3.OperationalError: no such table: projects`**. Reproduced
+   directly, not inferred. Sub-project 1's manual smoke test missed it
+   because it ran against a data dir whose tables already existed. The fix
+   (programmatic `command.upgrade(cfg, "head")` with an **absolute**
+   `script_location`) was verified working from `/` as the working
+   directory and verified idempotent; note `apps/api/alembic/` is outside
+   the wheel's `packages = ["src/aura_api"]` and must move into the
+   package to ship at all.
 3. **Score preview + playback UI** — not started. See "Direction change"
    above for scope notes.
+
+**Proven and ready to apply, deliberately not applied: drop TensorFlow for
+ONNX Runtime.** Investigated at the user's request while scoping
+sub-project 2, then left uncommitted by explicit decision. `basic_pitch`
+ships its model in four formats (`nmp`, `nmp.tflite`, `nmp.onnx`,
+`nmp.mlpackage`) and picks a backend by import-time priority — TF → CoreML
+→ TFLite → ONNX — and our `inference.py` calls `predict` with that
+auto-selected `ICASSP_2022_MODEL_PATH`. So with TensorFlow absent and
+`onnxruntime` present the ONNX model is selected **with no worker code
+change**. Measured in a scratch venv, not assumed:
+
+- Output is **bit-identical** to the TensorFlow baseline on both fixtures
+  (diatonic melody: 8 notes; guitar pluck: 6 notes) — every pitch, onset,
+  offset and amplitude equal.
+- Full runtime dependency set: **749 MB vs 2.3 GB** (tensorflow 1.4 GB,
+  clang 61 MB, keras 17 MB, tensorboard 10 MB removed; onnxruntime 61 MB
+  added).
+- The **`numpy<2` pin can go** — it is purely a tensorflow 2.14 ABI
+  artifact. Re-ran under numpy 2.4.6: still bit-identical.
+
+Two caveats before applying: `basic-pitch` 0.4.0 declares tensorflow as a
+**hard** dependency on Linux/Windows for Python >=3.11 (not an extra), so
+removal needs a `uv` override or a `--no-deps` install; and macOS selects
+**CoreML**, not ONNX, so the shipped backend is genuinely per-platform.
+Not yet validated against real (non-synthetic) audio, the full test suite,
+or any platform other than Linux.
 4. **Semantic editing** — not started. See "Direction change" above for
    scope notes.
 
