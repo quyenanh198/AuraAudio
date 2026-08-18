@@ -84,7 +84,65 @@ def _group_by_onset(events: list[dict]) -> list[list[int]]:
     return [groups[o] for o in order]
 
 
-def _options_for_group(events: list[dict], indices: list[int]) -> list[_PlacementOption]:
+def _synthesize_locked_split(
+    events: list[dict],
+    order: list[int],
+    pitches: list[int],
+    locked_here: dict[int, str],
+) -> tuple[HandSplit, list[int], list[int]]:
+    """Build one option that pins every locked index to its locked hand,
+    used when no generated split satisfies all the locks (the locks imply a
+    left/right partition that isn't a contiguous prefix/suffix of sorted
+    pitch order, which candidate_splits can never produce).
+
+    Remaining (unlocked) members are placed by comparing their pitch to a
+    boundary — the same register-threshold rule candidate_splits uses to
+    place a pitch relative to a split point — derived from the locked
+    pitches themselves so unlocked members land on the side their register
+    would naturally suggest, consistent with the locked assignments."""
+    left_indices: list[int] = []
+    right_indices: list[int] = []
+    unlocked_order_positions: list[int] = []
+    for pos, idx in enumerate(order):
+        hand = locked_here.get(idx)
+        if hand == "left":
+            left_indices.append(idx)
+        elif hand == "right":
+            right_indices.append(idx)
+        else:
+            unlocked_order_positions.append(pos)
+
+    left_locked_pitches = [events[i]["pitch"] for i in left_indices]
+    right_locked_pitches = [events[i]["pitch"] for i in right_indices]
+    if left_locked_pitches and right_locked_pitches:
+        boundary = (max(left_locked_pitches) + min(right_locked_pitches)) / 2
+    elif left_locked_pitches:
+        boundary = max(left_locked_pitches) + 0.5
+    elif right_locked_pitches:
+        boundary = min(right_locked_pitches) - 0.5
+    else:
+        boundary = MIDDLE_C_MIDI
+
+    for pos in unlocked_order_positions:
+        idx = order[pos]
+        pitch = pitches[pos]
+        if pitch <= boundary:
+            left_indices.append(idx)
+        else:
+            right_indices.append(idx)
+
+    split = HandSplit(
+        boundary=boundary,
+        left=tuple(sorted(events[i]["pitch"] for i in left_indices)),
+        right=tuple(sorted(events[i]["pitch"] for i in right_indices)),
+    )
+    return split, left_indices, right_indices
+
+
+def _options_for_group(
+    events: list[dict], indices: list[int], locked: dict[int, str] | None = None
+) -> list[_PlacementOption]:
+    locked = locked or {}
     in_range = [i for i in indices if _in_range(events[i]["pitch"])]
     if not in_range:
         return []
@@ -98,12 +156,33 @@ def _options_for_group(events: list[dict], indices: list[int]) -> list[_Placemen
     options = []
     for k, split in enumerate(splits):
         options.append(_PlacementOption(split=split, left_indices=order[:k], right_indices=order[k:]))
-    return options
+
+    locked_here = {i: locked[i] for i in in_range if i in locked}
+    if not locked_here:
+        return options
+
+    filtered = []
+    for opt in options:
+        left_set = set(opt.left_indices)
+        right_set = set(opt.right_indices)
+        satisfies = all(
+            (idx in left_set) if hand == "left" else (idx in right_set)
+            for idx, hand in locked_here.items()
+        )
+        if satisfies:
+            filtered.append(opt)
+    if filtered:
+        return filtered
+
+    split, left_indices, right_indices = _synthesize_locked_split(events, order, pitches, locked_here)
+    return [_PlacementOption(split=split, left_indices=left_indices, right_indices=right_indices)]
 
 
-def assign_measure(events: list[dict]) -> dict[int, str]:
+def assign_measure(
+    events: list[dict], locked: dict[int, str] | None = None
+) -> dict[int, str]:
     groups = _group_by_onset(events)
-    all_steps = [_options_for_group(events, idxs) for idxs in groups]
+    all_steps = [_options_for_group(events, idxs, locked) for idxs in groups]
     steps = [s for s in all_steps if s]  # drop wholly-out-of-range groups
 
     result: dict[int, str] = {}
