@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   import { api } from "../lib/api";
+  import { createAudioSource, playback } from "../lib/playback";
+  import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
   import type { ProjectListItem, ScoreJson } from "../lib/types";
-  import Notation from "./Notation.svelte";
+  import Notation, { type OSMDCursorHandle } from "./Notation.svelte";
   import Sidebar from "./Sidebar.svelte";
+  import Transport from "./Transport.svelte";
 
   interface Props {
     projectId: string;
@@ -15,6 +18,11 @@
   const MIN_ZOOM_PERCENT = 50;
   const MAX_ZOOM_PERCENT = 200;
   const ZOOM_STEP_PERCENT = 10;
+  // How often the rAF loop is allowed to re-issue a smooth scrollIntoView()
+  // on the cursor element — every step change would otherwise fight itself
+  // (a new smooth-scroll starting before the last one settles) on fast runs
+  // of short notes.
+  const SCROLL_THROTTLE_MS = 200;
 
   // Explicit generic (not just an LHS annotation) on the nullable $state()
   // calls — with `$state(null)` alone, svelte-check (svelte-check@4.7.3 /
@@ -33,6 +41,22 @@
   let tabVisible = $state(true);
 
   let notation: Notation | undefined = $state();
+  let audioEl: HTMLAudioElement | undefined = $state();
+
+  // Cursor-sync state — not $state: these are imperative bookkeeping for the
+  // rAF loop and the seek handler, not reactive UI values. Rebuilt every
+  // loadScore() (see there for the reset).
+  let cursorHandle: OSMDCursorHandle | null = null;
+  let timeline: TimelineEntry[] = [];
+  /** Index into `timeline` the cursor is currently showing; -1 = "before the
+   * first entry" (freshly reset, nothing has sounded yet). */
+  let lastTimelineIndex = -1;
+  /** next() calls performed since the OSMD cursor's last reset() — see
+   * timeline.ts's planCursorMove() for why this (not the OSMD step index
+   * itself) is what the move-planner needs. */
+  let performedNextCalls = 0;
+  let rafId: number | null = null;
+  let lastScrollAt = 0;
 
   function clampZoom(percent: number): number {
     return Math.min(MAX_ZOOM_PERCENT, Math.max(MIN_ZOOM_PERCENT, percent));
@@ -50,9 +74,98 @@
     sidebarCollapsed = !sidebarCollapsed;
   }
 
+  /** Walks the real, loaded OSMD cursor once from reset() to EndReached,
+   * recording which step indices are NOT rest-only steps. A step is
+   * rest-only when every NotesUnderCursor() entry is a rest (or there are
+   * none) — confirmed rest steps only ever appear as the MusicXML
+   * exporter's explicit gap-filling (task-1b R2); the guitar TAB staff's
+   * duplicate per-staff notes never affect this (both staves agree on
+   * isRest() for the same musical instant). Leaves the cursor reset to the
+   * start when done, ready for playback. */
+  function walkNonRestStepIndices(cursor: OSMDCursorHandle): number[] {
+    const indices: number[] = [];
+    cursor.reset();
+    let step = 0;
+    while (!cursor.isEndReached()) {
+      const notes = cursor.notesUnderCursor();
+      const isRestStep = notes.length === 0 || notes.every((note) => note.isRest());
+      if (!isRestStep) indices.push(step);
+      step += 1;
+      cursor.next();
+    }
+    cursor.reset();
+    return indices;
+  }
+
+  function maybeScrollCursorIntoView(): void {
+    const now = performance.now();
+    if (now - lastScrollAt < SCROLL_THROTTLE_MS) return;
+    lastScrollAt = now;
+    cursorHandle?.cursorElement()?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  /** The single place that moves the OSMD cursor to match an audio time —
+   * shared by the rAF loop (while playing) and handleSeek() (so dragging the
+   * scrubber moves the cursor even while paused). */
+  function applyCursorForTime(t: number): void {
+    if (!cursorHandle || timeline.length === 0) return;
+    const idx = cursorIndexAt(timeline, t);
+    if (idx === lastTimelineIndex) return;
+    const desired = desiredNextCallsFor(timeline, idx);
+    const plan = planCursorMove(performedNextCalls, desired);
+    if (plan.reset) cursorHandle.reset();
+    for (let i = 0; i < plan.nextCalls; i += 1) cursorHandle.next();
+    performedNextCalls = desired;
+    lastTimelineIndex = idx;
+    maybeScrollCursorIntoView();
+  }
+
+  function handleSeek(t: number): void {
+    playback.seek(t);
+    applyCursorForTime(t);
+  }
+
+  function tick(): void {
+    rafId = requestAnimationFrame(tick);
+    if (!audioEl) return;
+    const t = audioEl.currentTime;
+    playback.syncPosition(t);
+    applyCursorForTime(t);
+  }
+
+  function startLoop(): void {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function stopLoop(): void {
+    if (rafId === null) return;
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+
+  $effect(() => {
+    if ($playback.playing) startLoop();
+    else stopLoop();
+  });
+
+  function handleAudioDurationChange(): void {
+    if (!audioEl) return;
+    playback.setDuration(Number.isFinite(audioEl.duration) ? audioEl.duration : 0);
+  }
+
+  function handleAudioEnded(): void {
+    playback.pause();
+  }
+
   async function loadScore(): Promise<void> {
     loading = true;
     error = null;
+    cursorHandle = null;
+    timeline = [];
+    lastTimelineIndex = -1;
+    performedNextCalls = 0;
+    playback.reset();
     try {
       const [projects, scoreJson] = await Promise.all([
         api.listProjects(),
@@ -74,6 +187,14 @@
       tabVisible = true;
       zoomPercent = 100;
       await notation?.loadMusicXml(xmlText);
+
+      const cursor = notation?.getCursor() ?? null;
+      if (cursor && score) {
+        const nonRestStepIndices = walkNonRestStepIndices(cursor);
+        timeline = buildTimeline(score, nonRestStepIndices);
+        cursor.show();
+        cursorHandle = cursor;
+      }
     } catch (err: unknown) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -82,7 +203,14 @@
   }
 
   onMount(() => {
+    if (audioEl) playback.attachSource("recording", createAudioSource(audioEl));
     void loadScore();
+  });
+
+  onDestroy(() => {
+    stopLoop();
+    playback.pause();
+    playback.attachSource("recording", null);
   });
 
   let part = $derived(score?.parts[0] ?? null);
@@ -125,14 +253,17 @@
       </main>
     </div>
 
-    <footer class="transport-strip">
-      <button type="button" class="play-button" disabled title="Playback lands in Task 7" aria-label="Play">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M8 5v14l11-7z" />
-        </svg>
-      </button>
-      <span class="transport-hint">Playback in Task 7</span>
-    </footer>
+    <audio
+      bind:this={audioEl}
+      src={api.audioUrl(projectId)}
+      preload="metadata"
+      class="sr-only-audio"
+      ondurationchange={handleAudioDurationChange}
+      onloadedmetadata={handleAudioDurationChange}
+      onended={handleAudioEnded}
+    ></audio>
+
+    <Transport onSeek={handleSeek} />
   {/if}
 </div>
 
@@ -230,37 +361,11 @@
     max-width: 900px;
   }
 
-  .transport-strip {
-    flex: none;
-    height: 64px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 0 20px;
-    background: var(--panel);
-    border-top: 1px solid var(--border);
-  }
-
-  .play-button {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: #1e1d21;
-    border: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-  }
-
-  .play-button:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-
-  .transport-hint {
-    font-size: 12px;
-    color: var(--dim);
+  .sr-only-audio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
 </style>
