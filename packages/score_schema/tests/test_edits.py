@@ -101,3 +101,24 @@ def test_invalid_op_type_and_pitch_bounds_rejected():
         apply_edit(_score(), {"type": "explode"})
     with pytest.raises(EditError):
         apply_edit(_score(), {"type": "set_pitch", "eventId": "note_00", "pitch": 128})
+
+
+def test_missing_eventid_raises_edit_error():
+    with pytest.raises(EditError) as exc_info:
+        apply_edit(_score(), {"type": "set_pitch", "pitch": 60})
+    assert exc_info.value.reason == "missing required op key: 'eventId'"
+
+
+def test_invalid_key_raises_edit_error():
+    with pytest.raises(EditError) as exc_info:
+        apply_edit(_score(), {"type": "set_part_fact", "field": "key", "value": "nonsense"})
+    assert "key must match pattern" in exc_info.value.reason
+
+
+def test_add_note_with_voice_zero_rejected():
+    """Voice 0 fails schema validation (voice >= 1); should raise EditError, not ScoreValidationError."""
+    with pytest.raises(EditError) as exc_info:
+        apply_edit(_score(), {"type": "add_note", "measureNumber": 1,
+                              "notatedOnset": "0/1", "notatedDuration": "1/4",
+                              "pitch": 64, "voice": 0})
+    assert "invalid score" in exc_info.value.reason

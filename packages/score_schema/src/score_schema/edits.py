@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 from fractions import Fraction
 
-from score_schema.validate import validate_score
+from score_schema.validate import ScoreValidationError, validate_score
 
 # Mirrors aura_worker.stages.structure.METER_CANDIDATES keys (copied so this
 # package stays standalone); verify against that file and keep in sync.
 _ALLOWED_METERS = ("4/4", "3/4")
+
+# Mirrors the key pattern from score_schema.validate._SCORE_SCHEMA
+_KEY_PATTERN = re.compile(r"^[A-G](#|-)? (major|minor)$")
 
 
 class EditError(ValueError):
@@ -25,6 +29,20 @@ def beats_per_measure(meter: str) -> Fraction:
 def seconds_per_beat(time_map: list[dict]) -> float:
     b0, b1 = time_map[0], time_map[1]
     return (b1["seconds"] - b0["seconds"]) / (b1["beat"] - b0["beat"])
+
+
+def _require(op: dict, key: str) -> None:
+    """Raise EditError if required key is missing from op."""
+    if key not in op:
+        raise EditError(f"missing required op key: {key!r}")
+
+
+def _validate_key(key: str) -> None:
+    """Validate key format against the schema pattern."""
+    if not isinstance(key, str) or not key.strip():
+        raise EditError("key must be a non-empty string")
+    if not _KEY_PATTERN.match(key):
+        raise EditError(f"key must match pattern [A-G][#-]? (major|minor), got {key!r}")
 
 
 def _fraction(text: str, what: str) -> Fraction:
@@ -86,6 +104,7 @@ def apply_edit(score: dict, op: dict) -> dict:
     kind = op.get("type")
 
     if kind == "set_pitch":
+        _require(op, "eventId")
         if not isinstance(op.get("pitch"), int) or not 0 <= op["pitch"] <= 127:
             raise EditError("pitch must be an integer 0-127")
         _, event = _find_event(part, op["eventId"])
@@ -93,6 +112,8 @@ def apply_edit(score: dict, op: dict) -> dict:
         event["locked"] = True
 
     elif kind == "move_note":
+        _require(op, "eventId")
+        _require(op, "notatedOnset")
         measure, event = _find_event(part, op["eventId"])
         onset_beats = _fraction(op["notatedOnset"], "notatedOnset") * 4
         if onset_beats >= beats_per_measure(part["meter"]):
@@ -102,6 +123,8 @@ def apply_edit(score: dict, op: dict) -> dict:
         _retime(out, part, measure, event)
 
     elif kind == "set_duration":
+        _require(op, "eventId")
+        _require(op, "notatedDuration")
         duration_beats = _fraction(op["notatedDuration"], "notatedDuration") * 4
         if duration_beats <= 0:
             raise EditError("notatedDuration must be > 0")
@@ -111,10 +134,15 @@ def apply_edit(score: dict, op: dict) -> dict:
         _retime(out, part, measure, event)
 
     elif kind == "delete_note":
+        _require(op, "eventId")
         measure, event = _find_event(part, op["eventId"])
         measure["events"].remove(event)
 
     elif kind == "add_note":
+        _require(op, "measureNumber")
+        _require(op, "notatedOnset")
+        _require(op, "notatedDuration")
+        _require(op, "pitch")
         numbers = {m["number"]: m for m in part["measures"]}
         measure = numbers.get(op.get("measureNumber"))
         if measure is None:
@@ -136,6 +164,9 @@ def apply_edit(score: dict, op: dict) -> dict:
         measure["events"].sort(key=lambda e: _fraction(e["notatedOnset"], "notatedOnset"))
 
     elif kind == "set_fingering":
+        _require(op, "eventId")
+        _require(op, "string")
+        _require(op, "fret")
         if part["instrument"] != "guitar":
             raise EditError("set_fingering only applies to guitar parts")
         if not isinstance(op.get("string"), int) or not 0 <= op["string"] <= 5:
@@ -146,6 +177,8 @@ def apply_edit(score: dict, op: dict) -> dict:
         event["string"], event["fret"], event["locked"] = op["string"], op["fret"], True
 
     elif kind == "set_hand":
+        _require(op, "eventId")
+        _require(op, "hand")
         if part["instrument"] != "piano":
             raise EditError("set_hand only applies to piano parts")
         if op.get("hand") not in ("left", "right"):
@@ -154,6 +187,8 @@ def apply_edit(score: dict, op: dict) -> dict:
         event["hand"], event["locked"] = op["hand"], True
 
     elif kind == "set_locked":
+        _require(op, "eventId")
+        _require(op, "locked")
         if not isinstance(op.get("locked"), bool):
             raise EditError("locked must be a boolean")
         _, event = _find_event(part, op["eventId"])
@@ -180,8 +215,7 @@ def apply_edit(score: dict, op: dict) -> dict:
                 for event in measure["events"]:
                     _retime(out, part, measure, event)
         elif field == "key":
-            if not isinstance(value, str) or not value.strip():
-                raise EditError("key must be a non-empty string")
+            _validate_key(value)
             part["key"] = value
         else:
             raise EditError(f"unknown part fact: {field}")
@@ -189,5 +223,8 @@ def apply_edit(score: dict, op: dict) -> dict:
     else:
         raise EditError(f"unknown edit type: {kind}")
 
-    validate_score(out)
+    try:
+        validate_score(out)
+    except ScoreValidationError as exc:
+        raise EditError(f"edit produces an invalid score: {exc}") from exc
     return out
