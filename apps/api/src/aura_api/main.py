@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from aura_api.migrations import run_migrations
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # aura_api.db builds its engine at import time, so run_migrations opens
+    # its own connection rather than reusing that engine.
+    run_migrations()
+    yield
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AuraAudio API")
+    app = FastAPI(title="AuraAudio API", lifespan=lifespan)
 
     @app.get("/healthz")
     def healthz():

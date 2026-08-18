@@ -5,7 +5,7 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from aura_api.db import Base  # noqa: E402
 from aura_api import models  # noqa: E402,F401  (import so models register on Base.metadata)
