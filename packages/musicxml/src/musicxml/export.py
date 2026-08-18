@@ -15,7 +15,10 @@ _STANDARD_PIANO_RANGE = (21, 108)
 
 def _notated_fraction_to_quarter_length(value: str) -> float:
     """A notated value like '1/4' means one quarter of a whole note (a
-    quarter note = 1.0 quarterLength in music21), so quarterLength = 4 * fraction."""
+    quarter note = 1.0 quarterLength in music21), so quarterLength = 4 * fraction.
+
+    Applies to both notatedDuration and notatedOnset — an onset is likewise
+    expressed as a fraction of a whole note, measured from the measure start."""
     return float(Fraction(value) * 4)
 
 
@@ -76,7 +79,12 @@ def _build_single_staff(part_data: dict, key_obj: m21_key.Key) -> stream.Score:
                 musicxml_string = 6 - internal_string
                 n.articulations.append(articulations.StringIndication(musicxml_string))
                 n.articulations.append(articulations.FretIndication(fret))
-            m21_measure.append(n)
+            # insert-at-onset, not append: an event list is not guaranteed to
+            # be sorted by notatedOnset (real inference output is not), and
+            # append() ignores notatedOnset entirely — it packs notes
+            # back-to-back in list order, so exported rhythm came out in the
+            # wrong order and with no rests for gaps.
+            m21_measure.insert(_notated_fraction_to_quarter_length(event["notatedOnset"]), n)
         m21_part.append(m21_measure)
 
     m21_score = stream.Score()
@@ -122,7 +130,8 @@ def _build_piano_grand_staff(part_data: dict, key_obj: m21_key.Key) -> stream.Sc
             n = note.Note(_spell_pitch(event["pitch"], key_obj))
             n.duration = duration.Duration(_notated_fraction_to_quarter_length(event["notatedDuration"]))
             target = right_measure if _hand_for_event(event) == "right" else left_measure
-            target.append(n)
+            # insert-at-onset, not append — see _build_single_staff.
+            target.insert(_notated_fraction_to_quarter_length(event["notatedOnset"]), n)
         right.append(right_measure)
         left.append(left_measure)
 

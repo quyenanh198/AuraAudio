@@ -266,3 +266,79 @@ def test_score_json_to_musicxml_guitar_export_unaffected_by_piano_branch(tmp_pat
     content = out_path.read_text()
     assert "<staves>" not in content
     assert content.count("<part ") == 1
+
+
+def _guitar_score_with_events(events: list[dict]):
+    return build_score(
+        instrument="guitar",
+        tempo_bpm=120.0,
+        meter="4/4",
+        key="C major",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
+        time_map=[{"beat": 0, "seconds": 0.0}, {"beat": 1, "seconds": 0.5}],
+        measures=[{"number": 1, "events": events}],
+    )
+
+
+def _guitar_event(id_: str, pitch: int, onset: str, dur: str = "1/4") -> dict:
+    return {
+        "id": id_, "pitch": pitch, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+        "notatedOnset": onset, "notatedDuration": dur, "voice": 1,
+        "confidence": 0.9, "locked": False,
+    }
+
+
+def test_score_json_to_musicxml_places_notes_at_their_notated_onset(tmp_path: Path):
+    # An event list is not guaranteed to arrive sorted by notatedOnset —
+    # real inference output isn't — so the exporter must place each note at
+    # its own notated onset rather than packing notes back-to-back in list
+    # order. Deliberately fed in descending-onset order; distinct pitches
+    # let us pin exactly which note landed where.
+    score = _guitar_score_with_events([
+        _guitar_event("note_00", 72, "3/4"),  # beat 4
+        _guitar_event("note_01", 60, "0/1"),  # beat 1
+        _guitar_event("note_02", 64, "1/2"),  # beat 3
+    ])
+    out_path = tmp_path / "unsorted.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    measure = reopened.parts[0].getElementsByClass(music21.stream.Measure)[0]
+    placed = {n.pitch.midi: float(n.offset) for n in measure.notes}
+    assert placed == {60: 0.0, 64: 2.0, 72: 3.0}
+
+
+def test_score_json_to_musicxml_leaves_a_rest_in_a_gap(tmp_path: Path):
+    # Packing notes back-to-back also swallowed rests: a gap between two
+    # notated onsets must survive export as an actual rest, not close up.
+    score = _guitar_score_with_events([
+        _guitar_event("note_00", 60, "0/1"),  # beat 1, quarter
+        _guitar_event("note_01", 67, "1/2"),  # beat 3, quarter -> beat 2 is silent
+    ])
+    out_path = tmp_path / "gap.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    measure = reopened.parts[0].getElementsByClass(music21.stream.Measure)[0]
+    rests = list(measure.getElementsByClass(music21.note.Rest))
+    assert [(float(r.offset), float(r.quarterLength)) for r in rests] == [(1.0, 1.0)]
+    assert {n.pitch.midi: float(n.offset) for n in measure.notes} == {60: 0.0, 67: 2.0}
+
+
+def test_score_json_to_musicxml_piano_places_notes_at_their_notated_onset(tmp_path: Path):
+    # Same fix, per hand: the grand-staff path built each staff's measure by
+    # appending too, so an unsorted event list scrambled both staves.
+    score = _piano_score([[
+        _piano_event("note_00", 79, "right", "1/2"),  # beat 3, treble
+        _piano_event("note_01", 76, "right", "0/1"),  # beat 1, treble
+        _piano_event("note_02", 40, "left", "1/4"),   # beat 2, bass
+    ]])
+    out_path = tmp_path / "piano_unsorted.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    placed = {
+        n.pitch.midi: float(n.getOffsetInHierarchy(reopened))
+        for n in reopened.recurse().notes
+    }
+    assert placed == {76: 0.0, 40: 1.0, 79: 2.0}
