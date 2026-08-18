@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from aura_worker.errors import JobFailure
+from aura_worker.binaries import ffmpeg_path
 from aura_worker.ffmpeg_utils import sha256_file
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
 from score_schema.models import JobErrorCode
@@ -24,7 +25,7 @@ def run(ctx: StageContext, source_path: Path) -> Path:
     try:
         subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(source_path),
+                ffmpeg_path(), "-y", "-i", str(source_path),
                 "-ac", "1", "-ar", str(TARGET_SAMPLE_RATE),
                 "-af", "loudnorm=I=-23:TP=-2:LRA=7",
                 str(out_path),

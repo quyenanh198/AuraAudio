@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from aura_worker.binaries import ffprobe_path
 from aura_worker.errors import JobFailure
 from score_schema.models import JobErrorCode
 
@@ -27,7 +28,7 @@ def probe_media(path: Path) -> ProbeInfo:
     try:
         proc = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-print_format", "json",
+                ffprobe_path(), "-v", "error", "-print_format", "json",
                 "-show_format", "-show_streams", str(path),
             ],
             capture_output=True, text=True, timeout=30, check=True,
