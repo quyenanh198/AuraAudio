@@ -1,8 +1,25 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font: 16px/1.5 system-ui, sans-serif;
+
+  /* AuraAudio dark UI tokens — approved design canvas, see
+     docs/superpowers/plans/2026-08-17-score-preview-playback-ui.md */
+  --bg: #1e1d21;
+  --panel: #26242a;
+  --border: #37343c;
+  --text: #e8e5df;
+  --dim: #9b968c;
+  --accent: #d99a4e;
+  --success: #7fb069;
+  --paper: #f5f1e8;
 }
 
 body {
   margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
 }
