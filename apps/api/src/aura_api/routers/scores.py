@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from aura_api.deps import get_db
-from aura_api.models import Project, StageArtifact, TranscriptionJob
+from aura_api.models import Project, ScoreRevision, StageArtifact, TranscriptionJob
 from aura_api.storage import storage_client
 
 router = APIRouter(tags=["scores"])
@@ -28,8 +28,14 @@ def _latest_artifact(db: Session, project_id: str, stage: str) -> StageArtifact 
 
 @router.get("/projects/{project_id}/score")
 def get_score(project_id: str, db: Session = Depends(get_db)) -> dict:
-    if db.get(Project, project_id) is None:
+    project = db.get(Project, project_id)
+    if project is None:
         raise HTTPException(status_code=404, detail="project not found")
+    head_id = (project.settings or {}).get("scoreHeadRevisionId")
+    if head_id:
+        revision = db.get(ScoreRevision, head_id)
+        if revision is not None:
+            return revision.score_json
     artifact = _latest_artifact(db, project_id, "assign")
     if artifact is None:
         raise HTTPException(status_code=404, detail="no transcribed score yet")
