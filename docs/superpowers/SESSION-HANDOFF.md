@@ -606,6 +606,12 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       edited. Confirmed by an isolated re-test with the identical wait
       pattern that the product itself has no export-staleness bug here —
       only that one test script's row-selection was ambiguous mid-session.
+   8. **Latent head-pointer staleness if re-transcription is ever added**:
+      not possible via today's UI (each upload makes a new project, so no
+      flow re-transcribes an existing one), but if one is ever added it must
+      invalidate that project's `scoreHeadRevisionId` settings pointer (Task
+      3) — otherwise the project would keep serving the old, edited score
+      instead of the fresh transcription.
 
 **Update (final whole-branch fix wave, 2026-08-18): the paragraph
 previously here — claiming `musicxml/export.py` appends notes in raw list
