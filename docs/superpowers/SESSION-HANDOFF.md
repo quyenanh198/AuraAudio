@@ -199,8 +199,14 @@ Two things worth knowing about (not current issues, already resolved):
    just correctly out of scope for this sub-project's structural DoD.
    Worth its own future bounded fix.
 
-Full workspace test suite: **112/112 passing.** Working tree clean, `main`
-in sync with `origin/main` (last pushed commit: `eb58113`).
+Full workspace test suite: **135/135 passing** as of 2026-08-18
+(score-schema 22, musicxml 20, test-fixtures 6, aura-api 34,
+aura-worker 53). Note that all work since the initial architecture doc
+lives on the branch `claude/resume-session-afs2az`, **not** on `main` —
+`main` still holds only the initial commit plus that doc, and there is no
+open PR. The "development happens directly on `main`" note under "Working
+process" below describes the original local setup and no longer matches
+where the commits actually are.
 
 ## Phase 2 backend sub-projects (all done — this list is now historical)
 
@@ -282,18 +288,41 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
 4. **Semantic editing** — not started. See "Direction change" above for
    scope notes.
 
-**Known follow-up, not yet its own sub-project:** `musicxml/export.py`
-appends notes to each measure/staff in list order rather than sorting by
-`notatedOnset` first — real transcribed audio's event list isn't
-guaranteed to already be onset-sorted (confirmed via a real e2e run), so
-exported rhythm can come out scrambled for both guitar and piano today.
-Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
-by sub-project 3's final review. Worth a small bounded fix on its own —
-sort each measure's events by `notatedOnset` before building notes — before
-it's forgotten as "always been like that." Sub-project 1 (offline backend
-adaptation, done) did not fold this in — still open and
-unscheduled; a good candidate to knock out on its own before sub-project 4
-(semantic editing) starts building on top of `musicxml/export.py`.
+**Known follow-up — DONE (2026-08-18), commit `660462f`.**
+`musicxml/export.py` appended notes to each measure/staff in list order
+rather than placing them by `notatedOnset` — real transcribed audio's
+event list isn't guaranteed to be onset-sorted (confirmed via a real e2e
+run), so exported rhythm came out scrambled for both guitar and piano.
+Predated sub-projects 2 and 3; caught (but correctly ruled out of scope)
+by sub-project 3's final review. Fixed by switching both
+`_build_single_staff` and `_build_piano_grand_staff` from `append(n)` to
+`insert(<notated onset in quarterLength>, n)` — a strictly stronger fix
+than the "sort the events first" one originally sketched here, because
+sorting alone would still have packed notes back-to-back and swallowed
+rests. Three regression tests added (guitar ordering, guitar
+gap-becomes-rest, piano per-hand ordering), each confirmed to fail against
+the old `append()` and pass against the fix, with the 17 pre-existing
+`musicxml` tests unaffected either way.
+
+**New known follow-up found while fixing the above (open, unscheduled):**
+simultaneous events do not render as chords. Three events sharing one
+`notatedOnset` export as three *sequential* notes with no `<chord/>`
+element — a C major triad becomes an arpeggio spanning three beats.
+Verified directly against real `music21` output, both before and after
+the onset fix (behaviour is identical either way, so the fix above did
+not regress it — it is a separate root cause: nothing groups same-onset
+events into a `music21.chord.Chord`). This matters because chords are a
+first-class case in this pipeline — both `aura_worker.fingering` and
+`aura_worker.piano_hands` explicitly group events by shared
+`notatedOnset` to assign chord voicings, so the assignment work is
+correct but its result is rendered wrong. Overlapping (staggered but
+still sounding) notes have the same problem. The likely fix is grouping
+same-onset events into `chord.Chord` objects, but note the open question
+first: guitar tab needs a *per-chord-member* `StringIndication`/
+`FretIndication`, and whether `music21`'s MusicXML writer emits
+articulations on individual chord members is unverified — check that
+against the real library before writing it into a plan (see "Two examples
+of 'verify before you write into the plan'" above).
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
@@ -388,7 +417,37 @@ correct — check it.
 
 ```bash
 cd /home/user/AuraAudio
-source .envrc && make test   # expect all five packages green (126/126 as of sub-project 1's task 9)
+uv sync --all-packages --all-extras   # --all-extras is NOT optional, see below
+source .envrc && make test            # expect all five packages green (135/135)
 ```
 
 No external services to start first — see "Environment gotchas" above.
+
+**Three things a fresh container needs before `make test` will work.** All
+three cost time to rediscover in the 2026-08-18 session; none is a code
+problem:
+
+1. **`uv sync --all-packages` alone is not enough — use
+   `--all-extras`.** `pytest` is declared in each package's
+   `[project.optional-dependencies].test` extra, so a plain
+   `--all-packages` sync leaves it out of `.venv`. The failure mode is
+   confusing rather than obvious: `uv run --package X pytest` silently
+   falls through to a *global* `pytest` on a different interpreter, which
+   can't see the workspace's editable installs, so every test dies with
+   `ModuleNotFoundError: No module named 'score_schema'` — looking like a
+   packaging bug rather than a missing dev dependency.
+2. **`.envrc` is gitignored, so a fresh clone has no `.envrc` at all.**
+   Recreate it before running anything:
+   ```bash
+   printf 'export DATABASE_URL="sqlite:///./data/aura.db"\nexport AURA_DATA_DIR="./data"\n' > .envrc
+   ```
+3. **`ffmpeg` must be installed** (`apt-get install -y ffmpeg`). The probe
+   stage shells out to `ffprobe`; without it both e2e pipeline tests fail
+   with `FileNotFoundError: [Errno 2] No such file or directory:
+   'ffprobe'`. Everything else in the suite passes without it, so it looks
+   like an e2e-specific regression rather than a missing binary.
+
+Note `make lint` currently reports 96 pre-existing ruff errors across the
+workspace, unrelated to any recent change — don't read a non-zero exit
+there as "I broke something." Compare counts before and after your change
+rather than expecting zero.
