@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
 
   import { api } from "../lib/api";
+  import { createCoalescer } from "../lib/coalesce";
   import { createAudioSource, playback } from "../lib/playback";
   import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
   import type { ProjectListItem, ScoreJson } from "../lib/types";
@@ -105,8 +106,9 @@
   }
 
   /** The single place that moves the OSMD cursor to match an audio time —
-   * shared by the rAF loop (while playing) and handleSeek() (so dragging the
-   * scrubber moves the cursor even while paused). */
+   * called directly from the rAF loop (while playing, already at most once
+   * per frame) and, coalesced, from handleSeek() via scheduleCursorSync()
+   * below (so dragging the scrubber moves the cursor even while paused). */
   function applyCursorForTime(t: number): void {
     if (!cursorHandle || timeline.length === 0) return;
     const idx = cursorIndexAt(timeline, t);
@@ -120,9 +122,22 @@
     maybeScrollCursorIntoView();
   }
 
+  // Scrubbing fires the range input's `oninput` far faster than rAF ticks
+  // during a fast drag — routing every one of those straight into
+  // applyCursorForTime() means every event does its own reset()+N×next()
+  // OSMD walk (cheap for a short clip, pathological for a long one, and
+  // worse dragging backward since that path is always a full reset()).
+  // The audio seek + position/time display must stay immediate (that's
+  // what makes scrubbing feel responsive), but the OSMD cursor walk itself
+  // only needs to reflect the LATEST scrub position, applied at most once
+  // per animation frame — a textbook "latest-wins" coalescer.
+  const scheduleCursorSync = createCoalescer<number>(applyCursorForTime, (flush) => {
+    requestAnimationFrame(flush);
+  });
+
   function handleSeek(t: number): void {
     playback.seek(t);
-    applyCursorForTime(t);
+    scheduleCursorSync(t);
   }
 
   function tick(): void {
