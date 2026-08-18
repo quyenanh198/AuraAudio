@@ -60,3 +60,25 @@ class ExportStatusResponse(BaseModel):
     format: str
     status: str
     download_url: str | None
+
+
+class ProjectJobSummary(BaseModel):
+    id: str
+    status: str
+    stage: str | None
+    progress: int
+
+
+class ProjectExportSummary(BaseModel):
+    id: str
+    format: str
+
+
+class ProjectListItem(BaseModel):
+    id: str
+    title: str
+    instrument: str
+    created_at: str
+    duration_ms: int | None
+    job: ProjectJobSummary | None
+    exports: list[ProjectExportSummary]
