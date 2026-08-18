@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import music21
@@ -42,7 +43,12 @@ def test_score_json_to_musicxml_writes_a_file(tmp_path: Path):
     assert out_path.exists()
     content = out_path.read_text()
     assert "<score-partwise" in content
-    assert content.count("<note>") == 2
+    # Guitar now exports a linked TAB staff (R1) that mirrors every note
+    # from the notation staff, so the 2 sample events (2.0 quarterLengths
+    # total, in a 4/4 measure) produce 4 real <note> elements (2 per staff)
+    # plus a trailing half-rest per staff filling the rest of the measure
+    # (R2) — 6 <note> elements total (rests are <note><rest/>...</note>).
+    assert content.count("<note>") == 6
 
 
 def test_score_json_to_musicxml_uses_detected_time_signature(tmp_path: Path):
@@ -111,8 +117,12 @@ def test_score_json_to_musicxml_spells_bsharp_leading_tone_at_correct_octave(tmp
     assert "<alter>1</alter>" in content
     assert "<octave>3</octave>" in content
 
+    # Guitar now has a linked TAB staff mirroring every note (R1), so filter
+    # to the notation staff (Staff1) — the same single logical note, not its
+    # TAB-staff duplicate.
     reopened = music21.converter.parse(str(out_path))
-    reopened_notes = list(reopened.flatten().notes)
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    reopened_notes = list(notation_part.recurse().notes)
     assert len(reopened_notes) == 1
     assert reopened_notes[0].pitch.midi == 60
 
@@ -134,8 +144,12 @@ def test_score_json_to_musicxml_spells_cflat_at_correct_octave(tmp_path: Path):
     assert "<alter>-1</alter>" in content
     assert "<octave>5</octave>" in content
 
+    # Guitar now has a linked TAB staff mirroring every note (R1), so filter
+    # to the notation staff (Staff1) — the same single logical note, not its
+    # TAB-staff duplicate.
     reopened = music21.converter.parse(str(out_path))
-    reopened_notes = list(reopened.flatten().notes)
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    reopened_notes = list(notation_part.recurse().notes)
     assert len(reopened_notes) == 1
     assert reopened_notes[0].pitch.midi == 71
 
@@ -259,10 +273,135 @@ def test_score_json_to_musicxml_piano_out_of_range_note_still_renders(tmp_path: 
 
 
 def test_score_json_to_musicxml_guitar_export_unaffected_by_piano_branch(tmp_path: Path):
-    # Regression check: guitar's single-staff path must still produce
-    # exactly one <part> with no <staves> element at all.
+    # Regression check: guitar's staff-building path must not accidentally
+    # go through the piano grand-staff builder. Guitar now legitimately has
+    # its own two staves (R1: notation + TAB), merged into a single <part>
+    # via PartStaff — same merge mechanism as piano's grand staff, so
+    # <staves>2</staves> is expected here too, but it must stay ONE <part>
+    # (not the piano-specific bass/treble clef pairing).
     out_path = tmp_path / "guitar_regression.musicxml"
     score_json_to_musicxml(_sample_score(), out_path)
     content = out_path.read_text()
-    assert "<staves>" not in content
+    assert "<staves>2</staves>" in content
     assert content.count("<part ") == 1
+    assert "<sign>F</sign>" not in content  # no piano bass clef leaked in
+
+
+# --- R1: guitar TAB staff -------------------------------------------------
+
+
+def test_score_json_to_musicxml_guitar_has_tab_clef_and_two_staves(tmp_path: Path):
+    out_path = tmp_path / "guitar_tab_clef.musicxml"
+    score_json_to_musicxml(_sample_score(), out_path)
+    content = out_path.read_text()
+    assert "<sign>TAB</sign>" in content
+    assert "<staves>2</staves>" in content
+
+
+def test_score_json_to_musicxml_guitar_fret_data_sits_on_tab_staff(tmp_path: Path):
+    score = _sample_score()
+    score["parts"][0]["measures"][0]["events"][0]["string"] = 2
+    score["parts"][0]["measures"][0]["events"][0]["fret"] = 5
+    out_path = tmp_path / "guitar_tab_fret.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<fret>5</fret>" in content
+
+    reopened = music21.converter.parse(str(out_path))
+    tab_part = next(p for p in reopened.parts if p.id.endswith("Staff2"))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    tab_frets = [
+        art for n in tab_part.recurse().notes for art in n.articulations
+        if isinstance(art, music21.articulations.FretIndication)
+    ]
+    notation_frets = [
+        art for n in notation_part.recurse().notes for art in n.articulations
+        if isinstance(art, music21.articulations.FretIndication)
+    ]
+    assert any(f.number == 5 for f in tab_frets)
+    assert notation_frets == []  # notation staff keeps current (no-fret) behavior
+
+
+# --- R3: same-onset events become a chord ---------------------------------
+
+
+def test_score_json_to_musicxml_same_onset_guitar_events_become_chord(tmp_path: Path):
+    score = _sample_score()
+    score["parts"][0]["measures"][0]["events"] = [
+        {
+            "id": "note_00", "pitch": 64, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+            "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+            "confidence": 0.9, "locked": False, "string": 2, "fret": 2,
+        },
+        {
+            "id": "note_01", "pitch": 67, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+            "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+            "confidence": 0.85, "locked": False, "string": 3, "fret": 0,
+        },
+    ]
+    out_path = tmp_path / "guitar_chord.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert re.search(r"<chord\s*/>", content)
+    assert "<fret>2</fret>" in content
+    assert "<fret>0</fret>" in content
+
+
+# --- R2: onset-faithful placement ------------------------------------------
+
+
+def test_score_json_to_musicxml_piano_right_hand_lands_at_true_onset(tmp_path: Path):
+    # Left hand at onset 0/1 (half note); right hand at onset 1/2 (half
+    # note) — they must NOT both land at beat 0.
+    score = _piano_score([[
+        {
+            "id": "l0", "pitch": 40, "onsetSeconds": 0.0, "offsetSeconds": 1.0,
+            "notatedOnset": "0/1", "notatedDuration": "1/2", "voice": 1,
+            "confidence": 0.9, "locked": False, "hand": "left",
+        },
+        {
+            "id": "r0", "pitch": 76, "onsetSeconds": 1.0, "offsetSeconds": 2.0,
+            "notatedOnset": "1/2", "notatedDuration": "1/2", "voice": 1,
+            "confidence": 0.9, "locked": False, "hand": "right",
+        },
+    ]])
+    out_path = tmp_path / "piano_onset.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    right_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    right_notes = list(right_part.recurse().notes)
+    assert len(right_notes) == 1
+    assert right_notes[0].offset == 2.0  # not 0.0
+
+    right_rests = list(right_part.recurse().getElementsByClass(music21.note.Rest))
+    assert any(r.duration.quarterLength == 2.0 for r in right_rests)  # half rest precedes it
+
+
+def test_score_json_to_musicxml_guitar_gap_between_onsets_becomes_rest(tmp_path: Path):
+    # Events at 0/1 (dur 1/4) and 1/2 (dur 1/4) leave a gap at 1/4-1/2 that
+    # must be filled with a rest, not silently skipped.
+    score = _sample_score()
+    score["parts"][0]["measures"][0]["events"] = [
+        {
+            "id": "note_00", "pitch": 64, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+            "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+            "confidence": 0.9, "locked": False,
+        },
+        {
+            "id": "note_01", "pitch": 67, "onsetSeconds": 1.0, "offsetSeconds": 1.5,
+            "notatedOnset": "1/2", "notatedDuration": "1/4", "voice": 1,
+            "confidence": 0.85, "locked": False,
+        },
+    ]
+    out_path = tmp_path / "guitar_gap.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    notes = list(notation_part.recurse().notes)
+    assert len(notes) == 2
+    assert notes[1].offset == 2.0  # 1/2 whole note = 2.0 quarterLengths
+
+    rests = list(notation_part.recurse().getElementsByClass(music21.note.Rest))
+    assert any(r.duration.quarterLength == 1.0 for r in rests)  # the 1/4-1/2 gap
