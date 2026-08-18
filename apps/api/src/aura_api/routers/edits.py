@@ -29,11 +29,18 @@ def _set_head(db: Session, project: Project, revision: ScoreRevision) -> None:
     flag_modified(project, "settings")
 
 
-def _bootstrap_baseline(db: Session, project: Project) -> ScoreRevision:
+def _load_baseline_score(db: Session, project: Project) -> dict:
+    """Read-only: resolve the assign artifact's score without writing
+    anything. Kept separate from `_insert_baseline_revision` so a project's
+    very first edit can validate the op against this score BEFORE any
+    ScoreRevision row is created — see `apply_project_edit`."""
     artifact = _latest_artifact(db, project.id, "assign")
     if artifact is None:
         raise HTTPException(status_code=404, detail="no transcribed score yet")
-    score = json.loads(storage_client.get_bytes(artifact.object_key))
+    return json.loads(storage_client.get_bytes(artifact.object_key))
+
+
+def _insert_baseline_revision(db: Session, project: Project, score: dict) -> ScoreRevision:
     top = (
         db.query(ScoreRevision).filter(ScoreRevision.project_id == project.id)
         .order_by(ScoreRevision.revision.desc()).first()
@@ -84,11 +91,22 @@ def apply_project_edit(project_id: str, op: dict, db: Session = Depends(get_db))
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    head = _head_revision(db, project) or _bootstrap_baseline(db, project)
+    head = _head_revision(db, project)
+    base_score = head.score_json if head is not None else _load_baseline_score(db, project)
     try:
-        edited = apply_edit(head.score_json, op)
+        edited = apply_edit(base_score, op)
     except EditError as exc:
+        # No ScoreRevision row (baseline or otherwise) has been created yet
+        # at this point — base_score came from either the existing head
+        # (read-only) or `_load_baseline_score` (read-only, no db.add). The
+        # invariant this depends on: an invalid op leaves zero new rows, no
+        # head pointer, and no job row, without relying on the request
+        # session's close-time implicit rollback.
         raise HTTPException(status_code=422, detail=exc.reason) from exc
+
+    if head is None:
+        head = _insert_baseline_revision(db, project, base_score)
+
     (
         db.query(ScoreRevision)
         .filter(ScoreRevision.project_id == project_id,

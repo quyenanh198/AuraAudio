@@ -1,6 +1,9 @@
 import json
+import os
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from aura_api.models import MediaAsset, Project, ScoreRevision, StageArtifact, TranscriptionJob
 
@@ -176,6 +179,61 @@ def test_invalid_op_returns_422_with_reason_and_creates_no_revision(db_session, 
 
     after = db_session.query(ScoreRevision).filter(ScoreRevision.project_id == p.id).count()
     assert after == before
+
+
+def _separate_session():
+    """A second Session/connection, distinct from the `db_session` fixture
+    the request handler itself used, bound to the same test database.
+    Verifying through it (rather than through `db_session`, whose identity
+    map could paper over a bug) is the guard against the invalid-FIRST-edit
+    path leaving a flushed-but-uncommitted row that only *looks* absent
+    because of same-session object caching."""
+    engine = create_engine(os.environ["DATABASE_URL"], connect_args={"check_same_thread": False})
+    return sessionmaker(bind=engine)()
+
+
+def test_invalid_first_edit_leaves_no_trace_and_valid_first_edit_still_bootstraps(db_session, tmp_path, monkeypatch):
+    storage, recorded = _patch_storage_and_queue(monkeypatch, tmp_path)
+    p, j, original = _project_with_assign_artifact(db_session, storage)
+    client = TestClient(_app())
+
+    # The very first edit on this project, and it's invalid. Before the fix,
+    # this branch flushed a baseline ScoreRevision row (uncommitted) before
+    # apply_edit ran, and relied on get_db's close-time implicit rollback to
+    # discard it. This must now be false by construction, not by accident of
+    # session teardown timing.
+    resp = client.post(f"/v1/projects/{p.id}/edits", json={"type": "set_pitch", "eventId": "note_00", "pitch": 128})
+    assert resp.status_code == 422
+    assert "pitch" in resp.json()["detail"]
+    assert recorded == []  # enqueue_rederive_job was never called
+
+    check = _separate_session()
+    try:
+        assert check.query(ScoreRevision).filter(ScoreRevision.project_id == p.id).count() == 0
+        fresh_project = check.get(Project, p.id)
+        assert "scoreHeadRevisionId" not in (fresh_project.settings or {})
+        rederive_jobs = (
+            check.query(TranscriptionJob)
+            .filter(TranscriptionJob.project_id == p.id, TranscriptionJob.stage == "rederive")
+            .all()
+        )
+        assert rederive_jobs == []
+    finally:
+        check.close()
+
+    # A subsequent VALID first edit must still bootstrap correctly — the
+    # restructure must not have broken the happy path.
+    valid_resp = client.post(f"/v1/projects/{p.id}/edits", json={"type": "set_pitch", "eventId": "note_00", "pitch": 60})
+    assert valid_resp.status_code == 200
+    body = valid_resp.json()
+    assert body["version"] == 1
+    assert body["score"]["parts"][0]["measures"][0]["events"][0]["pitch"] == 60
+
+    revisions = db_session.query(ScoreRevision).filter(ScoreRevision.project_id == p.id).all()
+    assert len(revisions) == 2  # baseline (rev 0) + the applied edit (rev 1)
+    baseline = next(r for r in revisions if r.revision == 0)
+    assert baseline.created_by == "baseline"
+    assert baseline.score_json == original
 
 
 def test_revert_returns_head_to_baseline(db_session, tmp_path, monkeypatch):
