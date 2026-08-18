@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.auraaudio.desktop",
   "build": {
-    "frontendDist": "../web"
+    "beforeDevCommand": "npm run dev --prefix web",
+    "beforeBuildCommand": "npm run build --prefix web",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web/dist"
   },
   "app": {
     "windows": [
