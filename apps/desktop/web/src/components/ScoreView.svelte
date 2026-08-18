@@ -53,9 +53,9 @@
   let zoomPercent = $state(100);
   let tabVisible = $state(true);
   /** Whether the user dismissed the current rederive-failure banner (Task 7
-   * Step 4). Reset to `false` whenever a NEW `editor.error` value arrives —
-   * see the refresh-loop `$effect` below — so a fresh failure always shows,
-   * even if an earlier one was dismissed. */
+   * Step 4). Reset to `false` whenever a NEW `editor.rederiveError` value
+   * arrives — see the refresh-loop `$effect` below — so a fresh failure
+   * always shows, even if an earlier one was dismissed. */
   let rederiveErrorDismissed = $state(false);
 
   let notation: Notation | undefined = $state();
@@ -94,13 +94,16 @@
    * against rebuilding for a reference-identical no-op update. */
   let lastSynthScore: ScoreJson | null = null;
   /** `editor.updating`'s value as of the last time the refresh-loop effect
-   * ran — a true->false transition (with no `editor.error`) is what starts
-   * `refreshAfterEdit()`. */
+   * ran — a true->false transition (with neither `editor.error` nor
+   * `editor.rederiveError` set) is what starts `refreshAfterEdit()`: an op
+   * rejection (`error`) never started a rederive job, and a failed rederive
+   * (`rederiveError`) has nothing new to fetch — either way there is no
+   * fresher score/MusicXML to refresh in from. */
   let wasUpdating = false;
-  /** `editor.error`'s value as of the last time the refresh-loop effect ran
-   * — used only to detect "a NEW rederive failure just arrived" so the
-   * dismissible banner (`rederiveErrorDismissed`) reopens for it even if an
-   * earlier failure had already been dismissed. */
+  /** `editor.rederiveError`'s value as of the last time the refresh-loop
+   * effect ran — used only to detect "a NEW rederive failure just arrived"
+   * so the dismissible banner (`rederiveErrorDismissed`) reopens for it even
+   * if an earlier failure had already been dismissed. */
   let lastRederiveError: string | null = null;
   /** Bumped at the START of every `refreshAfterEdit()` call — mirrors
    * `editor.ts`'s own `generation` guard (and `projects.ts`'s) exactly, for
@@ -410,8 +413,9 @@
   });
 
   /** Task 7 Step 4 refresh loop: fires once per `editor.updating` true ->
-   * false transition that lands with no `editor.error` — i.e. exactly when
-   * a rederive job just finished successfully. The rederive worker
+   * false transition that lands with neither `editor.error` nor
+   * `editor.rederiveError` set — i.e. exactly when a rederive job just
+   * finished successfully. The rederive worker
    * (workers/transcription/src/aura_worker/rederive.py) updates the head
    * revision's `score_json` in place AND rewrites the SAME `Export` rows'
    * `object_key` (never creates new ones), so this reuses `project`'s
@@ -513,15 +517,21 @@
   }
 
   // Refresh-loop trigger + rederive-failure banner state, in one effect
-  // since both react to the same two `editor` fields.
+  // since both react to overlapping `editor` fields. The banner's own
+  // dismiss-reopen tracking keys ONLY off `rederiveError` (IMPORTANT 2: a
+  // rejected op's `error` is Sidebar's inline concern, not this banner's) —
+  // but the refresh trigger below still checks both, since an op rejection
+  // also produces a wasUpdating(true)->updating(false) transition with no
+  // rederive job ever having started.
   $effect(() => {
     const updating = $editor.updating;
     const err = $editor.error;
-    if (err !== lastRederiveError) {
-      lastRederiveError = err;
-      if (err) rederiveErrorDismissed = false;
+    const rederiveErr = $editor.rederiveError;
+    if (rederiveErr !== lastRederiveError) {
+      lastRederiveError = rederiveErr;
+      if (rederiveErr) rederiveErrorDismissed = false;
     }
-    if (wasUpdating && !updating && !err) {
+    if (wasUpdating && !updating && !err && !rederiveErr) {
       void refreshAfterEdit();
     }
     wasUpdating = updating;
@@ -809,13 +819,17 @@
                fine; only cursor/playback sync failed. Never blanks the view. -->
           <p class="sync-notice" role="status">Playback sync unavailable for this score.</p>
         {/if}
-        {#if $editor.error && !rederiveErrorDismissed}
-          <!-- Task 7 Step 4: a rederive job failed. Distinct from
+        {#if $editor.rederiveError && !rederiveErrorDismissed}
+          <!-- IMPORTANT 2 / Task 7 Step 4: a rederive job failed — gated on
+               `editor.rederiveError`, NOT `editor.error` (that one is a
+               rejected op, surfaced inline by Sidebar instead; showing it
+               here too duplicated the message and its Retry wrongly implied
+               the rejected edit had gone through). Distinct from
                `.error-panel` above (nothing here is "unusable" — the score
                still shows the last successful edit) and dismissible, unlike
                it. -->
           <div class="rederive-banner" role="alert">
-            <span>{$editor.error}</span>
+            <span>{$editor.rederiveError}</span>
             <div class="rederive-banner-actions">
               <button type="button" class="rederive-retry" onclick={retryRederive}>Retry</button>
               <button type="button" class="rederive-dismiss" onclick={dismissRederiveError} aria-label="Dismiss">&times;</button>

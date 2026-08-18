@@ -155,7 +155,7 @@ describe("editor store", () => {
       expect(state.error).toBeNull();
     });
 
-    it("a failed rederive job sets error (from error_detail) and clears updating", async () => {
+    it("a failed rederive job sets rederiveError (from error_detail), NOT error, and clears updating", async () => {
       const { createEditorStore } = await import("./editor");
       const store = createEditorStore();
       applyEditMock.mockResolvedValueOnce(editResponse());
@@ -166,10 +166,11 @@ describe("editor store", () => {
 
       const state = get(store);
       expect(state.updating).toBe(false);
-      expect(state.error).toBe("rederive blew up");
+      expect(state.rederiveError).toBe("rederive blew up");
+      expect(state.error).toBeNull();
     });
 
-    it("a 422 sets error and leaves score unchanged", async () => {
+    it("a 422 sets error, NOT rederiveError, and leaves score unchanged", async () => {
       const { createEditorStore } = await import("./editor");
       const { EditApiError } = await import("./api");
       const store = createEditorStore();
@@ -182,9 +183,50 @@ describe("editor store", () => {
 
       const state = get(store);
       expect(state.error).toBe("pitch must be an integer 0-127");
+      expect(state.rederiveError).toBeNull();
       expect(state.score).toBe(before);
       expect(state.updating).toBe(false);
       expect(getJobMock).not.toHaveBeenCalled();
+    });
+
+    it("starting a new apply() clears a stale rederiveError from a previous op's failed rederive", async () => {
+      const { createEditorStore } = await import("./editor");
+      const store = createEditorStore();
+
+      applyEditMock.mockResolvedValueOnce(editResponse());
+      getJobMock.mockResolvedValueOnce(job("failed", { error_detail: "rederive blew up" }));
+      await store.apply("p1", { type: "delete_note", eventId: "e1" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get(store).rederiveError).toBe("rederive blew up");
+
+      applyEditMock.mockResolvedValueOnce(editResponse());
+      getJobMock.mockResolvedValue(job("succeeded"));
+      await store.apply("p1", { type: "delete_note", eventId: "e2" });
+
+      expect(get(store).rederiveError).toBeNull();
+    });
+
+    it("a stuck rederive job stops polling after MAX_POLL_ATTEMPTS and sets a timeout rederiveError", async () => {
+      const { createEditorStore } = await import("./editor");
+      const store = createEditorStore();
+      applyEditMock.mockResolvedValueOnce(editResponse());
+      getJobMock.mockResolvedValue(job("running")); // never terminates
+
+      await store.apply("p1", { type: "delete_note", eventId: "e1" });
+      expect(get(store).updating).toBe(true);
+
+      // 120 attempts * 500ms = 60s; add slack to be sure the cap has tripped.
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      const state = get(store);
+      expect(state.updating).toBe(false);
+      expect(state.rederiveError).toBe("Notation update timed out — Retry");
+      expect(state.error).toBeNull();
+
+      // Polling actually stopped — no further getJob calls after the cap.
+      const callsAtCap = getJobMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(getJobMock.mock.calls.length).toBe(callsAtCap);
     });
 
     it("two rapid apply() calls serialize: the second's HTTP call waits for the first's, not its rederive poll", async () => {
@@ -391,7 +433,7 @@ describe("editor store", () => {
   });
 
   describe("reset()", () => {
-    it("clears score/selectedEventId/updating/canUndo/canRedo/error back to initial state", async () => {
+    it("clears score/selectedEventId/updating/error/rederiveError, and resets canUndo/canRedo to their optimistic true default", async () => {
       const { createEditorStore } = await import("./editor");
       const store = createEditorStore();
 
@@ -411,9 +453,14 @@ describe("editor store", () => {
       expect(state.selectedEventId).toBeNull();
       expect(state.score).toBeNull();
       expect(state.updating).toBe(false);
-      expect(state.canUndo).toBe(false);
-      expect(state.canRedo).toBe(false);
+      // Optimistic default (IMPORTANT 3) — NOT false: a reopened project has
+      // no way to know its real server-side history bounds up front, and the
+      // History buttons must not go dead just because the store doesn't know
+      // yet. The first undo/redo press discovers the real bound via a 409.
+      expect(state.canUndo).toBe(true);
+      expect(state.canRedo).toBe(true);
       expect(state.error).toBeNull();
+      expect(state.rederiveError).toBeNull();
     });
 
     it("abandons a mid-flight rederive poll: a late resolution after reset() never writes into the store, and a subsequent apply() still works", async () => {
@@ -435,9 +482,10 @@ describe("editor store", () => {
         selectedEventId: null,
         score: null,
         updating: false,
-        canUndo: false,
-        canRedo: false,
+        canUndo: true,
+        canRedo: true,
         error: null,
+        rederiveError: null,
       });
 
       // The abandoned poll's late result must not resurrect any state.
@@ -447,9 +495,10 @@ describe("editor store", () => {
         selectedEventId: null,
         score: null,
         updating: false,
-        canUndo: false,
-        canRedo: false,
+        canUndo: true,
+        canRedo: true,
         error: null,
+        rederiveError: null,
       });
 
       // A subsequent apply() on the freshly-reset store still works

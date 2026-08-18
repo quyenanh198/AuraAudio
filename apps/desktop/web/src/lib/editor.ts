@@ -1,8 +1,21 @@
 // Editor store contract: {selectedEventId, score, updating, canUndo,
-// canRedo, error} with select(id), clearSelection(), setScore(score),
-// apply(projectId, op), undo(projectId), redo(projectId), revert(projectId),
-// stop() for polling teardown, and reset() for a full cross-project state
-// reset (see reset()'s own doc comment below).
+// canRedo, error, rederiveError} with select(id), clearSelection(),
+// setScore(score), apply(projectId, op), undo(projectId), redo(projectId),
+// revert(projectId), stop() for polling teardown, and reset() for a full
+// cross-project state reset (see reset()'s own doc comment below).
+//
+// `error` vs `rederiveError`: these are deliberately two separate fields,
+// not one shared "something went wrong" string. `error` is set ONLY when
+// the op itself is rejected (an apply/undo/redo/revert HTTP call fails,
+// most commonly a 422 from apply()'s op validation) — it's consumed inline,
+// per-control, by Sidebar's `fieldError()`. `rederiveError` is set ONLY
+// from pollJob's failure path (the async rederive job itself failing after
+// the op already succeeded) — it's consumed by ScoreView's dismissible
+// banner + Retry. Conflating them into one `error` field made a rejected
+// edit (422) surface as a whole-view "rederive failed" banner whose Retry
+// (re-applying set_locked) implied the rejected edit had actually gone
+// through. Every mutating call's start clears BOTH — a fresh op means any
+// stale banner from a previous op's rederive is no longer relevant.
 //
 // Deviation from the plan's abbreviated `apply(op)`/`undo()`/`redo()`/
 // `revert()` signatures (documented here since T6/T7 consume these exact
@@ -25,6 +38,20 @@
 // 409 ("no edits to revert") has no matching UI flag in this state shape,
 // so it's swallowed the same way a benign bound is elsewhere: updating
 // clears, nothing else changes, no `error` is set.
+//
+// initialState/reset() start canUndo/canRedo at TRUE, not false — a
+// deliberate semantic change from an earlier version of this store that
+// started both false. This store has no way to learn a reopened project's
+// real server-side history bounds (there's no "GET history state" call),
+// so a project that already had edits before the app was closed always
+// reopened with dead History buttons, even though the same undo was one
+// Ctrl+Z away (the keyboard shortcut calls undo()/redo() directly, bypassing
+// the button's `disabled` gate entirely). Starting optimistic and letting
+// the FIRST press discover the real bound via undo_edit/redo_edit's 409 (see
+// above) is the cheapest fix that keeps the buttons truthful once any
+// history call has actually been made — a stale-true button costs one wasted
+// click that 409s harmlessly and flips itself off; a stale-false button
+// costs the feature outright.
 
 import { writable } from "svelte/store";
 
@@ -33,6 +60,12 @@ import { TERMINAL_JOB_STATUSES, type EditOp, type EditResponse, type ScoreJson }
 import type { JobStatusResponse } from "./api";
 
 const POLL_INTERVAL_MS = 500;
+// Cap on rederive-job poll attempts (~120 * 500ms = 60s) — a job stuck in
+// "queued"/"running" forever (worker crash, dropped message, ...) would
+// otherwise re-arm setTimeout indefinitely, leaving `updating` (and the
+// "Updating notation…" pill it drives) pinned on with no way for the user
+// to recover short of reloading the page.
+const MAX_POLL_ATTEMPTS = 120;
 
 export interface EditorState {
   selectedEventId: string | null;
@@ -41,15 +74,19 @@ export interface EditorState {
   canUndo: boolean;
   canRedo: boolean;
   error: string | null;
+  rederiveError: string | null;
 }
 
 const initialState: EditorState = {
   selectedEventId: null,
   score: null,
   updating: false,
-  canUndo: false,
-  canRedo: false,
+  // Optimistic default — see the module-level comment above on why this
+  // isn't false.
+  canUndo: true,
+  canRedo: true,
   error: null,
+  rederiveError: null,
 };
 
 /** Pure predicate, exported for tests: true once a rederive job has reached
@@ -100,6 +137,7 @@ export function createEditorStore() {
   }
 
   function pollJob(jobId: string, myGeneration: number): void {
+    let attempts = 0;
     const tick = async (): Promise<void> => {
       if (myGeneration !== generation) return;
       let job: JobStatusResponse;
@@ -107,11 +145,20 @@ export function createEditorStore() {
         job = await api.getJob(jobId);
       } catch (err: unknown) {
         if (myGeneration !== generation) return;
-        update((s) => ({ ...s, updating: false, error: errorMessage(err) }));
+        update((s) => ({ ...s, updating: false, rederiveError: errorMessage(err) }));
         return;
       }
       if (myGeneration !== generation) return;
       if (!isTerminal(job.status)) {
+        attempts += 1;
+        if (attempts >= MAX_POLL_ATTEMPTS) {
+          update((s) => ({
+            ...s,
+            updating: false,
+            rederiveError: "Notation update timed out — Retry",
+          }));
+          return;
+        }
         setTimeout(() => void tick(), POLL_INTERVAL_MS);
         return;
       }
@@ -119,7 +166,7 @@ export function createEditorStore() {
         update((s) => ({
           ...s,
           updating: false,
-          error: job.error_detail ?? job.error_code ?? "rederive failed",
+          rederiveError: job.error_detail ?? job.error_code ?? "rederive failed",
         }));
         return;
       }
@@ -141,7 +188,7 @@ export function createEditorStore() {
     return enqueue(async () => {
       generation += 1;
       const myGeneration = generation;
-      update((s) => ({ ...s, updating: true, error: null }));
+      update((s) => ({ ...s, updating: true, error: null, rederiveError: null }));
 
       let response: EditResponse;
       try {
@@ -212,8 +259,9 @@ export function createEditorStore() {
     generation += 1;
   }
 
-  /** Resets the store to its initial state (score/selectedEventId/
-   * updating/canUndo/canRedo/error all cleared) and invalidates any
+  /** Resets the store to its initial state (score/selectedEventId/updating/
+   * error/rederiveError cleared, canUndo/canRedo back to their optimistic
+   * `true` default — see the module-level comment above) and invalidates any
    * in-flight rederive poll — call when a fresh `ScoreView` mounts for a
    * DIFFERENT project. `editor` is a module-level singleton and the hash
    * router swaps `ScoreView` instances without a full page reload, so
