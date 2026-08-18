@@ -102,6 +102,24 @@
    * dismissible banner (`rederiveErrorDismissed`) reopens for it even if an
    * earlier failure had already been dismissed. */
   let lastRederiveError: string | null = null;
+  /** Bumped at the START of every `refreshAfterEdit()` call — mirrors
+   * `editor.ts`'s own `generation` guard (and `projects.ts`'s) exactly, for
+   * the identical reason: `refreshAfterEdit()` is fired from a reactive
+   * effect with no queue in front of it (unlike `editor.apply()`'s own
+   * calls, which DO queue), so two rederives settling close together —
+   * e.g. an edit followed by a fast Undo before the first refresh's
+   * fetches/render have resolved — can have two `refreshAfterEdit()` calls
+   * in flight at once. Both would otherwise write the same non-reactive
+   * shared state (`score`, `cursorHandle`, `timeline`,
+   * `lastTimelineIndex`, `performedNextCalls`) with no ordering
+   * guarantee — whichever HTTP response or `loadMusicXml()` happens to
+   * resolve LAST would "win" even if it started FIRST, leaving stale
+   * notation/timeline. Every `refreshAfterEdit()` call captures the
+   * generation value current at its own start; every checkpoint after an
+   * `await` re-checks it and abandons (no further state writes) if a
+   * newer call has since started — latest-wins, same as the two existing
+   * examples. */
+  let refreshGeneration = 0;
 
   function clampZoom(percent: number): number {
     return Math.min(MAX_ZOOM_PERCENT, Math.max(MIN_ZOOM_PERCENT, percent));
@@ -414,6 +432,13 @@
    * (buildTimeline() never touches XML for timing regardless of caller).
    */
   async function refreshAfterEdit(): Promise<void> {
+    // Generation guard (see `refreshGeneration`'s own comment for the full
+    // race this closes) — captured unconditionally at the very start,
+    // mirroring `editor.ts`'s `runOp` bumping its own `generation` before
+    // doing anything else, even work that might fail/return early.
+    refreshGeneration += 1;
+    const myGeneration = refreshGeneration;
+
     const exportId = project?.exports.find((item) => item.format === "musicxml")?.id ?? null;
     if (!exportId) return;
     try {
@@ -439,6 +464,13 @@
           return resp.text();
         }),
       ]);
+      // First checkpoint: a newer refreshAfterEdit() may have started (and
+      // possibly already finished) while these two fetches were in
+      // flight. If so, this call's result is stale — abandon before
+      // touching ANY shared state (not even `score`/`editor.setScore()`),
+      // so it can never clobber what the newer call already wrote or is
+      // about to write.
+      if (myGeneration !== refreshGeneration) return;
 
       // Kept in lockstep with the ACTUALLY-rendered notation: `score` (the
       // local, non-store copy `rebuildEventPositions()`/zoom re-renders
@@ -453,6 +485,13 @@
       lastTimelineIndex = -1;
       performedNextCalls = 0;
       await notation?.loadMusicXml(xmlText);
+      // Second checkpoint: a newer refresh may have started (and written
+      // its OWN score/cursorHandle/timeline) during the `loadMusicXml()`
+      // await above — this call's `freshScore` is superseded, and calling
+      // `trySyncPlaybackTimeline`/touching selection below would stomp the
+      // newer call's state with older data.
+      if (myGeneration !== refreshGeneration) return;
+
       trySyncPlaybackTimeline(freshScore);
 
       // A note deleted by the edit that triggered this refresh can no
@@ -463,6 +502,10 @@
       }
       notation?.highlightEvent($editor.selectedEventId);
     } catch (err: unknown) {
+      // A stale call's failure must not overwrite a newer call's (possibly
+      // already-successful) outcome with an error banner for a fetch/render
+      // nobody cares about anymore.
+      if (myGeneration !== refreshGeneration) return;
       // Non-fatal, same spirit as `syncError` elsewhere in this file: the
       // previously-rendered notation stays up rather than blanking the view.
       syncError = err instanceof Error ? err.message : String(err);
