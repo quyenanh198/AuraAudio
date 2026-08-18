@@ -479,20 +479,51 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    optimistic locking, locks) plus the UI to drive it, building on the Score
    view/OSMD/export foundation sub-project 3 just built.
 
-**Known follow-up, not yet its own sub-project:** `musicxml/export.py`
-appends notes to each measure/staff in list order rather than sorting by
-`notatedOnset` first — real transcribed audio's event list isn't
-guaranteed to already be onset-sorted (confirmed via a real e2e run), so
-exported rhythm can come out scrambled for both guitar and piano today.
-Predates sub-projects 2 and 3; caught (but correctly ruled out of scope)
-by sub-project 3's final review. Worth a small bounded fix on its own —
-sort each measure's events by `notatedOnset` before building notes — before
-it's forgotten as "always been like that." Sub-project 1 (offline backend
-adaptation, done) did not fold this in, nor did sub-project 2 (desktop
-shell + packaging, no reason to touch `musicxml/export.py`) — still open
-and unscheduled; a good candidate to knock out on its own before
-sub-project 4 (semantic editing) starts building on top of
-`musicxml/export.py`.
+**Update (final whole-branch fix wave, 2026-08-18): the paragraph
+previously here — claiming `musicxml/export.py` appends notes in raw list
+order and can scramble exported rhythm — was stale and wrong even at the
+time it was written. Task 1b (referenced ~90 lines above) already fixed
+onset ordering: `_events_to_notes_or_chords` groups every measure's events
+by `Fraction(notatedOnset)` and iterates `sorted(groups)`, so placement is
+always onset-ordered regardless of the input array's order (this is also
+exactly why `apps/desktop/web/src/lib/timeline.ts` documents, at length,
+that the JSON's raw event order is NOT onset-sorted — it only matters
+there because the exporter itself never relies on it). No fix was needed
+for that claim; it is retracted.
+
+What the final whole-branch review actually found real in this file was a
+different bug in the same neighborhood: `_insert_notated_events` placed
+each element at its true (correctly onset-sorted) offset but never
+clamped its duration, so two of `quantize.py`'s legitimate quantization
+artifacts — a note's notated duration overlapping the next onset, or
+running past the measure's own length — produced over-full measures and,
+for bar-crossing notes, an extra tied-continuation note with no
+corresponding onset group in the score JSON (this is what actually could
+scramble/corrupt notation, and could blank the whole Score view via
+`buildTimeline`'s count-mismatch guard). Fixed in this fix wave: every
+element's effective duration is now capped to the room available before
+the next onset (or the measure's end, for the last element), floored at
+the quantization grid — see `_insert_notated_events`'s own docstring and
+`_GRID_FLOOR_QL` in `packages/musicxml/src/musicxml/export.py`, and the
+`test_score_json_to_musicxml_clamps_intra_measure_overlap` /
+`test_score_json_to_musicxml_clamps_bar_crossing_duration` tests.
+
+One genuinely remaining fidelity limit, pre-existing and NOT touched by
+this fix (it lives in `quantize.py`, not `export.py`, and is out of this
+fix wave's scope): `quantize.py`'s `measures` dict only ever gets an entry
+for a measure number that has at least one note event in it — a measure
+spanning pure silence (an inter-phrase rest with no onsets at all) never
+appears in the score JSON's `measures` array, not even as an empty-events
+entry. `_build_single_staff`/`_build_piano_grand_staff`/
+`_build_guitar_notation_and_tab` all iterate `part_data["measures"]`
+directly, so a silent measure is not rendered as a full-measure rest —
+it's simply absent, and the exported bars end up packed contiguously with
+non-consecutive `<measure number="…">` labels (e.g. 1, 3, 5) rather than a
+true gap. Worth a small bounded fix on its own — have `quantize.py` emit
+an explicit empty-events entry for every measure number in
+`[1, last_measure_with_a_note]`, and have `export.py` render those as a
+plain full-measure rest — before it's forgotten as "always been like
+that."
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
