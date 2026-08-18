@@ -41,6 +41,14 @@ from starlette.testclient import TestClient  # noqa: E402
 
 CROSS_ORIGIN = "http://example.com"
 
+# Task 4: exact-origin CORS allowlist for `/v1/*`. These three origins mirror
+# `run_backend.WEBVIEW_ORIGINS` — see that module's inline comment for how
+# each one was verified (tauri crate source for the production origin,
+# a live `cargo tauri dev` trace for the dev origin).
+WEBVIEW_ORIGIN = "tauri://localhost"
+DEV_ORIGIN = "http://localhost:5173"
+FOREIGN_ORIGIN = "http://evil.example"
+
 
 def _client() -> TestClient:
     # `raise_server_exceptions=False`: the `/v1/*` routes hit a real
@@ -115,3 +123,51 @@ def test_v1_routes_still_respond_same_origin() -> None:
     # routed to the real handler, not swallowed by the mount; only a
     # 404 with no response body would indicate routing itself was broken.
     assert response.status_code in (200, 500)
+
+
+def test_v1_allows_webview_origin() -> None:
+    """The real Tauri webview's production origin must get CORS headers.
+
+    Cross-checks `run_backend.WEBVIEW_ORIGINS` directly (rather than just
+    hardcoding the expected value twice) so this test fails loudly if that
+    list ever drops the verified production origin.
+    """
+    assert WEBVIEW_ORIGIN in run_backend.WEBVIEW_ORIGINS
+
+    response = _client().get("/v1/jobs/some-job-id", headers={"Origin": WEBVIEW_ORIGIN})
+
+    assert response.headers.get("access-control-allow-origin") == WEBVIEW_ORIGIN
+
+
+def test_v1_allows_vite_dev_origin() -> None:
+    """The `cargo tauri dev` webview origin (observed live) must also work."""
+    assert DEV_ORIGIN in run_backend.WEBVIEW_ORIGINS
+
+    response = _client().get("/v1/jobs/some-job-id", headers={"Origin": DEV_ORIGIN})
+
+    assert response.headers.get("access-control-allow-origin") == DEV_ORIGIN
+
+
+def test_v1_denies_foreign_origin() -> None:
+    """Any origin outside the allowlist gets no CORS headers at all.
+
+    This is what makes the fix in this task different from the earlier,
+    now-forbidden `allow_origins=["*"]` on the whole app: an allowlisted
+    exact-origin policy still withholds the response from cross-origin page
+    JS for everyone *except* the webview's own known origins.
+    """
+    response = _client().get("/v1/jobs/some-job-id", headers={"Origin": FOREIGN_ORIGIN})
+
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_healthz_wildcard_unchanged() -> None:
+    """The `/healthz` route's pre-existing wildcard CORS must be untouched.
+
+    Task 4 only wraps the `Mount("/", ...)` target; the `/healthz` `Route`
+    (and its own dedicated `CORSMiddleware`) is explicitly out of scope
+    (see this task's brief and `run_backend.py`'s module-level comment).
+    """
+    response = _client().get("/healthz", headers={"Origin": FOREIGN_ORIGIN})
+
+    assert response.headers.get("access-control-allow-origin") == "*"

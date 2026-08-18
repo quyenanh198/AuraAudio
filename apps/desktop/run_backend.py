@@ -80,11 +80,67 @@ AURA_BACKEND_PORT = 8317
 # A wildcard origin is acceptable for the `/healthz` route specifically:
 # it's the only route reachable this way, returns no user data (just a
 # static `{"status": "ok"}`), and this process only ever binds 127.0.0.1.
+#
+# `/v1/*` (the mounted `aura_api.main.app`) is different: it serves real
+# user-data routes, so wildcard CORS is not acceptable there (see the block
+# comment above). It still needs to be reachable from the real Tauri
+# webview though — same-origin-only (the prior behavior) makes every
+# `fetch()` the webview's own JS makes against this backend fail, which is
+# exactly the bug `/healthz`'s CORS carve-out above was already patched
+# for. The fix is an *exact-origin allowlist*: `CORSMiddleware` wrapping
+# only the mounted app, restricted to the specific origins the webview can
+# actually run from, never `["*"]`.
+#
+# Origins in `WEBVIEW_ORIGINS`, each independently verified:
+#   - "tauri://localhost" — the PRODUCTION origin on Linux/WebKitGTK (this
+#     app's only shipping target platform per `tauri.conf.json`'s
+#     `bundle.android`/no iOS/macOS config and this task's own dev
+#     environment). Confirmed by reading the installed tauri crate source
+#     directly (not assumed): `tauri-2.11.5/src/manager/mod.rs:339-346`,
+#     `Manager::tauri_protocol_url` — `if cfg!(windows) ||
+#     cfg!(target_os = "android") { http(s)://tauri.localhost } else {
+#     tauri://localhost }`. Linux takes the `else` branch, and
+#     `get_app_url` (same file, lines 348-367) falls through to
+#     `tauri_protocol_url` whenever `frontend_dist` isn't itself a
+#     `FrontendDist::Url` — true for this app (`frontendDist` in
+#     `tauri.conf.json` is the local `"../web/dist"` path, not a URL) — so
+#     the packaged app's webview genuinely loads from `tauri://localhost`
+#     in production, not `http://tauri.localhost` (that variant is
+#     Windows/Android-only, both out of scope for this app today).
+#   - "http://localhost:5173" — the OBSERVED `cargo tauri dev` origin.
+#     `devUrl` in `tauri.conf.json` is `http://localhost:5173`, and
+#     `get_app_url` (same source file, lines 353-355) uses `devUrl`
+#     directly under `#[cfg(dev)]`, so the dev webview loads the page from
+#     that literal origin. Empirically confirmed live: a temporary
+#     Origin-header logger in this file plus a temporary `fetch()` in
+#     `apps/desktop/web/src/App.svelte`, run under
+#     `xvfb-run -a cargo tauri dev`, recorded
+#     `path=/v1/projects origin=b'http://localhost:5173'` from the real
+#     webview (both temporary edits reverted before commit — see
+#     task-4-report.md for the full trace).
+#   - "http://127.0.0.1:5173" — same dev server, alternate loopback
+#     spelling. Not observed directly (the webview only ever requested the
+#     `localhost` form above), but included defensively since Vite's dev
+#     server binds both `localhost` and `127.0.0.1` on 5173 by default and
+#     a browser/webview treats them as distinct origins for CORS purposes
+#     even though they resolve to the same host.
+WEBVIEW_ORIGINS = [
+    "tauri://localhost",  # production webview origin, Linux/WebKitGTK
+    "http://localhost:5173",  # `cargo tauri dev` — observed live, see above
+    "http://127.0.0.1:5173",  # same dev server, alternate loopback form
+]
 
 
 async def _cors_healthz(request):  # noqa: ARG001 - Starlette endpoint signature
     return JSONResponse({"status": "ok"})
 
+
+v1_app = CORSMiddleware(
+    app,
+    allow_origins=WEBVIEW_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 root_app = Starlette(
     routes=[
@@ -101,7 +157,7 @@ root_app = Starlette(
                 )
             ],
         ),
-        Mount("/", app=app),
+        Mount("/", app=v1_app),
     ]
 )
 
