@@ -41,7 +41,12 @@ def test_guitar_locked_chord_member_still_respected():
 
 
 def test_piano_locked_hand_respected():
+    # Unconstrained, register places pitch 40 on the left hand — verified
+    # directly before asserting the lock (to "right") wins, so this can't
+    # pass vacuously if a future cost-weight tweak ever changes the default.
     events = [_ev(40, "0/1"), _ev(76, "1/4")]
+    unconstrained = assign_piano(events)
+    assert unconstrained[0] != "right"
     result = assign_piano(events, locked={0: "right"})  # against register intuition
     assert result[0] == "right"
     assert result[1] in ("left", "right")
