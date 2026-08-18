@@ -389,4 +389,82 @@ describe("editor store", () => {
       expect(state.updating).toBe(false);
     });
   });
+
+  describe("reset()", () => {
+    it("clears score/selectedEventId/updating/canUndo/canRedo/error back to initial state", async () => {
+      const { createEditorStore } = await import("./editor");
+      const store = createEditorStore();
+
+      // Build up state a real editing session would leave behind: a
+      // selection, and (via a successful apply()) canUndo/score.
+      store.select("e1");
+      applyEditMock.mockResolvedValueOnce(editResponse());
+      getJobMock.mockResolvedValue(job("succeeded"));
+      await store.apply("p1", { type: "delete_note", eventId: "e1" });
+      expect(get(store).canUndo).toBe(true);
+      expect(get(store).selectedEventId).toBe("e1");
+      expect(get(store).score).not.toBeNull();
+
+      store.reset();
+
+      const state = get(store);
+      expect(state.selectedEventId).toBeNull();
+      expect(state.score).toBeNull();
+      expect(state.updating).toBe(false);
+      expect(state.canUndo).toBe(false);
+      expect(state.canRedo).toBe(false);
+      expect(state.error).toBeNull();
+    });
+
+    it("abandons a mid-flight rederive poll: a late resolution after reset() never writes into the store, and a subsequent apply() still works", async () => {
+      const { createEditorStore } = await import("./editor");
+      const store = createEditorStore();
+
+      applyEditMock.mockResolvedValueOnce(editResponse({ rederive_job_id: "job-stale" }));
+      let resolveStaleJob: (j: JobStatusResponse) => void = () => {};
+      const staleJobPending = new Promise<JobStatusResponse>((resolve) => {
+        resolveStaleJob = resolve;
+      });
+      getJobMock.mockImplementationOnce(() => staleJobPending);
+
+      await store.apply("p1", { type: "delete_note", eventId: "e1" });
+      expect(get(store).updating).toBe(true); // poll still in flight
+
+      store.reset();
+      expect(get(store)).toEqual({
+        selectedEventId: null,
+        score: null,
+        updating: false,
+        canUndo: false,
+        canRedo: false,
+        error: null,
+      });
+
+      // The abandoned poll's late result must not resurrect any state.
+      resolveStaleJob(job("failed", { error_detail: "stale, post-reset failure" }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get(store)).toEqual({
+        selectedEventId: null,
+        score: null,
+        updating: false,
+        canUndo: false,
+        canRedo: false,
+        error: null,
+      });
+
+      // A subsequent apply() on the freshly-reset store still works
+      // end-to-end (new project's first edit).
+      const freshScore = score();
+      applyEditMock.mockResolvedValueOnce(editResponse({ score: freshScore, rederive_job_id: "job-fresh" }));
+      getJobMock.mockResolvedValueOnce(job("succeeded"));
+
+      await store.apply("p2", { type: "delete_note", eventId: "e2" });
+
+      const state = get(store);
+      expect(state.score).toBe(freshScore);
+      expect(state.canUndo).toBe(true);
+      expect(state.canRedo).toBe(false);
+      expect(state.error).toBeNull();
+    });
+  });
 });

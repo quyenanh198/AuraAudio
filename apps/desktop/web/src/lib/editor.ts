@@ -1,7 +1,8 @@
 // Editor store contract: {selectedEventId, score, updating, canUndo,
 // canRedo, error} with select(id), clearSelection(), setScore(score),
 // apply(projectId, op), undo(projectId), redo(projectId), revert(projectId),
-// and stop() for polling teardown.
+// stop() for polling teardown, and reset() for a full cross-project state
+// reset (see reset()'s own doc comment below).
 //
 // Deviation from the plan's abbreviated `apply(op)`/`undo()`/`redo()`/
 // `revert()` signatures (documented here since T6/T7 consume these exact
@@ -211,6 +212,26 @@ export function createEditorStore() {
     generation += 1;
   }
 
+  /** Resets the store to its initial state (score/selectedEventId/
+   * updating/canUndo/canRedo/error all cleared) and invalidates any
+   * in-flight rederive poll — call when a fresh `ScoreView` mounts for a
+   * DIFFERENT project. `editor` is a module-level singleton and the hash
+   * router swaps `ScoreView` instances without a full page reload, so
+   * without this a project switch leaks the outgoing project's
+   * `updating`/`canUndo`/`canRedo`/`error`/`selectedEventId` into the
+   * incoming project's freshly-loaded view until its own first edit
+   * happens to overwrite them (see task-7-report.md's "editor store has no
+   * cross-project reset" finding, closed by this method).
+   *
+   * Bumps `generation` itself rather than relying on a prior `stop()` call
+   * (e.g. from the outgoing view's `onDestroy`) — a poll still in flight
+   * at the moment `reset()` runs is abandoned exactly like `stop()`'s,
+   * regardless of call order. */
+  function reset(): void {
+    generation += 1;
+    update(() => initialState);
+  }
+
   return {
     subscribe,
     select,
@@ -221,6 +242,7 @@ export function createEditorStore() {
     redo,
     revert,
     stop,
+    reset,
   };
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBuffers, schedulePlan, synthSamplerDefaults } from "./synth";
+import { buildBuffers, guardSamplerReady, schedulePlan, synthSamplerDefaults } from "./synth";
 import type { ScoreEvent } from "./types";
 
 function event(overrides: Partial<ScoreEvent> = {}): ScoreEvent {
@@ -193,5 +193,44 @@ describe("synthSamplerDefaults", () => {
 
   it("matches smplr's own PARAM_DEFAULTS values (0.3 / 20000 / 0) so behavior is unchanged from smplr's built-in fallback, not just non-undefined", () => {
     expect(synthSamplerDefaults()).toEqual({ decayTime: 0.3, lpfCutoffHz: 20000, detune: 0 });
+  });
+});
+
+describe("guardSamplerReady", () => {
+  // Regression coverage for the dispose/rebuild race (task-7-report.md's
+  // "smplr 'disposed instance' unhandled rejection" finding): a rapid
+  // synth rebuild can dispose a Sampler whose internal load is still in
+  // flight, and smplr's own loadInstrument() then throws this exact
+  // message from inside the load promise's chain. These tests attach
+  // their own handler to every rejected promise they create in the same
+  // synchronous turn (via guardSamplerReady itself, or an explicit
+  // `.catch`/`rejects` assertion) specifically so no case here produces a
+  // real unhandled rejection during the test run — that would defeat the
+  // point of a test for a function whose entire job is preventing exactly
+  // that.
+  it("swallows a 'disposed Smplr instance' rejection and resolves quietly", async () => {
+    const disposedRejection = Promise.reject(
+      new Error("Cannot load an instrument on a disposed Smplr instance."),
+    );
+
+    await expect(guardSamplerReady(disposedRejection)).resolves.toBeUndefined();
+  });
+
+  it("re-throws any other rejection unchanged, so a genuine load failure still surfaces", async () => {
+    const realError = new Error("network error fetching sample buffer");
+    const genuineRejection = Promise.reject(realError);
+
+    await expect(guardSamplerReady(genuineRejection)).rejects.toBe(realError);
+  });
+
+  it("resolves normally when the underlying ready promise resolves normally", async () => {
+    await expect(guardSamplerReady(Promise.resolve())).resolves.toBeUndefined();
+  });
+
+  it("matches on the disposed-instance message case-insensitively and doesn't require an exact string", () => {
+    // Guards against the match becoming over-specific (e.g. an exact
+    // string compare) if smplr ever slightly rewords its own message.
+    const rejection = Promise.reject(new Error("DISPOSED smplr instance, cannot proceed"));
+    return expect(guardSamplerReady(rejection)).resolves.toBeUndefined();
   });
 });

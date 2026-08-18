@@ -734,6 +734,16 @@
   });
 
   onMount(() => {
+    // `editor` is a module-level singleton and this component is remounted
+    // per project (the hash router swaps `ScoreView` instances via
+    // `{#key projectId}` rather than reloading the page) — reset() clears
+    // whatever the PREVIOUS project's session left behind
+    // (updating/canUndo/canRedo/error/selectedEventId) and abandons any of
+    // its still in-flight rederive polls, before loadScore() below seeds
+    // the store with this project's own score. See editor.ts's reset() doc
+    // comment and task-7-report.md's "editor store has no cross-project
+    // reset" finding, which this closes.
+    editor.reset();
     window.addEventListener("keydown", handleKeydown);
     void loadScore();
   });

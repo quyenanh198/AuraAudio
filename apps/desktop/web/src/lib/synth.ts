@@ -194,6 +194,39 @@ export function synthSamplerDefaults(): { decayTime: number; lpfCutoffHz: number
   return { decayTime: 0.3, lpfCutoffHz: 20000, detune: 0 };
 }
 
+/** Guards a smplr `Sampler`'s `ready` promise against the dispose/rebuild
+ * race documented at the `guardSamplerReady(sampler.ready)` call site
+ * below: `Sampler(ctx, options)` kicks off async sample-buffer loading
+ * immediately in its constructor and resolves by internally calling
+ * `smplr.loadInstrument(...)`; if `dispose()` lands on that same instance
+ * before that load finishes (e.g. the synth-follows-store effect in
+ * ScoreView.svelte rebuilding on a second edit fired within ~1s of the
+ * first — see task-7-report.md's "smplr 'disposed instance' unhandled
+ * rejection" finding), smplr's own `loadInstrument` throws `Error("Cannot
+ * load an instrument on a disposed Smplr instance.")` from inside that
+ * exact promise chain. Nothing else observes `sampler.ready`, so without
+ * this guard that throw escapes as a genuine unhandled promise rejection —
+ * confirmed non-fatal (playback/state were never corrupted) but noisy.
+ *
+ * Swallows ONLY that disposal-time failure (matched by message, since
+ * smplr does not export a typed error for it) and resolves quietly;
+ * anything else re-throws unchanged, so a genuine instrument-load failure
+ * (corrupt sample, real bug) still surfaces exactly as it would without
+ * this guard.
+ *
+ * Extracted as its own pure function (rather than inlined at the call
+ * site) so this exact swallow-vs-re-throw decision is unit-tested (see
+ * synth.test.ts) without needing a real AudioContext/Sampler — the
+ * "disposed instance" throw itself comes from smplr's own code, not this
+ * codebase's, so what matters here is provably which rejections this
+ * function swallows and which it lets through. */
+export function guardSamplerReady(ready: Promise<void>): Promise<void> {
+  return ready.catch((err: unknown) => {
+    if (err instanceof Error && /disposed/i.test(err.message)) return;
+    throw err;
+  });
+}
+
 export function createSynthSource(score: ScoreJson, instrument: SynthInstrument): SynthPlaybackSource {
   const events = flattenEvents(score);
   const totalDuration = scoreDuration(events);
@@ -207,6 +240,12 @@ export function createSynthSource(score: ScoreJson, instrument: SynthInstrument)
     destination: gainNode,
     ...synthSamplerDefaults(),
   });
+  // Fire-and-forget by design (mirrors `void ctx.resume()` below): nothing
+  // in this module needs to await instrument loading, this call exists
+  // purely to attach a rejection handler before smplr's internal load
+  // chain can reject unobserved. See guardSamplerReady's doc comment for
+  // the race this closes.
+  void guardSamplerReady(sampler.ready);
 
   let scheduledStops: Array<(time?: number) => void> = [];
   let playing = false;
