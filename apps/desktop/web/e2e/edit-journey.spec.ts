@@ -185,6 +185,13 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     // `vf-notehead` class — confirmed present in the installed OSMD
     // 2.1.2 bundle) rather than a hardcoded pixel offset, so the click
     // lands on genuine note geometry regardless of layout/zoom.
+    // `.first()` assumes DOM order == onset order (VexFlow draws
+    // left-to-right, so the earliest-onset notehead is first in the DOM) —
+    // holds for this fixture's single-voice notation staff (voice 1 only,
+    // even where basic-pitch's harmonic detection produces same-onset
+    // chord tones — those just tie for "first," not break the ordering).
+    // Revisit if the fixture ever gains a second voice, where DOM emission
+    // order across voices is not verified to track onset order.
     const notehead = page.locator(".notation-host .vf-notehead").first();
     await expect(notehead).toBeVisible({ timeout: RENDER_TIMEOUT_MS });
     await notehead.click();
