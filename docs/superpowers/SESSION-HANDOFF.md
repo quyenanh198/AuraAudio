@@ -613,6 +613,16 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       invalidate that project's `scoreHeadRevisionId` settings pointer (Task
       3) — otherwise the project would keep serving the old, edited score
       instead of the fresh transcription.
+   9. **The transcribe->edit->undo->export journey is now automated** (a
+      follow-up flagged at the top of this document, closed): a committed
+      Playwright regression test, `apps/desktop/web/e2e/edit-journey.spec.ts`
+      (`npm run test:e2e` / `make e2e-web`), drives the real UI against a
+      really-spawned backend and a real Vite dev server — upload, real
+      basic-pitch transcription, click-select a note on the rendered SVG,
+      pitch edit, undo, redo, and an export-download assertion that mirrors
+      the real `musicxml.export._spell_pitch` spelling function as an
+      oracle rather than reimplementing it. No app source or testability
+      hooks were added.
 
 **Update (final whole-branch fix wave, 2026-08-18): the paragraph
 previously here — claiming `musicxml/export.py` appends notes in raw list

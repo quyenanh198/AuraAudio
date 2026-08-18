@@ -1,4 +1,4 @@
-.PHONY: install test lint up down
+.PHONY: install test lint up down e2e-web
 
 install:
 	uv sync --all-packages
@@ -13,6 +13,12 @@ test:
 
 lint:
 	uv run ruff check .
+
+# Slow (~1-2 min), real basic-pitch/tensorflow transcription against a real
+# spawned backend + Vite dev server — not part of `make test`. See
+# apps/desktop/web/playwright.config.ts and e2e/edit-journey.spec.ts.
+e2e-web:
+	cd apps/desktop/web && npm run test:e2e
 
 up:
 	docker compose -f infra/docker-compose.yml up -d

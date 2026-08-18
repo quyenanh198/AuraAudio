@@ -14,3 +14,6 @@ dump.rdb
 apps/desktop/build/
 apps/desktop/data/
 apps/desktop/src-tauri/resources/
+apps/desktop/web/test-results/
+apps/desktop/web/playwright-report/
+apps/desktop/web/blob-report/
