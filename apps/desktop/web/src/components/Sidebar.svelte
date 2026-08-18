@@ -319,7 +319,7 @@
             <div class="fact fact-editable">
               <dt>Key</dt>
               <dd>
-                <select class="fact-select" value={part.key} onchange={(e) => handleKeyChange((e.currentTarget as HTMLSelectElement).value)}>
+                <select class="fact-select" value={part.key} onchange={(e) => handleKeyChange((e.currentTarget as HTMLSelectElement).value)} aria-label="Key">
                   {#each keyOptions as option (option)}
                     <option value={option}>{option}</option>
                   {/each}
@@ -351,6 +351,7 @@
                   value={tempoInput}
                   oninput={(e) => (tempoInput = (e.currentTarget as HTMLInputElement).value)}
                   onchange={commitTempo}
+                  aria-label="Tempo"
                 />
                 <span class="unit">BPM</span>
                 <span class="confidence-dots" title={`${Math.round(part.confidence.tempo * 100)}% confidence`}>
@@ -372,7 +373,7 @@
             <div class="fact fact-editable">
               <dt>Meter</dt>
               <dd>
-                <select class="fact-select" value={part.meter} onchange={(e) => handleMeterChange((e.currentTarget as HTMLSelectElement).value)}>
+                <select class="fact-select" value={part.meter} onchange={(e) => handleMeterChange((e.currentTarget as HTMLSelectElement).value)} aria-label="Meter">
                   {#each METER_OPTIONS as option (option)}
                     <option value={option}>{option}</option>
                   {/each}
