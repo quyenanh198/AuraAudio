@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import copy
+import uuid
+from fractions import Fraction
+
+from score_schema.validate import validate_score
+
+# Mirrors aura_worker.stages.structure.METER_CANDIDATES keys (copied so this
+# package stays standalone); verify against that file and keep in sync.
+_ALLOWED_METERS = ("4/4", "3/4")
+
+
+class EditError(ValueError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def beats_per_measure(meter: str) -> Fraction:
+    num, den = meter.split("/")
+    return Fraction(int(num)) * Fraction(4, int(den))
+
+
+def seconds_per_beat(time_map: list[dict]) -> float:
+    b0, b1 = time_map[0], time_map[1]
+    return (b1["seconds"] - b0["seconds"]) / (b1["beat"] - b0["beat"])
+
+
+def _fraction(text: str, what: str) -> Fraction:
+    try:
+        num, den = text.split("/")
+        f = Fraction(int(num), int(den))
+    except (ValueError, ZeroDivisionError) as exc:
+        raise EditError(f"invalid {what}: {text!r}") from exc
+    if f < 0:
+        raise EditError(f"{what} must be >= 0")
+    return f
+
+
+def _find_event(part: dict, event_id: str) -> tuple[dict, dict]:
+    for measure in part["measures"]:
+        for event in measure["events"]:
+            if event["id"] == event_id:
+                return measure, event
+    raise EditError(f"unknown event: {event_id}")
+
+
+def _retime(score: dict, part: dict, measure: dict, event: dict) -> None:
+    """Recompute onsetSeconds/offsetSeconds from notated position + timeMap."""
+    spb = seconds_per_beat(score["timeMap"])
+    bpm_frac = beats_per_measure(part["meter"])
+    onset_beats = _fraction(event["notatedOnset"], "notatedOnset") * 4
+    duration_beats = _fraction(event["notatedDuration"], "notatedDuration") * 4
+    absolute = (measure["number"] - 1) * bpm_frac + onset_beats
+    event["onsetSeconds"] = float(absolute) * spb
+    event["offsetSeconds"] = float(absolute + duration_beats) * spb
+
+
+def _rebucket(part: dict, old_meter: str, new_meter: str) -> None:
+    """Reassign events to measures for a new meter, preserving absolute beats."""
+    old_bpm = beats_per_measure(old_meter)
+    new_bpm = beats_per_measure(new_meter)
+    flat: list[tuple[Fraction, dict]] = []
+    for measure in part["measures"]:
+        for event in measure["events"]:
+            onset_beats = _fraction(event["notatedOnset"], "notatedOnset") * 4
+            flat.append(((measure["number"] - 1) * old_bpm + onset_beats, event))
+    flat.sort(key=lambda pair: pair[0])
+    buckets: dict[int, list[dict]] = {}
+    for absolute, event in flat:
+        number = int(absolute // new_bpm) + 1
+        within = absolute - (number - 1) * new_bpm
+        whole = within / 4
+        event["notatedOnset"] = f"{whole.numerator}/{whole.denominator}"
+        buckets.setdefault(number, []).append(event)
+    part["measures"] = [
+        {"number": number, "events": events}
+        for number, events in sorted(buckets.items())
+    ]
+
+
+def apply_edit(score: dict, op: dict) -> dict:
+    out = copy.deepcopy(score)
+    part = out["parts"][0]
+    kind = op.get("type")
+
+    if kind == "set_pitch":
+        if not isinstance(op.get("pitch"), int) or not 0 <= op["pitch"] <= 127:
+            raise EditError("pitch must be an integer 0-127")
+        _, event = _find_event(part, op["eventId"])
+        event["pitch"] = op["pitch"]
+        event["locked"] = True
+
+    elif kind == "move_note":
+        measure, event = _find_event(part, op["eventId"])
+        onset_beats = _fraction(op["notatedOnset"], "notatedOnset") * 4
+        if onset_beats >= beats_per_measure(part["meter"]):
+            raise EditError("notatedOnset outside the measure")
+        event["notatedOnset"] = op["notatedOnset"]
+        event["locked"] = True
+        _retime(out, part, measure, event)
+
+    elif kind == "set_duration":
+        duration_beats = _fraction(op["notatedDuration"], "notatedDuration") * 4
+        if duration_beats <= 0:
+            raise EditError("notatedDuration must be > 0")
+        measure, event = _find_event(part, op["eventId"])
+        event["notatedDuration"] = op["notatedDuration"]
+        event["locked"] = True
+        _retime(out, part, measure, event)
+
+    elif kind == "delete_note":
+        measure, event = _find_event(part, op["eventId"])
+        measure["events"].remove(event)
+
+    elif kind == "add_note":
+        numbers = {m["number"]: m for m in part["measures"]}
+        measure = numbers.get(op.get("measureNumber"))
+        if measure is None:
+            raise EditError(f"measure {op.get('measureNumber')} does not exist")
+        if not isinstance(op.get("pitch"), int) or not 0 <= op["pitch"] <= 127:
+            raise EditError("pitch must be an integer 0-127")
+        onset_beats = _fraction(op["notatedOnset"], "notatedOnset") * 4
+        if onset_beats >= beats_per_measure(part["meter"]):
+            raise EditError("notatedOnset outside the measure")
+        event = {
+            "id": f"note_{uuid.uuid4().hex[:8]}",
+            "pitch": op["pitch"], "onsetSeconds": 0.0, "offsetSeconds": 0.0,
+            "notatedOnset": op["notatedOnset"], "notatedDuration": op["notatedDuration"],
+            "voice": op.get("voice", 1), "confidence": 1.0, "locked": True,
+            "string": None, "fret": None, "hand": None,
+        }
+        _retime(out, part, measure, event)
+        measure["events"].append(event)
+        measure["events"].sort(key=lambda e: _fraction(e["notatedOnset"], "notatedOnset"))
+
+    elif kind == "set_fingering":
+        if part["instrument"] != "guitar":
+            raise EditError("set_fingering only applies to guitar parts")
+        if not isinstance(op.get("string"), int) or not 0 <= op["string"] <= 5:
+            raise EditError("string must be an integer 0-5")
+        if not isinstance(op.get("fret"), int) or not 0 <= op["fret"] <= 20:
+            raise EditError("fret must be an integer 0-20")
+        _, event = _find_event(part, op["eventId"])
+        event["string"], event["fret"], event["locked"] = op["string"], op["fret"], True
+
+    elif kind == "set_hand":
+        if part["instrument"] != "piano":
+            raise EditError("set_hand only applies to piano parts")
+        if op.get("hand") not in ("left", "right"):
+            raise EditError("hand must be 'left' or 'right'")
+        _, event = _find_event(part, op["eventId"])
+        event["hand"], event["locked"] = op["hand"], True
+
+    elif kind == "set_locked":
+        if not isinstance(op.get("locked"), bool):
+            raise EditError("locked must be a boolean")
+        _, event = _find_event(part, op["eventId"])
+        event["locked"] = op["locked"]
+
+    elif kind == "set_part_fact":
+        field, value = op.get("field"), op.get("value")
+        if field == "tempoBpm":
+            if not isinstance(value, (int, float)) or not 20 <= value <= 300:
+                raise EditError("tempoBpm must be a number 20-300")
+            part["tempoBpm"] = float(value)
+            spb = 60.0 / float(value)
+            out["timeMap"] = [{"beat": 0, "seconds": 0.0}, {"beat": 1, "seconds": spb}]
+            for measure in part["measures"]:
+                for event in measure["events"]:
+                    _retime(out, part, measure, event)
+        elif field == "meter":
+            if value not in _ALLOWED_METERS:
+                raise EditError(f"meter must be one of {_ALLOWED_METERS}")
+            old_meter = part["meter"]
+            part["meter"] = value
+            _rebucket(part, old_meter, value)
+            for measure in part["measures"]:
+                for event in measure["events"]:
+                    _retime(out, part, measure, event)
+        elif field == "key":
+            if not isinstance(value, str) or not value.strip():
+                raise EditError("key must be a non-empty string")
+            part["key"] = value
+        else:
+            raise EditError(f"unknown part fact: {field}")
+
+    else:
+        raise EditError(f"unknown edit type: {kind}")
+
+    validate_score(out)
+    return out
