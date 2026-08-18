@@ -469,14 +469,12 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       worth a real investigation in a future session if it recurs outside
       this environment. The existing Home screen's "Retry" button lets a
       user recover from it today.
-   2. **Export-to-cwd, carried from Task 6, still real.** `<a download>` in
-      the real WebKitGTK webview has no Rust `download-started` wiring, so
-      exported MusicXML/MIDI files land in the Tauri process's cwd, not a
-      user-chosen location. Needs `src-tauri` wiring to Tauri's
-      `download-started`/save-dialog APIs — a good candidate for a small,
-      bounded follow-up task before or alongside sub-project 4, since
-      semantic editing will make exports something users reach for
-      constantly, not just once per transcription.
+   2. **Export-to-cwd — RESOLVED after sub-project 4** by a bounded
+      follow-up task: exports now open a native save dialog via the Tauri
+      v2 `dialog` + `fs` plugins (`saveExport.ts`; minimal capabilities —
+      `dialog:allow-save` + `fs:allow-write-file`, with the dialog plugin
+      extending the fs scope to the user-picked path at runtime). Plain
+      `<a download>` remains only as the non-Tauri dev-browser fallback.
 
 4. **Semantic editing. DONE — 8 of 8 planned tasks plus one corrective
    task (7b) implemented and reviewed clean, final whole-branch review
@@ -671,7 +669,7 @@ including their final whole-branch reviews and fix waves, and merged to
 main. The next piece of work has no spec yet — start with
 `superpowers:brainstorming` on whatever the user directs (candidate
 follow-ups are recorded in the sub-project sections above: an
-export-save-location dialog via src-tauri download wiring, an automated
+an automated
 Playwright edit-journey regression test, silent-measure fidelity in
 quantize, and re-transcription head-pointer invalidation).
 
@@ -790,14 +788,15 @@ correct — check it.
   whose backend PyInstaller bundle is already ~1.6GB. Revisit with a
   sparser, pitch-shifted sample set if package size ever becomes a real
   constraint.
-- **Exported files (MusicXML/MIDI) land in the Tauri process's cwd, not a
-  user-chosen location.** The Score view's export buttons use a plain
-  `<a download>`, which WebKitGTK honors but with no native save dialog —
-  Tauri's Rust side would need `download-started` event wiring plus a save-
-  dialog API call to fix this properly. Known and accepted since sub-project
-  3's task 6, re-confirmed still true by task 9's real-app verification.
-  Worth a small bounded follow-up task, ideally before sub-project 4 makes
-  exports something users reach for constantly.
+- **Exports use a native save dialog (RESOLVED).** Originally exports
+  landed in the Tauri process's cwd via plain `<a download>`; a bounded
+  follow-up after sub-project 4 added the Tauri v2 `dialog` + `fs`
+  plugins and `apps/desktop/web/src/lib/saveExport.ts` (save dialog with
+  suggested filename, per-button Saved/error feedback, cancel = no-op;
+  `<a download>` kept as the non-Tauri dev-browser fallback). Capabilities
+  are minimal — `dialog:allow-save` + `fs:allow-write-file`; the dialog
+  plugin extends the fs scope to the picked path at runtime, so no static
+  directory scope exists.
 - **After changing anything under `apps/api`'s routes** (the backend the
   desktop app bundles), the PyInstaller `aura-backend` bundle
   (`apps/desktop/dist/aura-backend/`, staged into
