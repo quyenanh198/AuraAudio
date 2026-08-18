@@ -131,8 +131,13 @@ function midiToSmplrName(midi: number): string {
  * explicit sort below. Object key insertion order is preserved by every JS
  * engine for non-integer-like string keys (our note names, e.g. "A2",
  * "C#4"), so sorting entries by MIDI before insertion is a real, reliable
- * fix — not a coincidence relying on iteration-order behavior. */
-function buildBuffers(modules: Record<string, string>): Record<string, string> {
+ * fix — not a coincidence relying on iteration-order behavior.
+ *
+ * Exported (rather than kept module-private) specifically so this fix is
+ * regression-tested directly (see synth.test.ts) against a synthetic,
+ * deliberately out-of-MIDI-order input — pinning the sort without needing
+ * the real glob-derived file lists or a live `Sampler`/`AudioContext`. */
+export function buildBuffers(modules: Record<string, string>): Record<string, string> {
   const entries: Array<[midi: number, name: string, url: string]> = [];
   for (const [path, url] of Object.entries(modules)) {
     const stem = path.split("/").pop()?.replace(/\.mp3$/, "") ?? "";
@@ -162,6 +167,33 @@ export interface SynthPlaybackSource extends PlaybackSource {
   dispose(): void;
 }
 
+/** The smplr `Sampler` options that must always be concrete, finite
+ * numbers — never omitted (and therefore never `undefined`) — to avoid a
+ * real upstream bug in smplr@1.0.0's `Sampler({buffers})` path
+ * (`samplerToPreset`): it builds its preset's `defaults` as
+ * `{ampRelease: options.decayTime, lpfCutoffHz: options.lpfCutoffHz,
+ * detune: options.detune}` verbatim. Omitting these options makes that
+ * object hold explicit `undefined` *values* (not absent keys), and smplr's
+ * internal merge (`__spreadValues`, a raw `Object.assign`-style copy) does
+ * NOT skip `undefined` values the way its own `pickPlaybackParams` helper
+ * does elsewhere — so those `undefined`s silently overwrite
+ * `PARAM_DEFAULTS`' real fallbacks (`detune: 0`, `lpfCutoffHz: 20000`,
+ * `ampRelease: 0.3`), which makes every note's computed `detune` become
+ * `NaN` and throw inside `new Voice()` (`AudioParam.value = NaN`) —
+ * confirmed by instrumenting smplr's own source directly against a real
+ * bundled build; see task-8-report.md's "Surprise" section for the full
+ * trace.
+ *
+ * Extracted as its own pure function (rather than inlined into the
+ * `Sampler()` call below) specifically so the workaround itself is
+ * regression-tested (see synth.test.ts) without needing a real
+ * `AudioContext`/`Sampler` — if a future edit "simplifies" this back down
+ * to omitted options, or to `undefined`s, the test catches it before it
+ * ships. */
+export function synthSamplerDefaults(): { decayTime: number; lpfCutoffHz: number; detune: number } {
+  return { decayTime: 0.3, lpfCutoffHz: 20000, detune: 0 };
+}
+
 export function createSynthSource(score: ScoreJson, instrument: SynthInstrument): SynthPlaybackSource {
   const events = flattenEvents(score);
   const totalDuration = scoreDuration(events);
@@ -173,25 +205,7 @@ export function createSynthSource(score: ScoreJson, instrument: SynthInstrument)
   const sampler: Smplr = Sampler(ctx, {
     buffers: INSTRUMENT_BUFFERS[instrument],
     destination: gainNode,
-    // Explicit, not omitted — smplr@1.0.0's `Sampler({buffers})` path
-    // (`samplerToPreset`) builds its preset's `defaults` as
-    // `{ampRelease: options.decayTime, lpfCutoffHz: options.lpfCutoffHz,
-    // detune: options.detune}` verbatim. Omitting these options makes that
-    // object hold explicit `undefined` values (not absent keys), and
-    // smplr's internal merge (`__spreadValues`, a raw `Object.assign`-style
-    // copy) does NOT skip `undefined` values the way its own
-    // `pickPlaybackParams` helper does elsewhere — so those `undefined`s
-    // silently overwrite `PARAM_DEFAULTS`' real fallbacks (`detune: 0`,
-    // `lpfCutoffHz: 20000`, `ampRelease: 0.3`), which makes every note's
-    // computed `detune` become `NaN` and throw inside `new Voice()`
-    // (`AudioParam.value = NaN`) — confirmed by instrumenting smplr's own
-    // source directly against a real bundled build; see task-8-report.md's
-    // "Surprise" section for the full trace. Passing these values
-    // explicitly (matching smplr's own PARAM_DEFAULTS) avoids the bug
-    // entirely without patching the dependency.
-    decayTime: 0.3,
-    lpfCutoffHz: 20000,
-    detune: 0,
+    ...synthSamplerDefaults(),
   });
 
   let scheduledStops: Array<(time?: number) => void> = [];

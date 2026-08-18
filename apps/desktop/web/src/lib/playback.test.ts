@@ -209,6 +209,81 @@ describe("playback store", () => {
     expect(state.source).toBe("recording");
   });
 
+  it("duration follows the active source across setSource, and seek clamps accordingly", () => {
+    const store = createPlaybackStore();
+    const recording = fakeSource({ duration: 10 });
+    const synth = fakeSource({ duration: 4 });
+    store.attachSource("recording", recording);
+    store.attachSource("synth", synth);
+
+    // "recording" is the default active source — attaching it adopts its duration.
+    expect(get(store).duration).toBe(10);
+
+    store.setSource("synth");
+    expect(get(store).duration).toBe(4);
+    store.seek(100);
+    expect(get(store).position).toBe(4); // clamped to synth's (shorter) duration
+
+    store.setSource("recording");
+    expect(get(store).duration).toBe(10);
+    store.seek(100);
+    expect(get(store).position).toBe(10); // clamped to recording's (longer) duration
+  });
+
+  it("attachSource adopts the source's duration only when attaching the currently active kind", () => {
+    const store = createPlaybackStore();
+    const recording = fakeSource({ duration: 10 });
+    store.attachSource("recording", recording);
+    expect(get(store).duration).toBe(10);
+
+    // "synth" isn't active yet — attaching it must not clobber the active
+    // recording source's duration.
+    const synth = fakeSource({ duration: 4 });
+    store.attachSource("synth", synth);
+    expect(get(store).duration).toBe(10);
+  });
+
+  it("attachSource re-adopts duration for the active kind (e.g. a fresh synth source per project load)", () => {
+    const store = createPlaybackStore();
+    const synthA = fakeSource({ duration: 4 });
+    store.attachSource("synth", synthA);
+    store.attachSource("recording", fakeSource({ duration: 10 }));
+    store.setSource("synth");
+    expect(get(store).duration).toBe(4);
+
+    // Re-attaching "synth" (e.g. ScoreView.loadScore() building a new synth
+    // source for a newly-loaded project) while it's still the active kind
+    // must adopt the new source's duration immediately.
+    const synthB = fakeSource({ duration: 7 });
+    store.attachSource("synth", synthB);
+    expect(get(store).duration).toBe(7);
+  });
+
+  it("setDuration only applies while 'recording' is the active source", () => {
+    const store = createPlaybackStore();
+    const synth = fakeSource({ duration: 4 });
+    store.attachSource("recording", fakeSource({ duration: 10 }));
+    store.attachSource("synth", synth);
+    store.setSource("synth");
+    expect(get(store).duration).toBe(4);
+
+    // A late/async `durationchange` from the `<audio>` element must not
+    // clobber the synth's duration while synth is active.
+    store.setDuration(99);
+    expect(get(store).duration).toBe(4);
+
+    // Switching back to "recording" picks up the (unclobbered) real value
+    // via setSource's own duration adoption.
+    store.setSource("recording");
+    expect(get(store).duration).toBe(10);
+  });
+
+  it("setDuration still applies normally while 'recording' is active (no attached source required)", () => {
+    const store = createPlaybackStore();
+    store.setDuration(10);
+    expect(get(store).duration).toBe(10);
+  });
+
   it("activeSourceTime() returns null when no source is attached for the current kind", () => {
     const store = createPlaybackStore();
     expect(store.activeSourceTime()).toBeNull();
