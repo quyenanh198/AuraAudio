@@ -33,12 +33,29 @@ def list_projects(db: Session = Depends(get_db)) -> list[ProjectListItem]:
             .filter(TranscriptionJob.project_id == p.id)
             .order_by(TranscriptionJob.created_at.desc()).first()
         )
-        exports = []
-        if job is not None and job.status == "succeeded":
-            exports = [
-                ProjectExportSummary(id=e.id, format=e.format)
-                for e in db.query(Export).filter(Export.job_id == job.id).all()
-            ]
+        # Query exports by PROJECT, not by the latest job's id. An edit
+        # (apply/undo/redo/revert) enqueues a NEW "rederive" TranscriptionJob
+        # row that immediately becomes the "latest job" for the project, but
+        # the rederive worker updates the project's EXISTING Export rows in
+        # place (object_key/status/revision) rather than minting new ones
+        # tied to the rederive job's id — see
+        # workers/transcription/src/aura_worker/rederive.py::run_rederive_job
+        # (`for export in session.query(Export).filter(Export.project_id ==
+        # project.id)...`). Filtering by `job.id` here made the exports list
+        # go permanently empty after a project's first edit, since Export
+        # rows never carry a rederive job's id. Filtering by project_id
+        # instead is correct for both the original export-stage creation
+        # path (workers/.../stages/export.py always sets project_id) and
+        # every subsequent rederive. A never-transcribed project still shows
+        # no exports, since no Export row exists at all until the export
+        # stage runs — this doesn't depend on `job` being present or
+        # succeeded.
+        exports = [
+            ProjectExportSummary(id=e.id, format=e.format)
+            for e in db.query(Export)
+            .filter(Export.project_id == p.id, Export.status == "succeeded")
+            .all()
+        ]
         items.append(ProjectListItem(
             id=p.id, title=p.title, instrument=p.instrument,
             created_at=p.created_at.isoformat(),
