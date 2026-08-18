@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from aura_api.migrations import run_migrations
+from aura_api.startup import recover_interrupted_jobs
 
 
 @asynccontextmanager
@@ -12,6 +13,7 @@ async def lifespan(app: FastAPI):
     # aura_api.db builds its engine at import time, so run_migrations opens
     # its own connection rather than reusing that engine.
     run_migrations()
+    recover_interrupted_jobs()
     yield
 
 
