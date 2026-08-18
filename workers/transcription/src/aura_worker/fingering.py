@@ -153,28 +153,26 @@ def _options_for_group(
         j: locked[indices[j]] for j in range(len(indices)) if indices[j] in locked
     }
 
-    if not locked_members:
-        chord_result = assign_chord(pitches)
-    else:
-        # Try the unconstrained chord solution first — if it already
-        # happens to satisfy every lock, no synthesis is needed.
-        chord_result = assign_chord(pitches)
-        satisfies_locks = all(
-            chord_result[j] == sf for j, sf in locked_members.items()
-        )
-        if not satisfies_locks:
-            # Synthesize: pin the locked members to their locked strings,
-            # and run the same per-chord assigner on the remaining members
-            # with those strings excluded, so it can never reuse them.
-            locked_strings = frozenset(sf.string for sf in locked_members.values())
-            remaining_js = [j for j in range(len(indices)) if j not in locked_members]
-            remaining_pitches = [pitches[j] for j in remaining_js]
-            remaining_result = assign_chord(remaining_pitches, excluded_strings=locked_strings)
-            chord_result = [None] * len(indices)
-            for j, sf in locked_members.items():
-                chord_result[j] = sf
-            for k, j in enumerate(remaining_js):
-                chord_result[j] = remaining_result[k]
+    # Try the unconstrained chord solution first — if there are no locked
+    # members, or it already happens to satisfy every lock, no synthesis is
+    # needed.
+    chord_result = assign_chord(pitches)
+    satisfies_locks = all(
+        chord_result[j] == sf for j, sf in locked_members.items()
+    )
+    if locked_members and not satisfies_locks:
+        # Synthesize: pin the locked members to their locked strings,
+        # and run the same per-chord assigner on the remaining members
+        # with those strings excluded, so it can never reuse them.
+        locked_strings = frozenset(sf.string for sf in locked_members.values())
+        remaining_js = [j for j in range(len(indices)) if j not in locked_members]
+        remaining_pitches = [pitches[j] for j in remaining_js]
+        remaining_result = assign_chord(remaining_pitches, excluded_strings=locked_strings)
+        chord_result = [None] * len(indices)
+        for j, sf in locked_members.items():
+            chord_result[j] = sf
+        for k, j in enumerate(remaining_js):
+            chord_result[j] = remaining_result[k]
 
     assignments = {
         indices[j]: sf for j, sf in enumerate(chord_result) if sf is not None
