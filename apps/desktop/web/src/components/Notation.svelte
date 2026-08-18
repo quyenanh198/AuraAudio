@@ -32,9 +32,21 @@
     zoom: number;
     /** Whether the guitar TAB staff (if the loaded score has one) is shown. */
     tabVisible: boolean;
+    /** Called after every OSMD `render()` triggered by a prop change
+     * (zoom/tab visibility), i.e. every time OSMD is known to have built a
+     * brand-new `Cursor` internally. `osmd.render()` does not preserve or
+     * re-attach the previous cursor — it constructs a fresh one — so the
+     * caller must use this to re-assert cursor visibility/position against
+     * the new instance (the `OSMDCursorHandle` from `getCursor()` itself
+     * stays valid across this — see the "read osmd.cursor lazily" note
+     * below — but its state, e.g. shown/hidden and step position, does
+     * not carry over and must be redriven by the caller). Not called for
+     * the initial `loadMusicXml()` render, which the caller drives
+     * directly afterward via `getCursor()`. */
+    onRerender?: () => void;
   }
 
-  let { zoom, tabVisible }: Props = $props();
+  let { zoom, tabVisible, onRerender }: Props = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let osmd: OpenSheetMusicDisplay | null = null;
@@ -64,12 +76,14 @@
     for (const staff of staves) staff.Visible = tabVisible;
     osmd.updateGraphic();
     osmd.render();
+    onRerender?.();
   }
 
   function applyZoom(): void {
     if (!osmd) return;
     osmd.zoom = zoom;
     osmd.render();
+    onRerender?.();
   }
 
   $effect(() => {
@@ -101,23 +115,54 @@
     ready = true;
   }
 
+  /** Throws the same "not loaded" error `getCursor()` always has, so every
+   * lazy accessor below fails the same way whether called too early or
+   * (in principle, e.g. a stray post-unmount callback) too late. */
+  function requireOsmd(): OpenSheetMusicDisplay {
+    if (!osmd) throw new Error("loadMusicXml() must resolve before getCursor()");
+    return osmd;
+  }
+
   export function getCursor(): OSMDCursorHandle {
     if (!osmd) throw new Error("loadMusicXml() must resolve before getCursor()");
-    const cursor = osmd.cursor;
+    // Every method below reads `requireOsmd().cursor` freshly ON EACH CALL
+    // rather than closing over a single `Cursor` captured here — `osmd.render()`
+    // (called by applyZoom()/applyTabVisibility() above on every zoom/tab
+    // toggle) constructs a BRAND NEW Cursor internally and does not reuse or
+    // update the previous one. A handle that captured `osmd.cursor` once
+    // would keep driving that discarded Cursor forever after the first
+    // re-render: the visible cursor would freeze in place and
+    // `cursorElement()` would return a node no longer attached to the
+    // document. Reading `.cursor` fresh here means this handle always
+    // drives whichever Cursor OSMD currently considers current.
     return {
-      reset: () => cursor.reset(),
-      next: () => cursor.next(),
-      previous: () => cursor.previous(),
-      show: () => cursor.show(),
-      hide: () => cursor.hide(),
-      isEndReached: () => cursor.iterator.EndReached,
-      notesUnderCursor: () => cursor.NotesUnderCursor(),
-      gNotesUnderCursor: () => cursor.GNotesUnderCursor(),
-      cursorElement: () => cursor.cursorElement ?? null,
+      reset: () => requireOsmd().cursor.reset(),
+      next: () => requireOsmd().cursor.next(),
+      previous: () => requireOsmd().cursor.previous(),
+      show: () => requireOsmd().cursor.show(),
+      hide: () => requireOsmd().cursor.hide(),
+      isEndReached: () => requireOsmd().cursor.iterator.EndReached,
+      notesUnderCursor: () => requireOsmd().cursor.NotesUnderCursor(),
+      gNotesUnderCursor: () => requireOsmd().cursor.GNotesUnderCursor(),
+      cursorElement: () => requireOsmd().cursor.cursorElement ?? null,
     };
   }
 
   onDestroy(() => {
+    if (osmd) {
+      // Best-effort: Dispose() the current Cursor (hides + removes its
+      // element, per the installed 2.1.2 typings) before clear()ing OSMD's
+      // own drawn output, so nothing lingers in the DOM after this
+      // component unmounts. Guarded in try/catch — `.cursor` can throw if
+      // load() never actually completed (e.g. unmounted mid-fetch), and
+      // this cleanup must not throw out of onDestroy in that case.
+      try {
+        osmd.cursor.Dispose();
+      } catch {
+        // No cursor to dispose — load() never completed.
+      }
+      osmd.clear();
+    }
     osmd = null;
   });
 </script>

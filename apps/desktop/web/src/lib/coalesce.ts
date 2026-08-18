@@ -12,7 +12,23 @@
 
 export type Scheduler = (flush: () => void) => void;
 
-export function createCoalescer<T>(apply: (value: T) => void, schedule: Scheduler): (value: T) => void {
+/** The function `createCoalescer` returns: callable exactly like before
+ * (`scheduleApply(value)`), plus a `cancel()` for discarding a pending
+ * value before it's ever applied. */
+export interface Coalescer<T> {
+  (value: T): void;
+  /** Discards any pending value so it is never passed to `apply` — call
+   * this on unmount/teardown, before tearing down whatever `apply` reads
+   * or touches (e.g. a disposed OSMD cursor). Note this cannot reach into
+   * a browser-level `requestAnimationFrame`/`setTimeout` id to cancel the
+   * OS-level callback itself (the `Scheduler` type never hands one back);
+   * if the underlying scheduled callback still fires later it finds
+   * nothing pending and is a no-op, same as any other already-flushed
+   * cycle. Safe to call whether or not a flush is currently pending. */
+  cancel(): void;
+}
+
+export function createCoalescer<T>(apply: (value: T) => void, schedule: Scheduler): Coalescer<T> {
   let pendingValue: T | undefined;
   let hasPending = false;
   let flushScheduled = false;
@@ -26,11 +42,18 @@ export function createCoalescer<T>(apply: (value: T) => void, schedule: Schedule
     apply(value);
   }
 
-  return function scheduleApply(value: T): void {
+  const scheduleApply = ((value: T): void => {
     pendingValue = value;
     hasPending = true;
     if (flushScheduled) return;
     flushScheduled = true;
     schedule(flush);
+  }) as Coalescer<T>;
+
+  scheduleApply.cancel = (): void => {
+    hasPending = false;
+    pendingValue = undefined;
   };
+
+  return scheduleApply;
 }

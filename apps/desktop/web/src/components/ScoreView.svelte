@@ -37,6 +37,13 @@
   let score = $state<ScoreJson | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  /** CRITICAL 1(b): set when the score itself loaded and rendered fine but
+   * building the playback timeline / walking the OSMD cursor failed (e.g.
+   * `buildTimeline`'s count-mismatch guard) — kept SEPARATE from `error`
+   * on purpose. `error` blanks the whole view (nothing usable rendered);
+   * this instead leaves the rendered score up and only disables playback
+   * sync, surfaced as a small inline, non-blocking notice. */
+  let syncError = $state<string | null>(null);
 
   let sidebarCollapsed = $state(false);
   let zoomPercent = $state(100);
@@ -103,6 +110,26 @@
     }
     cursor.reset();
     return indices;
+  }
+
+  /** IMPORTANT 2: `osmd.render()` (triggered by Notation's applyZoom()/
+   * applyTabVisibility() on every zoom change or TAB-staff toggle)
+   * constructs a brand-new OSMD Cursor internally — the previous one is
+   * simply discarded, not updated in place. Notation's `getCursor()`
+   * handle reads `osmd.cursor` fresh on every call (see its own comment),
+   * so `cursorHandle` itself keeps driving whichever Cursor is current —
+   * but a fresh Cursor's own state (visibility, iterator position) does
+   * NOT carry over from the old one, so it must be explicitly re-shown and
+   * walked back to the position that matches current playback: reset the
+   * step-tracking bookkeeping to "nothing applied yet" and re-run
+   * applyCursorForTime() for the current playback position. */
+  function handleNotationRerender(): void {
+    if (!cursorHandle) return;
+    cursorHandle.reset();
+    cursorHandle.show();
+    lastTimelineIndex = -1;
+    performedNextCalls = 0;
+    applyCursorForTime($playback.position);
   }
 
   function maybeScrollCursorIntoView(): void {
@@ -196,9 +223,34 @@
     return part?.instrument === "piano" ? "piano" : "guitar";
   }
 
+  /** CRITICAL 1(b): building the playback timeline and walking the OSMD
+   * cursor is kept in its own try/catch, separate from the score
+   * fetch/parse/render try/catch in `loadScore()` below. By this point the
+   * score has already fetched and rendered successfully — a failure here
+   * (e.g. `buildTimeline`'s count-mismatch guard) is a playback-sync-only
+   * problem, not a "nothing usable rendered" problem, so it must not blank
+   * the view the way `error` does. On failure, `cursorHandle`/`timeline`
+   * are left at their already-reset empty state (set by the caller before
+   * this runs) so playback code's `if (!cursorHandle...)` guards make
+   * sync a safe no-op, and `syncError` drives the inline notice + disabled
+   * transport play controls instead. */
+  function trySyncPlaybackTimeline(score_: ScoreJson): void {
+    try {
+      const cursor = notation?.getCursor() ?? null;
+      if (!cursor) return;
+      const nonRestStepIndices = walkNonRestStepIndices(cursor);
+      timeline = buildTimeline(score_, nonRestStepIndices);
+      cursor.show();
+      cursorHandle = cursor;
+    } catch (err: unknown) {
+      syncError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function loadScore(): Promise<void> {
     loading = true;
     error = null;
+    syncError = null;
     cursorHandle = null;
     timeline = [];
     lastTimelineIndex = -1;
@@ -234,28 +286,43 @@
       playback.attachSource("synth", synthSource);
 
       await notation?.loadMusicXml(xmlText);
-
-      const cursor = notation?.getCursor() ?? null;
-      if (cursor && score) {
-        const nonRestStepIndices = walkNonRestStepIndices(cursor);
-        timeline = buildTimeline(score, nonRestStepIndices);
-        cursor.show();
-        cursorHandle = cursor;
-      }
     } catch (err: unknown) {
       error = err instanceof Error ? err.message : String(err);
-    } finally {
       loading = false;
+      return;
     }
+    // The score fetched and rendered successfully at this point — any
+    // failure from here on is sync-only (see trySyncPlaybackTimeline) and
+    // must not blank the view that just rendered fine.
+    if (score) trySyncPlaybackTimeline(score);
+    loading = false;
   }
 
+  // IMPORTANT 3: the recording PlaybackSource must track whichever <audio>
+  // element is CURRENTLY mounted, not just the one that existed at
+  // onMount(). The <audio> element lives in the `{:else}` branch of the
+  // error/loading template below — after a load failure, that branch (and
+  // its <audio> element) is torn down, and a successful Retry mounts a
+  // BRAND NEW <audio> element with a new `audioEl` binding. An onMount-only
+  // attach would keep the playback store pointing at the original,
+  // now-detached element forever after any Retry. Reading `audioEl` here
+  // makes this effect re-run on every such mount/unmount, always attaching
+  // (or, when the element goes away, detaching) the source that matches
+  // reality. `attachSource` already fully replaces whatever was attached
+  // before in one call, so there is no separate "detach then attach" step
+  // needed here.
+  $effect(() => {
+    const el = audioEl;
+    playback.attachSource("recording", el ? createAudioSource(el) : null);
+  });
+
   onMount(() => {
-    if (audioEl) playback.attachSource("recording", createAudioSource(audioEl));
     void loadScore();
   });
 
   onDestroy(() => {
     stopLoop();
+    scheduleCursorSync.cancel();
     playback.pause();
     playback.attachSource("recording", null);
     playback.attachSource("synth", null);
@@ -297,8 +364,18 @@
         {#if loading}
           <p class="loading-note">Loading score…</p>
         {/if}
+        {#if syncError}
+          <!-- CRITICAL 1(b): inline, non-blocking — the score above rendered
+               fine; only cursor/playback sync failed. Never blanks the view. -->
+          <p class="sync-notice" role="status">Playback sync unavailable for this score.</p>
+        {/if}
         <div class="paper">
-          <Notation bind:this={notation} zoom={zoomPercent / 100} {tabVisible} />
+          <Notation
+            bind:this={notation}
+            zoom={zoomPercent / 100}
+            {tabVisible}
+            onRerender={handleNotationRerender}
+          />
         </div>
       </main>
     </div>
@@ -313,7 +390,7 @@
       onended={handleAudioEnded}
     ></audio>
 
-    <Transport onSeek={handleSeek} />
+    <Transport onSeek={handleSeek} playbackSyncAvailable={!syncError} />
   {/if}
 </div>
 
@@ -399,6 +476,21 @@
     margin: 0;
     font-size: 13px;
     color: var(--dim);
+  }
+
+  /* CRITICAL 1(b): deliberately subdued/inline, unlike .error-panel — this
+   * notice must read as "one feature is degraded", not "something broke". */
+  .sync-notice {
+    margin: 0;
+    max-width: 900px;
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(224, 99, 99, 0.08);
+    border: 1px solid rgba(224, 99, 99, 0.25);
+    color: var(--dim);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12px;
   }
 
   .paper {

@@ -6,9 +6,15 @@
      * OSMD cursor together in one lookup, whether the transport is playing
      * or paused (playback.seek() alone wouldn't touch the cursor). */
     onSeek: (t: number) => void;
+    /** CRITICAL 1(b): false when ScoreView's cursor-walk/timeline-build
+     * failed after an otherwise-successful score load — playback of the
+     * underlying audio would work, but its OSMD cursor would never move
+     * (or move to the wrong place), which is worse than just not offering
+     * play. Defaults to true so every other caller/test is unaffected. */
+    playbackSyncAvailable?: boolean;
   }
 
-  let { onSeek }: Props = $props();
+  let { onSeek, playbackSyncAvailable = true }: Props = $props();
 
   // Dragging the scrubber needs to read back what the user is dragging to,
   // not the live position (which the rAF loop is also writing to every
@@ -67,8 +73,9 @@
     type="button"
     class="play-button"
     onclick={togglePlay}
+    disabled={!playbackSyncAvailable}
     aria-label={$playback.playing ? "Pause" : "Play"}
-    title={$playback.playing ? "Pause" : "Play"}
+    title={playbackSyncAvailable ? ($playback.playing ? "Pause" : "Play") : "Playback sync unavailable for this score"}
   >
     {#if $playback.playing}
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -181,6 +188,12 @@
 
   .play-button:hover {
     filter: brightness(1.08);
+  }
+
+  .play-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    filter: none;
   }
 
   .time {

@@ -98,6 +98,42 @@ describe("createCoalescer", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  // --- IMPORTANT 2 (folded-in cleanup): cancel() -----------------------
+
+  it("cancel() discards a pending value so the flush becomes a no-op", () => {
+    const apply = vi.fn();
+    const { schedule, runPending } = manualScheduler();
+    const scheduleApply = createCoalescer(apply, schedule);
+
+    scheduleApply(1);
+    scheduleApply.cancel();
+    runPending();
+
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("cancel() before any scheduleApply() call is a safe no-op", () => {
+    const apply = vi.fn();
+    const { schedule } = manualScheduler();
+    const scheduleApply = createCoalescer(apply, schedule);
+
+    expect(() => scheduleApply.cancel()).not.toThrow();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("scheduling again after cancel() works normally", () => {
+    const apply = vi.fn();
+    const { schedule, runPending } = manualScheduler();
+    const scheduleApply = createCoalescer(apply, schedule);
+
+    scheduleApply(1);
+    scheduleApply.cancel();
+    scheduleApply(2);
+    runPending();
+
+    expect(apply).toHaveBeenCalledExactlyOnceWith(2);
+  });
+
   it("works with a real setTimeout-based scheduler under fake timers", () => {
     vi.useFakeTimers();
     try {

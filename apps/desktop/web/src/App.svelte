@@ -23,7 +23,9 @@
 </script>
 
 {#if projectId}
-  <ScoreView {projectId} />
+  {#key projectId}
+    <ScoreView {projectId} />
+  {/key}
 {:else}
   <Home />
 {/if}
