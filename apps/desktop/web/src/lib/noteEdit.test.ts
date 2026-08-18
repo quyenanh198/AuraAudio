@@ -1,0 +1,152 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  clampPitch,
+  findEvent,
+  firstEventId,
+  measureLengthWhole,
+  nameOctaveToPitch,
+  pitchToName,
+  stepDuration,
+  stepOnset,
+} from "./noteEdit";
+import type { ScoreEvent, ScoreJson } from "./types";
+
+function event(overrides: Partial<ScoreEvent> = {}): ScoreEvent {
+  return {
+    id: "e1",
+    pitch: 60,
+    onsetSeconds: 0,
+    offsetSeconds: 0.5,
+    notatedOnset: "0/1",
+    notatedDuration: "1/4",
+    voice: 1,
+    confidence: 0.9,
+    locked: false,
+    ...overrides,
+  };
+}
+
+function score(events: ScoreEvent[]): ScoreJson {
+  return {
+    schemaVersion: 4,
+    timeMap: [
+      { beat: 0, seconds: 0 },
+      { beat: 1, seconds: 0.5 },
+    ],
+    parts: [
+      {
+        instrument: "guitar",
+        tempoBpm: 120,
+        meter: "4/4",
+        key: "C major",
+        confidence: { tempo: 1, meter: 1, key: 1 },
+        measures: [{ number: 1, events }],
+      },
+    ],
+  };
+}
+
+describe("measureLengthWhole", () => {
+  it("reads meter strings as whole-note fractions directly", () => {
+    expect(measureLengthWhole("4/4")).toEqual({ n: 4, d: 4 });
+    expect(measureLengthWhole("3/4")).toEqual({ n: 3, d: 4 });
+  });
+});
+
+describe("stepOnset", () => {
+  it("moves forward and back by one grid step (1/16)", () => {
+    expect(stepOnset("1/4", 1, "4/4")).toBe("5/16");
+    expect(stepOnset("1/4", -1, "4/4")).toBe("3/16");
+  });
+
+  it("clamps at 0 when stepping back from the start of the measure", () => {
+    expect(stepOnset("0/1", -1, "4/4")).toBe("0/1");
+    expect(stepOnset("1/16", -1, "4/4")).toBe("0/1");
+  });
+
+  it("clamps at measureLength - 1/16 when stepping past the end (4/4)", () => {
+    expect(stepOnset("15/16", 1, "4/4")).toBe("15/16");
+    expect(stepOnset("14/16", 1, "4/4")).toBe("15/16");
+  });
+
+  it("clamps at measureLength - 1/16 for a 3/4 measure", () => {
+    // 3/4 meter -> measure length 3/4 whole notes = 12/16; last valid tick 11/16.
+    expect(stepOnset("11/16", 1, "3/4")).toBe("11/16");
+    expect(stepOnset("10/16", 1, "3/4")).toBe("11/16");
+  });
+
+  it("normalizes non-16ths-denominator input onto the grid", () => {
+    expect(stepOnset("1/2", 1, "4/4")).toBe("9/16");
+  });
+});
+
+describe("stepDuration", () => {
+  it("moves forward and back by one grid step", () => {
+    expect(stepDuration("1/4", 1)).toBe("5/16");
+    expect(stepDuration("1/4", -1)).toBe("3/16");
+  });
+
+  it("clamps at a minimum of one grid step (never reaches/crosses zero)", () => {
+    expect(stepDuration("1/16", -1)).toBe("1/16");
+  });
+
+  it("has no upper clamp", () => {
+    expect(stepDuration("1/1", 1)).toBe("17/16");
+  });
+});
+
+describe("pitch <-> name", () => {
+  it("formats known MIDI numbers in scientific pitch notation", () => {
+    expect(pitchToName(60)).toBe("C4");
+    expect(pitchToName(61)).toBe("C#4");
+    expect(pitchToName(59)).toBe("B3");
+    expect(pitchToName(0)).toBe("C-1");
+    expect(pitchToName(127)).toBe("G9");
+  });
+
+  it("clampPitch clamps to the valid MIDI range and rounds", () => {
+    expect(clampPitch(-5)).toBe(0);
+    expect(clampPitch(200)).toBe(127);
+    expect(clampPitch(60.6)).toBe(61);
+  });
+
+  it("nameOctaveToPitch round-trips through pitchToName", () => {
+    expect(nameOctaveToPitch("C", 4)).toBe(60);
+    expect(nameOctaveToPitch("C#", 4)).toBe(61);
+    expect(nameOctaveToPitch("C", -1)).toBe(0);
+    expect(nameOctaveToPitch("G", 9)).toBe(127);
+  });
+});
+
+describe("findEvent", () => {
+  it("finds an event and its measure number", () => {
+    const s = score([event({ id: "e1" }), event({ id: "e2" })]);
+    const found = findEvent(s, "e2");
+    expect(found?.event.id).toBe("e2");
+    expect(found?.measureNumber).toBe(1);
+  });
+
+  it("returns null for a missing event, null score, or null id", () => {
+    const s = score([event({ id: "e1" })]);
+    expect(findEvent(s, "does-not-exist")).toBeNull();
+    expect(findEvent(null, "e1")).toBeNull();
+    expect(findEvent(s, null)).toBeNull();
+  });
+});
+
+describe("firstEventId", () => {
+  it("returns the first event of the first non-empty measure", () => {
+    const s: ScoreJson = score([]);
+    s.parts[0].measures = [
+      { number: 1, events: [] },
+      { number: 2, events: [event({ id: "e5" }), event({ id: "e6" })] },
+    ];
+    expect(firstEventId(s)).toBe("e5");
+  });
+
+  it("returns null for an empty score", () => {
+    expect(firstEventId(score([]))).toBeNull();
+    expect(firstEventId(null)).toBeNull();
+  });
+});

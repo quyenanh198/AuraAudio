@@ -6,6 +6,7 @@
   import { createCoalescer } from "../lib/coalesce";
   import { buildEventPositionIndex, type StepNoteInfo } from "../lib/correlate";
   import { editor } from "../lib/editor";
+  import { clampPitch, findEvent, firstEventId, stepOnset } from "../lib/noteEdit";
   import { createAudioSource, playback } from "../lib/playback";
   import { createSynthSource, type SynthInstrument, type SynthPlaybackSource } from "../lib/synth";
   import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
@@ -51,6 +52,11 @@
   let sidebarCollapsed = $state(false);
   let zoomPercent = $state(100);
   let tabVisible = $state(true);
+  /** Whether the user dismissed the current rederive-failure banner (Task 7
+   * Step 4). Reset to `false` whenever a NEW `editor.error` value arrives —
+   * see the refresh-loop `$effect` below — so a fresh failure always shows,
+   * even if an earlier one was dismissed. */
+  let rederiveErrorDismissed = $state(false);
 
   let notation: Notation | undefined = $state();
   let audioEl: HTMLAudioElement | undefined = $state();
@@ -75,6 +81,27 @@
   let performedNextCalls = 0;
   let rafId: number | null = null;
   let lastScrollAt = 0;
+
+  // --- Task 7: refresh loop / synth-follows-store bookkeeping ------------
+  //
+  // All plain (non-`$state`) bookkeeping, same convention as the cursor-sync
+  // fields above: these back reactive `$effect`s that need to compare
+  // "what changed since last time", not values the template reads directly.
+  /** The `ScoreJson` reference `synthSource` was last built from — guards
+   * the synth-rebuild effect below against rebuilding twice for the same
+   * `editor.score` write (once from `loadScore()`'s own explicit synth
+   * creation, once from the effect noticing the same store write) and
+   * against rebuilding for a reference-identical no-op update. */
+  let lastSynthScore: ScoreJson | null = null;
+  /** `editor.updating`'s value as of the last time the refresh-loop effect
+   * ran — a true->false transition (with no `editor.error`) is what starts
+   * `refreshAfterEdit()`. */
+  let wasUpdating = false;
+  /** `editor.error`'s value as of the last time the refresh-loop effect ran
+   * — used only to detect "a NEW rederive failure just arrived" so the
+   * dismissible banner (`rederiveErrorDismissed`) reopens for it even if an
+   * earlier failure had already been dismissed. */
+  let lastRederiveError: string | null = null;
 
   function clampZoom(percent: number): number {
     return Math.min(MAX_ZOOM_PERCENT, Math.max(MIN_ZOOM_PERCENT, percent));
@@ -335,6 +362,239 @@
     }
   }
 
+  /** Rebuilds `synthSource` from a fresh `ScoreJson`, dropping the previous
+   * one — same dispose-then-recreate sequence `loadScore()` and `onDestroy`
+   * already use. Kept as its own function since it now has two callers:
+   * `loadScore()` (initial load) and the synth-follows-store `$effect`
+   * below (every edit after that). */
+  function rebuildSynthSource(score_: ScoreJson): void {
+    playback.attachSource("synth", null);
+    synthSource?.dispose();
+    synthSource = createSynthSource(score_, resolveSynthInstrument(score_.parts[0]));
+    playback.attachSource("synth", synthSource);
+  }
+
+  /** Task 7: "synth playback reflects an edited pitch immediately" — the
+   * `editor` store's `score` is updated synchronously from `apply()`'s HTTP
+   * response, well before the rederive job (which only affects
+   * notation/fingering, not pitch/timing) finishes. Reacting to every
+   * `editor.score` reference change (not just post-rederive ones) is what
+   * makes an edited pitch audible on the very next Play, without waiting
+   * for `refreshAfterEdit()`. `lastSynthScore` suppresses the redundant
+   * rebuild `loadScore()`'s own explicit `rebuildSynthSource()` call would
+   * otherwise cause here (both react to the same score object). */
+  $effect(() => {
+    const s = $editor.score;
+    if (!s || s === lastSynthScore) return;
+    lastSynthScore = s;
+    if (!synthSource) return; // loadScore() hasn't created the initial one yet.
+    rebuildSynthSource(s);
+  });
+
+  /** Task 7 Step 4 refresh loop: fires once per `editor.updating` true ->
+   * false transition that lands with no `editor.error` — i.e. exactly when
+   * a rederive job just finished successfully. The rederive worker
+   * (workers/transcription/src/aura_worker/rederive.py) updates the head
+   * revision's `score_json` in place AND rewrites the SAME `Export` rows'
+   * `object_key` (never creates new ones), so this reuses `project`'s
+   * already-known MusicXML export id rather than re-listing projects.
+   *
+   * Re-fetches BOTH the score JSON (`GET /score`, the same request
+   * `loadScore()` makes) and the MusicXML text: the score JSON is what
+   * carries the rederive's actual output (reassigned string/fret/hand for
+   * every non-locked note — `apply()`'s own immediate response only ever
+   * touches the ONE edited event, see score_schema/edits.py's per-op
+   * branches), so without re-fetching it the Inspector/TAB would show
+   * stale fingering for every other note after a lock-a-neighbor rederive.
+   * That refetched score is written into the `editor` store via
+   * `setScore()` and is what `trySyncPlaybackTimeline()` below reads —
+   * "the store's edited score, not the refetch" (the brief's phrasing)
+   * means the playback timeline's onset/duration timing comes from that
+   * score object, never from re-parsing the just-loaded MusicXML text
+   * (buildTimeline() never touches XML for timing regardless of caller).
+   */
+  async function refreshAfterEdit(): Promise<void> {
+    const exportId = project?.exports.find((item) => item.format === "musicxml")?.id ?? null;
+    if (!exportId) return;
+    try {
+      // `cache: "no-store"` on BOTH requests — confirmed necessary by hand
+      // (not a defensive guess): the export URL is the SAME
+      // `/v1/exports/{id}/download` for every rederive (the backend
+      // rewrites that Export row's `object_key` in place rather than
+      // minting a new export id — see rederive.py), and Starlette's
+      // `FileResponse` sends no `Cache-Control` header at all. Without this,
+      // the browser's heuristic HTTP cache served the PREVIOUS body for
+      // that URL — Inspector fields (sourced from the JSON response, whose
+      // own default caching this also fixes) showed the freshly-edited
+      // fingering correctly while the rendered TAB staff kept showing the
+      // stale one, since OSMD was faithfully rendering genuinely stale XML
+      // text.
+      const [freshScore, xmlText] = await Promise.all([
+        fetch(api.scoreUrl(projectId), { cache: "no-store" }).then(async (resp) => {
+          if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+          return resp.json() as Promise<ScoreJson>;
+        }),
+        fetch(api.exportDownloadUrl(exportId), { cache: "no-store" }).then(async (resp) => {
+          if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+          return resp.text();
+        }),
+      ]);
+
+      // Kept in lockstep with the ACTUALLY-rendered notation: `score` (the
+      // local, non-store copy `rebuildEventPositions()`/zoom re-renders
+      // read) must only advance once the MusicXML that describes it has
+      // also been loaded — see the local `score` declaration's own note on
+      // why this can't just track `editor.score` directly.
+      score = freshScore;
+      editor.setScore(freshScore);
+
+      cursorHandle = null;
+      timeline = [];
+      lastTimelineIndex = -1;
+      performedNextCalls = 0;
+      await notation?.loadMusicXml(xmlText);
+      trySyncPlaybackTimeline(freshScore);
+
+      // A note deleted by the edit that triggered this refresh can no
+      // longer be selected — clear rather than leaving a dangling id that
+      // every position lookup below would just fail to find anyway.
+      if ($editor.selectedEventId && !findEvent(freshScore, $editor.selectedEventId)) {
+        editor.clearSelection();
+      }
+      notation?.highlightEvent($editor.selectedEventId);
+    } catch (err: unknown) {
+      // Non-fatal, same spirit as `syncError` elsewhere in this file: the
+      // previously-rendered notation stays up rather than blanking the view.
+      syncError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Refresh-loop trigger + rederive-failure banner state, in one effect
+  // since both react to the same two `editor` fields.
+  $effect(() => {
+    const updating = $editor.updating;
+    const err = $editor.error;
+    if (err !== lastRederiveError) {
+      lastRederiveError = err;
+      if (err) rederiveErrorDismissed = false;
+    }
+    if (wasUpdating && !updating && !err) {
+      void refreshAfterEdit();
+    }
+    wasUpdating = updating;
+  });
+
+  function dismissRederiveError(): void {
+    rederiveErrorDismissed = true;
+  }
+
+  /** Retry for a failed rederive (Task 7 Step 4). A failed rederive job
+   * leaves the head revision's user intent intact (the score edit itself
+   * already committed — see rederive.py's ordering: the score write is
+   * committed BEFORE the export-writing block that can fail) — Retry only
+   * needs a FRESH rederive of that same head, and there is no dedicated
+   * "retry rederive" endpoint. Implemented as the brief's documented
+   * zero-backend-change trick: re-apply `set_locked` on any existing event
+   * with its OWN current `locked` value. That's a semantically-null edit
+   * (the resulting score is byte-for-byte identical to the current head)
+   * but still goes through `apply_project_edit`'s ordinary
+   * enqueue-a-rederive-job path, which is all a retry actually needs. (The
+   * brief's alternative — a dedicated no-op `"touch"` op type in
+   * `score_schema.edits` — would be cleaner but requires a backend change;
+   * not taken, per the brief's own "implementer's choice" note.)
+   */
+  function retryRederive(): void {
+    const currentScore = $editor.score;
+    const eventId = firstEventId(currentScore);
+    const found = findEvent(currentScore, eventId);
+    if (!found) return;
+    void editor.apply(projectId, { type: "set_locked", eventId: found.event.id, locked: found.event.locked });
+  }
+
+  // --- Task 7 Step 3: keyboard shortcuts -----------------------------------
+
+  function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+  }
+
+  /** Window-level so shortcuts work regardless of which element inside the
+   * score view currently has focus, while still backing off completely
+   * when focus is in a form control (`isEditableTarget`) — a Sidebar text
+   * field must be able to use its own arrow keys/Delete normally. */
+  function handleKeydown(event: KeyboardEvent): void {
+    if (isEditableTarget(event.target)) return;
+
+    if (event.key === "Escape") {
+      editor.clearSelection();
+      return;
+    }
+
+    // Ctrl+Z / Ctrl+Shift+Z (also accepting Cmd on macOS, since this is a
+    // desktop app shell) — global, independent of selection.
+    if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
+      event.preventDefault();
+      if (event.shiftKey) void editor.redo(projectId);
+      else void editor.undo(projectId);
+      return;
+    }
+
+    const found = findEvent($editor.score, $editor.selectedEventId);
+    if (!found) return;
+    const ev = found.event;
+
+    switch (event.key) {
+      case "ArrowUp":
+        event.preventDefault();
+        void editor.apply(projectId, {
+          type: "set_pitch",
+          eventId: ev.id,
+          pitch: clampPitch(ev.pitch + (event.shiftKey ? 12 : 1)),
+        });
+        break;
+      case "ArrowDown":
+        event.preventDefault();
+        void editor.apply(projectId, {
+          type: "set_pitch",
+          eventId: ev.id,
+          pitch: clampPitch(ev.pitch - (event.shiftKey ? 12 : 1)),
+        });
+        break;
+      case "ArrowLeft":
+        if (!part) break;
+        event.preventDefault();
+        void editor.apply(projectId, {
+          type: "move_note",
+          eventId: ev.id,
+          notatedOnset: stepOnset(ev.notatedOnset, -1, part.meter),
+        });
+        break;
+      case "ArrowRight":
+        if (!part) break;
+        event.preventDefault();
+        void editor.apply(projectId, {
+          type: "move_note",
+          eventId: ev.id,
+          notatedOnset: stepOnset(ev.notatedOnset, 1, part.meter),
+        });
+        break;
+      // "Delete" is the standard key; "Backspace" is what macOS's
+      // delete-key-in-the-backspace-position reports (its "Forward Delete"
+      // reports "Delete") — accepting both is the beneficial deviation
+      // from the brief's literal "Delete deletes" needed for that key to
+      // actually work on a Mac keyboard.
+      case "Delete":
+      case "Backspace":
+        event.preventDefault();
+        void editor.apply(projectId, { type: "delete_note", eventId: ev.id });
+        editor.clearSelection();
+        break;
+      default:
+        break;
+    }
+  }
+
   async function loadScore(): Promise<void> {
     loading = true;
     error = null;
@@ -355,7 +615,11 @@
     try {
       const [projects, scoreJson] = await Promise.all([
         api.listProjects(),
-        fetch(api.scoreUrl(projectId)).then(async (resp) => {
+        // `cache: "no-store"` — see refreshAfterEdit()'s note on why the
+        // score/export URLs must never be served from the browser's HTTP
+        // cache: their CONTENT changes (every edit rewrites the same
+        // export id's underlying file) while their URL never does.
+        fetch(api.scoreUrl(projectId), { cache: "no-store" }).then(async (resp) => {
           if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
           return resp.json() as Promise<ScoreJson>;
         }),
@@ -364,7 +628,7 @@
       if (!found) throw new Error("Project not found.");
       const musicxmlExport = found.exports.find((item) => item.format === "musicxml");
       if (!musicxmlExport) throw new Error("No MusicXML export is available for this project yet.");
-      const xmlResp = await fetch(api.exportDownloadUrl(musicxmlExport.id));
+      const xmlResp = await fetch(api.exportDownloadUrl(musicxmlExport.id), { cache: "no-store" });
       if (!xmlResp.ok) throw new Error(`${xmlResp.status}: ${await xmlResp.text()}`);
       const xmlText = await xmlResp.text();
 
@@ -375,6 +639,13 @@
 
       synthSource = createSynthSource(scoreJson, resolveSynthInstrument(scoreJson.parts[0]));
       playback.attachSource("synth", synthSource);
+      // Seeds the `editor` store with the just-loaded score AND records it
+      // as the synth's own current source — the latter is what stops the
+      // synth-follows-store `$effect` above from immediately rebuilding a
+      // second, identical `synthSource` from the very score object this
+      // just built one from.
+      lastSynthScore = scoreJson;
+      editor.setScore(scoreJson);
 
       await notation?.loadMusicXml(xmlText);
     } catch (err: unknown) {
@@ -420,10 +691,12 @@
   });
 
   onMount(() => {
+    window.addEventListener("keydown", handleKeydown);
     void loadScore();
   });
 
   onDestroy(() => {
+    window.removeEventListener("keydown", handleKeydown);
     stopLoop();
     scheduleCursorSync.cancel();
     playback.pause();
@@ -431,9 +704,19 @@
     playback.attachSource("synth", null);
     synthSource?.dispose();
     synthSource = null;
+    // Invalidates any in-flight rederive poll (see editor.ts's own comment
+    // on `stop()`) so a late-resolving job from this project can never
+    // write `updating`/`error` into the store after this view has gone.
+    editor.stop();
   });
 
-  let part = $derived(score?.parts[0] ?? null);
+  // Task 7: derived from the `editor` store, not the local `score` state —
+  // `editor.score` is updated immediately on every successful edit (see the
+  // synth-follows-store effect above), while local `score` only advances
+  // once the matching MusicXML has actually been re-rendered (see
+  // `refreshAfterEdit`). Facts/Inspector should reflect the edit the
+  // instant it's applied, same as synth playback does.
+  let part = $derived($editor.score?.parts[0] ?? null);
   let tabAvailable = $derived(part?.instrument === "guitar");
 </script>
 
@@ -454,6 +737,7 @@
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         projectTitle={project?.title ?? "score"}
+        {projectId}
         {part}
         {tabAvailable}
         {tabVisible}
@@ -472,7 +756,25 @@
                fine; only cursor/playback sync failed. Never blanks the view. -->
           <p class="sync-notice" role="status">Playback sync unavailable for this score.</p>
         {/if}
+        {#if $editor.error && !rederiveErrorDismissed}
+          <!-- Task 7 Step 4: a rederive job failed. Distinct from
+               `.error-panel` above (nothing here is "unusable" — the score
+               still shows the last successful edit) and dismissible, unlike
+               it. -->
+          <div class="rederive-banner" role="alert">
+            <span>{$editor.error}</span>
+            <div class="rederive-banner-actions">
+              <button type="button" class="rederive-retry" onclick={retryRederive}>Retry</button>
+              <button type="button" class="rederive-dismiss" onclick={dismissRederiveError} aria-label="Dismiss">&times;</button>
+            </div>
+          </div>
+        {/if}
         <div class="paper">
+          {#if $editor.updating}
+            <!-- Task 7 Step 4: subtle, non-blocking — the paper underneath
+                 stays fully interactive while a rederive job is in flight. -->
+            <div class="updating-hint" aria-live="polite">Updating notation…</div>
+          {/if}
           <Notation
             bind:this={notation}
             zoom={zoomPercent / 100}
@@ -597,6 +899,7 @@
   }
 
   .paper {
+    position: relative;
     background: var(--paper);
     color: #1e1d21;
     border-radius: 10px;
@@ -604,6 +907,70 @@
     padding: 32px clamp(16px, 4vw, 48px);
     width: 100%;
     max-width: 900px;
+  }
+
+  /* Task 7 Step 4: a small, dim pill in the corner of the paper — never a
+   * full-paper overlay, since the score underneath must stay fully
+   * readable/interactive while a rederive job is running. */
+  .updating-hint {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(30, 29, 33, 0.85);
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Task 7 Step 4: distinct from `.error-panel` (that one blanks the whole
+   * view) and `.sync-notice` (that one has no action) — this is dismissible
+   * and offers Retry, matching a rederive failure's actual recovery path. */
+  .rederive-banner {
+    margin: 0;
+    max-width: 900px;
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(224, 99, 99, 0.1);
+    border: 1px solid rgba(224, 99, 99, 0.35);
+    color: #e58a8a;
+    border-radius: 9px;
+    padding: 10px 14px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .rederive-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+
+  .rederive-retry {
+    background: none;
+    border: 1px solid currentColor;
+    color: inherit;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .rederive-dismiss {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 4px;
   }
 
   .sr-only-audio {
