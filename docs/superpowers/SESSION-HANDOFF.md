@@ -389,9 +389,14 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    closed with one small, targeted, independently-verified follow-up
    rather than a third full review cycle — matching exactly how
    sub-project 1 closed its own equivalent residual finding.
-3. **Score preview + playback UI. 9 of 9 tasks implemented and reviewed
-   clean (Task 1 gated through a corrective exporter fix, 1b); final
-   whole-branch review pending.** Built the whole product/UI surface for
+3. **Score preview + playback UI. DONE — 9 of 9 tasks implemented and
+   reviewed clean (Task 1 gated through a corrective exporter fix, 1b),
+   final whole-branch review completed with one fix wave (a Critical
+   duration-clamp defect in the exporter plus three Important frontend/doc
+   findings), and the scoped re-review verified every finding addressed
+   with all suites green (make test 153/153, vitest 77/77) and a real
+   13-measure end-to-end transcription exercising the fixed paths.**
+   Built the whole product/UI surface for
    this sub-project: a Home screen (upload via drag-drop or file picker,
    instrument choice, live transcription progress polling, a project list
    with retry-on-failure); a Score view (OSMD-rendered notation with a
