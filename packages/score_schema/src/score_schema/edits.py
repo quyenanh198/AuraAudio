@@ -46,6 +46,8 @@ def _validate_key(key: str) -> None:
 
 
 def _fraction(text: str, what: str) -> Fraction:
+    if not isinstance(text, str):
+        raise EditError(f"{what} must be a string, got {type(text).__name__}")
     try:
         num, den = text.split("/")
         f = Fraction(int(num), int(den))
@@ -143,10 +145,12 @@ def apply_edit(score: dict, op: dict) -> dict:
         _require(op, "notatedOnset")
         _require(op, "notatedDuration")
         _require(op, "pitch")
+        if not isinstance(op.get("measureNumber"), int):
+            raise EditError("measureNumber must be an integer")
         numbers = {m["number"]: m for m in part["measures"]}
-        measure = numbers.get(op.get("measureNumber"))
+        measure = numbers.get(op["measureNumber"])
         if measure is None:
-            raise EditError(f"measure {op.get('measureNumber')} does not exist")
+            raise EditError(f"measure {op['measureNumber']} does not exist")
         if not isinstance(op.get("pitch"), int) or not 0 <= op["pitch"] <= 127:
             raise EditError("pitch must be an integer 0-127")
         onset_beats = _fraction(op["notatedOnset"], "notatedOnset") * 4

@@ -122,3 +122,73 @@ def test_add_note_with_voice_zero_rejected():
                               "notatedOnset": "0/1", "notatedDuration": "1/4",
                               "pitch": 64, "voice": 0})
     assert "invalid score" in exc_info.value.reason
+
+
+def _piano_score():
+    return {
+        "schemaVersion": 4,
+        "timeMap": [{"beat": 0, "seconds": 0.0}, {"beat": 1, "seconds": 0.5}],
+        "parts": [{
+            "instrument": "piano", "tempoBpm": 120.0, "meter": "4/4", "key": "C major",
+            "confidence": {"tempo": 0.9, "meter": 0.8, "key": 0.7},
+            "measures": [{"number": 1, "events": [{
+                "id": "note_00", "pitch": 60, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+                "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+                "confidence": 0.9, "locked": False, "string": None, "fret": None, "hand": None,
+            }]}],
+        }],
+    }
+
+
+# Wrong-typed values grouped by what the field actually expects. Each group
+# covers "int where str expected, null, dict, list" (or the analogous
+# str-where-int/bool-where-*) so every typed op field gets swept.
+_BAD_STR_VALUES = (5, None, {"x": 1}, [1, 2])
+_BAD_INT_VALUES = ("5", None, {"x": 1}, [1, 2])
+_BAD_BOOL_VALUES = ("true", None, {"x": 1}, [1, 2], 1)
+
+
+def _wrong_type_cases():
+    """Build (score_factory, op) pairs covering every typed field of every op type."""
+    specs = [
+        (_score, {"type": "set_pitch", "eventId": "note_00", "pitch": 60},
+         {"eventId": _BAD_STR_VALUES, "pitch": _BAD_INT_VALUES}),
+        (_score, {"type": "move_note", "eventId": "note_00", "notatedOnset": "1/4"},
+         {"eventId": _BAD_STR_VALUES, "notatedOnset": _BAD_STR_VALUES}),
+        (_score, {"type": "set_duration", "eventId": "note_00", "notatedDuration": "1/4"},
+         {"eventId": _BAD_STR_VALUES, "notatedDuration": _BAD_STR_VALUES}),
+        (_score, {"type": "delete_note", "eventId": "note_00"},
+         {"eventId": _BAD_STR_VALUES}),
+        (_score, {"type": "add_note", "measureNumber": 1, "notatedOnset": "0/1",
+                  "notatedDuration": "1/4", "pitch": 64},
+         {"measureNumber": _BAD_INT_VALUES, "notatedOnset": _BAD_STR_VALUES,
+          "notatedDuration": _BAD_STR_VALUES, "pitch": _BAD_INT_VALUES}),
+        (_score, {"type": "set_fingering", "eventId": "note_00", "string": 4, "fret": 7},
+         {"eventId": _BAD_STR_VALUES, "string": _BAD_INT_VALUES, "fret": _BAD_INT_VALUES}),
+        (_piano_score, {"type": "set_hand", "eventId": "note_00", "hand": "left"},
+         {"eventId": _BAD_STR_VALUES, "hand": _BAD_STR_VALUES}),
+        (_score, {"type": "set_locked", "eventId": "note_00", "locked": True},
+         {"eventId": _BAD_STR_VALUES, "locked": _BAD_BOOL_VALUES}),
+        (_score, {"type": "set_part_fact", "field": "tempoBpm", "value": 90.0},
+         {"value": _BAD_INT_VALUES}),
+        (_score, {"type": "set_part_fact", "field": "meter", "value": "3/4"},
+         {"value": _BAD_STR_VALUES}),
+        (_score, {"type": "set_part_fact", "field": "key", "value": "C major"},
+         {"value": _BAD_STR_VALUES}),
+    ]
+    cases = []
+    for score_factory, base_op, field_bad_map in specs:
+        for field, bad_values in field_bad_map.items():
+            for bad_value in bad_values:
+                op = dict(base_op)
+                op[field] = bad_value
+                case_id = f"{base_op['type']}:{field}={bad_value!r}"
+                cases.append(pytest.param(score_factory, op, id=case_id))
+    return cases
+
+
+@pytest.mark.parametrize("score_factory,op", _wrong_type_cases())
+def test_wrong_typed_op_fields_raise_edit_error_not_crash(score_factory, op):
+    """Every op type must reject wrong-typed fields with EditError, never AttributeError/TypeError."""
+    with pytest.raises(EditError):
+        apply_edit(score_factory(), op)
