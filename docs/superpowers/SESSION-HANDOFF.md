@@ -478,11 +478,134 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       semantic editing will make exports something users reach for
       constantly, not just once per transcription.
 
-4. **Semantic editing** — not started. See "Direction change" above for
-   scope notes. Once sub-project 3's final whole-branch review completes,
-   this is next — the edit-operation model (add/delete/move note, undo/redo,
-   optimistic locking, locks) plus the UI to drive it, building on the Score
-   view/OSMD/export foundation sub-project 3 just built.
+4. **Semantic editing. 8 of 8 planned tasks plus one corrective task (7b)
+   implemented and reviewed clean; final whole-branch review pending.**
+   (Do not read this bullet as "DONE" — that word lands only after the
+   final whole-branch review, same convention as sub-projects 1-3 above;
+   see "Recommendation if picking up cold" below for the actual next
+   step.) Spec: `docs/superpowers/specs/2026-08-18-semantic-editing-design.md`.
+   Plan: `docs/superpowers/plans/2026-08-18-semantic-editing.md`. SDD
+   workspace: `.superpowers/sdd/2026-08-18-semantic-editing/`.
+
+   Built: a semantic edit-operation model over the score JSON
+   (`set_pitch`/`move_note`/`set_duration`/`delete_note`/`add_note`/
+   `set_fingering`/`set_hand`/`set_locked`/`set_part_fact`, validated
+   against `packages/score_schema/src/score_schema/edits.py`'s whitelist —
+   Task 1); per-note lock flags the guitar string/fret and piano
+   hand-assignment DP solvers honor when rederiving around a user's manual
+   fingering/hand choice (Task 2); a `ScoreRevision` history per project
+   with a `scoreHeadRevisionId` settings pointer, undo/redo/revert walking
+   that chain (guarded against descending below the baseline revision),
+   and a rederive-job coalescing/supersede rule for edits landing close
+   together (Task 3); REST endpoints (`POST /v1/projects/{id}/edits`,
+   `.../edits/undo`, `.../edits/redo`, `.../edits/revert`) returning the
+   post-edit score plus a `rederive_job_id` (Task 4); a frontend `editor`
+   Svelte store wrapping those endpoints with queued apply/undo/redo/
+   revert, a generation guard against overlapping rederive polls, and
+   (added by the 7b fix wave) a `reset()` for cross-project staleness
+   (Task 5, closed by 7b); click-to-select note hit-testing over the
+   OSMD-rendered SVG, correlating a click position back to a score event
+   id (Task 6); and the Inspector UI — editable Detection facts (key/
+   tempo/meter), a pitch/onset/duration stepper + lock toggle + delete for
+   the selected note, an Add-note mini-form, Undo/Redo/Revert history
+   controls, window-level keyboard shortcuts, and the post-edit refresh
+   loop that re-fetches score JSON + MusicXML and re-renders notation once
+   a rederive job settles (Task 7). Corrective Task 7b (dispatched after
+   Task 7's live verification surfaced three cross-task defects, same
+   pattern as sub-project 3's Task 1b) fixed: (A) `GET /v1/projects`
+   listing a project's exports by its LATEST job's id, which broke
+   permanently the first time any project was ever edited (every edit
+   enqueues a new `TranscriptionJob` row with `stage="rederive"`, which
+   immediately becomes "latest" — exports are now looked up by
+   `project_id` directly); (B) the `editor` store singleton carrying stale
+   `updating`/`canUndo`/`canRedo`/`error`/`selectedEventId` across a
+   project switch (the hash router remounts `ScoreView` without a full
+   page reload) — fixed with `editor.reset()`, called first in
+   `ScoreView`'s `onMount`; (C) an unhandled promise rejection from
+   `smplr`'s `Sampler` when a synth rebuild's `dispose()` lands while the
+   previous instance's instrument buffers are still loading (guarded,
+   swallowing only that specific disposal-race rejection).
+
+   **Task 8's verification** (2026-08-18): rebuilt the bundled backend
+   (`bash apps/desktop/build-backend.sh` — mandatory, since 7b changed
+   `apps/api/routers/projects.py` after the last bundle build) and ran the
+   full journey against the real `cargo tauri dev` process under Xvfb
+   (fresh app-data dir, prior one backed up and restored after). A guitar
+   project went through a complete edit session — pitch, move, add,
+   delete, lock-a-note-then-edit-a-neighbor's-fingering-and-confirm-the-
+   lock-survives-rederive, tempo, undo, redo, revert — plus a click-
+   accuracy spot-check at 50% and 200% zoom (carried from Task 6's review)
+   and a rapid-edit smoke test (7 pitch nudges fired synchronously, carried
+   from 7b's Defect C) whose browser console showed zero errors — the
+   disposal-race guard holds under real rapid editing, not just its unit
+   tests. A dedicated, isolated check (run separately from the marathon
+   session, after an unrelated test-driver mixup — see gotcha 7 below)
+   confirmed exactly what Step 2 asks for: after one pitch edit, the Home
+   project row still showed "Transcribed" and the export buttons still
+   downloaded real files, and the downloaded MusicXML/MIDI on disk both
+   reflected the edited pitch (MusicXML as its enharmonic spelling — e.g.
+   an edit to A#2 exports as `<step>B</step><alter>-1</alter>
+   <octave>2</octave>`, same MIDI note number either way — verified
+   directly with `mido`). An abbreviated piano pass (hand override + undo)
+   also ran clean. `make test` is **182/182** across all 6 packages; the
+   web suite is **124/124** (`vitest`) plus a clean `svelte-check`/`tsc`
+   and `vite build`; `cargo build`/`cargo clippy` in `apps/desktop/
+   src-tauri` are clean (Rust genuinely untouched by this sub-project).
+   Full journey log, screenshots, and suite output:
+   `.superpowers/sdd/2026-08-18-semantic-editing/task-8-report.md`.
+
+   Gotchas worth knowing for a future session:
+   1. **OSMD's `Note.halfTone` is real MIDI pitch minus 12**, not the MIDI
+      number it looks like — established in Task 6 (live-verified against
+      exported MusicXML, not from the library's own misleading docstring)
+      and reused as-is by every later task that reads a clicked note's
+      pitch.
+   2. **`cache: "no-store"` is required on every fetch of mutable-content
+      URLs** (`GET /v1/projects/{id}/score`, `GET /v1/exports/{id}/
+      download`) — both URLs are stable across a rederive (the worker
+      rewrites the same DB row/file in place), so the browser's heuristic
+      HTTP cache will silently serve pre-edit bytes without this. Task 7
+      found and fixed this for the two `fetch()` calls `ScoreView.svelte`
+      makes; Task 8 additionally confirmed (a three-way comparison — a
+      fresh Node `http.get`, a page `fetch()` with `cache:"no-store"`, and
+      a real click on the Sidebar's `<a download>` Export button, all
+      after the same edit) that the export buttons themselves come back
+      byte-identical and correctly edited every time.
+   3. **Rederive jobs share the `TranscriptionJob` table** — every edit/
+      undo/redo/revert enqueues a new row with `stage="rederive"`, which
+      immediately becomes a project's "latest job" by `created_at`. Home's
+      status chip therefore briefly flickers to reflect the rederive job's
+      own transient state right after an edit — cosmetic only (spec §4.3
+      mandates jobs-endpoint observability without a schema change; this
+      was a deliberate, documented tradeoff, not missed).
+   4. **Exports are listed by `project_id`, not by the latest job's id**
+      (7b's Defect A fix) — `Export` rows keep the id of the ORIGINAL
+      transcription job forever; the rederive worker rewrites their
+      `object_key`/`status`/`revision` in place but never `job_id`. Any
+      future change to `list_projects`'s export query should keep
+      querying by `project_id` — reverting to "latest job's exports"
+      reintroduces 7b's exact permanently-empty-exports bug.
+   5. **The zero-backend-change "retry a failed rederive" trick**: replay
+      `set_locked` on any existing event with its OWN current `locked`
+      value — a semantically null edit (byte-identical resulting score)
+      that still goes through `apply_project_edit`'s ordinary
+      enqueue-a-rederive-job path, so a failed rederive can be retried
+      without a dedicated endpoint (`ScoreView.svelte`'s `retryRederive`).
+   6. **`editor.reset()` must run first in `ScoreView`'s `onMount`**, before
+      `loadScore()` — the hash router remounts `ScoreView` per project
+      without a full page reload, and `editor` is a module-level singleton
+      (7b's Defect B; see above).
+   7. **Test-driver gotcha, not a product bug** (found during Task 8): when
+      driving multiple projects with Playwright across a Home round-trip,
+      navigate to a project by its explicit id (set `location.hash`
+      directly) rather than clicking a row by list position/`.first()` —
+      Home's project list can contain more than one row transcribed from
+      the same source audio (e.g. a leftover exploration project next to
+      the real test project), and `.first()` after a `back-link`
+      navigation is not guaranteed to land on the row the test just
+      edited. Confirmed by an isolated re-test with the identical wait
+      pattern that the product itself has no export-staleness bug here —
+      only that one test script's row-selection was ambiguous mid-session.
 
 **Update (final whole-branch fix wave, 2026-08-18): the paragraph
 previously here — claiming `musicxml/export.py` appends notes in raw list
@@ -539,9 +662,13 @@ playback UI) has all 9 tasks implemented and reviewed clean (Task 1 gated
 through a corrective exporter fix, 1b); its final whole-branch review has
 NOT run yet — that's the immediate next step (same
 `subagent-driven-development` process sub-projects 1 and 2 used), before
-sub-project 3 can be marked done. Once that review (and any fix wave it
-produces) completes, pick up sub-project 4 (semantic editing) next — no
-spec exists yet for it, start with `superpowers:brainstorming`.
+sub-project 3 can be marked done. Sub-project 4 (semantic editing) has
+since had all 8 planned tasks plus corrective task 7b implemented and
+reviewed clean too (spec: `docs/superpowers/specs/2026-08-18-semantic-
+editing-design.md`; plan: `docs/superpowers/plans/2026-08-18-semantic-
+editing.md`) — its final whole-branch review also has NOT run yet. Do not
+mark sub-project 4, or the branch as a whole, "done" until that review
+(and any fix wave it produces) completes.
 
 ## Working process (established this session, keep using it)
 
