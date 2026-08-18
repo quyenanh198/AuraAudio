@@ -478,12 +478,15 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       semantic editing will make exports something users reach for
       constantly, not just once per transcription.
 
-4. **Semantic editing. 8 of 8 planned tasks plus one corrective task (7b)
-   implemented and reviewed clean; final whole-branch review pending.**
-   (Do not read this bullet as "DONE" — that word lands only after the
-   final whole-branch review, same convention as sub-projects 1-3 above;
-   see "Recommendation if picking up cold" below for the actual next
-   step.) Spec: `docs/superpowers/specs/2026-08-18-semantic-editing-design.md`.
+4. **Semantic editing. DONE — 8 of 8 planned tasks plus one corrective
+   task (7b) implemented and reviewed clean, final whole-branch review
+   completed with one fix wave (4 Important findings — wrong-typed op
+   payloads surfacing as 500s, a validation error rendered as the
+   rederive-failure banner, History buttons dead after app restart, and
+   one load-bearing stale comment — plus 4 promoted minors, all fixed),
+   and the scoped re-review verified every finding addressed with all
+   suites green (score_schema 119, worker 61, api 48, web 126).**
+   Spec: `docs/superpowers/specs/2026-08-18-semantic-editing-design.md`.
    Plan: `docs/superpowers/plans/2026-08-18-semantic-editing.md`. SDD
    workspace: `.superpowers/sdd/2026-08-18-semantic-editing/`.
 
@@ -661,20 +664,16 @@ that."
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
-desktop app sub-projects" further down for current status. Sub-projects 1
-and 2 (offline backend adaptation; desktop shell + packaging) are both done,
-including their final whole-branch reviews. Sub-project 3 (score preview +
-playback UI) has all 9 tasks implemented and reviewed clean (Task 1 gated
-through a corrective exporter fix, 1b); its final whole-branch review has
-NOT run yet — that's the immediate next step (same
-`subagent-driven-development` process sub-projects 1 and 2 used), before
-sub-project 3 can be marked done. Sub-project 4 (semantic editing) has
-since had all 8 planned tasks plus corrective task 7b implemented and
-reviewed clean too (spec: `docs/superpowers/specs/2026-08-18-semantic-
-editing-design.md`; plan: `docs/superpowers/plans/2026-08-18-semantic-
-editing.md`) — its final whole-branch review also has NOT run yet. Do not
-mark sub-project 4, or the branch as a whole, "done" until that review
-(and any fix wave it produces) completes.
+desktop app sub-projects" further down for current status. All four
+offline-desktop sub-projects (offline backend adaptation; desktop shell +
+packaging; score preview + playback UI; semantic editing) are DONE,
+including their final whole-branch reviews and fix waves, and merged to
+main. The next piece of work has no spec yet — start with
+`superpowers:brainstorming` on whatever the user directs (candidate
+follow-ups are recorded in the sub-project sections above: an
+export-save-location dialog via src-tauri download wiring, an automated
+Playwright edit-journey regression test, silent-measure fidelity in
+quantize, and re-transcription head-pointer invalidation).
 
 ## Working process (established this session, keep using it)
 
