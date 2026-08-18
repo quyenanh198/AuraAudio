@@ -83,3 +83,89 @@ export interface ScoreJson {
   timeMap: ScoreTimeMapEntry[];
   parts: ScorePart[];
 }
+
+// Edit ops — discriminated union on `type`, mirroring the op table verbatim
+// from packages/score_schema/src/score_schema/edits.py::apply_edit (the
+// `kind == "..."` branches and each branch's `_require(op, "...")` /
+// `op.get(...)` reads) rather than the plan prose. `voice` on `add_note` is
+// optional there too — the backend defaults it via `op.get("voice", 1)`.
+export interface SetPitchOp {
+  type: "set_pitch";
+  eventId: string;
+  pitch: number;
+}
+
+export interface MoveNoteOp {
+  type: "move_note";
+  eventId: string;
+  notatedOnset: string;
+}
+
+export interface SetDurationOp {
+  type: "set_duration";
+  eventId: string;
+  notatedDuration: string;
+}
+
+export interface DeleteNoteOp {
+  type: "delete_note";
+  eventId: string;
+}
+
+export interface AddNoteOp {
+  type: "add_note";
+  measureNumber: number;
+  notatedOnset: string;
+  notatedDuration: string;
+  pitch: number;
+  voice?: number;
+}
+
+export interface SetFingeringOp {
+  type: "set_fingering";
+  eventId: string;
+  string: number;
+  fret: number;
+}
+
+export interface SetHandOp {
+  type: "set_hand";
+  eventId: string;
+  hand: "left" | "right";
+}
+
+export interface SetLockedOp {
+  type: "set_locked";
+  eventId: string;
+  locked: boolean;
+}
+
+/** `field`/`value` pairing mirrors the `set_part_fact` branch's three
+ * accepted fields (`tempoBpm`: number, `meter`: string, `key`: string) —
+ * kept as a single `string | number` rather than three further-discriminated
+ * variants since the backend itself dispatches on the runtime `field` string,
+ * not on a TS-visible type. */
+export interface SetPartFactOp {
+  type: "set_part_fact";
+  field: string;
+  value: string | number;
+}
+
+export type EditOp =
+  | SetPitchOp
+  | MoveNoteOp
+  | SetDurationOp
+  | DeleteNoteOp
+  | AddNoteOp
+  | SetFingeringOp
+  | SetHandOp
+  | SetLockedOp
+  | SetPartFactOp;
+
+/** apps/api/src/aura_api/routers/edits.py::_respond — the common 200 shape
+ * shared by POST /edits, /edits/undo, /edits/redo, /edits/revert. */
+export interface EditResponse {
+  version: number;
+  score: ScoreJson;
+  rederive_job_id: string;
+}

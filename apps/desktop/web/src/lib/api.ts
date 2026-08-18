@@ -1,4 +1,4 @@
-import type { ProjectListItem } from "./types";
+import type { EditOp, EditResponse, ProjectListItem } from "./types";
 
 // Fixed dev/desktop backend port — apps/desktop/run_backend.py:43
 // (`AURA_BACKEND_PORT = 8317`), bound to 127.0.0.1 only.
@@ -6,6 +6,52 @@ export const BASE = "http://127.0.0.1:8317";
 
 async function json<T>(resp: Response): Promise<T> {
   if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+  return resp.json() as Promise<T>;
+}
+
+/** Thrown by the edit endpoints instead of a plain `Error` so callers (the
+ * `editor` store) can branch on the HTTP status — a 409 at undo/redo bounds
+ * is an expected, recoverable condition, not a surfaced error message. */
+export class EditApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "EditApiError";
+    this.status = status;
+  }
+}
+
+function hasStringDetail(body: unknown): body is { detail: string } {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    "detail" in body &&
+    typeof (body as { detail: unknown }).detail === "string"
+  );
+}
+
+/** Like `json<T>`, but on failure raises `EditApiError` carrying the HTTP
+ * status plus, where present, FastAPI's `{"detail": "..."}` body verbatim
+ * (apps/api/src/aura_api/routers/edits.py raises `HTTPException(status_code,
+ * detail=...)` for every error case: 404 project-not-found, 422 invalid op —
+ * human-readable `reason` from `EditError` — and 409 at undo/redo/revert
+ * bounds) instead of the raw `"<status>: <body-text>"` string `json<T>`
+ * produces. That keeps the 422 `reason` directly usable as a user-facing
+ * message, and keeps the 409 status readable by callers without re-parsing
+ * the message. */
+async function editJson<T>(resp: Response): Promise<T> {
+  if (!resp.ok) {
+    const text = await resp.text();
+    let detail: string | undefined;
+    try {
+      const body: unknown = JSON.parse(text);
+      if (hasStringDetail(body)) detail = body.detail;
+    } catch {
+      // Not JSON — fall through to the generic message below.
+    }
+    throw new EditApiError(resp.status, detail ?? `${resp.status}: ${text}`);
+  }
   return resp.json() as Promise<T>;
 }
 
@@ -61,4 +107,22 @@ export const api = {
   scoreUrl: (projectId: string) => `${BASE}/v1/projects/${projectId}/score`,
   audioUrl: (projectId: string) => `${BASE}/v1/projects/${projectId}/audio`,
   exportDownloadUrl: (exportId: string) => `${BASE}/v1/exports/${exportId}/download`,
+  applyEdit: (projectId: string, op: EditOp) =>
+    fetch(`${BASE}/v1/projects/${projectId}/edits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(op),
+    }).then((r) => editJson<EditResponse>(r)),
+  undoEdit: (projectId: string) =>
+    fetch(`${BASE}/v1/projects/${projectId}/edits/undo`, { method: "POST" }).then((r) =>
+      editJson<EditResponse>(r),
+    ),
+  redoEdit: (projectId: string) =>
+    fetch(`${BASE}/v1/projects/${projectId}/edits/redo`, { method: "POST" }).then((r) =>
+      editJson<EditResponse>(r),
+    ),
+  revertEdits: (projectId: string) =>
+    fetch(`${BASE}/v1/projects/${projectId}/edits/revert`, { method: "POST" }).then((r) =>
+      editJson<EditResponse>(r),
+    ),
 };
