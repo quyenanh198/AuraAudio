@@ -12,6 +12,7 @@
     stepDuration,
     stepOnset,
   } from "../lib/noteEdit";
+  import { isTauri, saveExport } from "../lib/saveExport";
   import type { EditOp, ProjectExportSummary, ScoreEvent, ScorePart } from "../lib/types";
 
   interface Props {
@@ -254,6 +255,8 @@
 
   onDestroy(() => {
     if (revertTimeout) clearTimeout(revertTimeout);
+    for (const timeout of exportSavedTimeouts.values()) clearTimeout(timeout);
+    exportSavedTimeouts.clear();
   });
 
   const EXPORT_FORMATS: { format: string; label: string; extension: string }[] = [
@@ -268,6 +271,66 @@
   function sanitizedFilename(extension: string): string {
     const base = projectTitle.trim().replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "-") || "score";
     return `${base}.${extension}`;
+  }
+
+  // --- Export: native Save dialog (Tauri) ------------------------------
+  //
+  // Outside Tauri the anchor's own `href`/`download` attributes still do
+  // the work (plain-browser download) — the click handler below only
+  // intercepts the click when running inside Tauri, where a bare
+  // `<a download>` would otherwise land the file in the packaged app's
+  // process cwd with no way for the user to find it.
+  //
+  // `EXPORT_STATUS_MS` must match the "export-status-fade" CSS animation's
+  // duration below — it's how long the transient "Saved" confirmation
+  // stays in the DOM before this state clears it.
+  const EXPORT_STATUS_MS = 2000;
+  let exportSavedFormat = $state<Record<string, boolean>>({});
+  let exportErrorByFormat = $state<Record<string, string | null>>({});
+  const exportSavedTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function showExportSaved(format: string): void {
+    exportSavedFormat = { ...exportSavedFormat, [format]: true };
+    const pending = exportSavedTimeouts.get(format);
+    if (pending) clearTimeout(pending);
+    exportSavedTimeouts.set(
+      format,
+      setTimeout(() => {
+        exportSavedFormat = { ...exportSavedFormat, [format]: false };
+        exportSavedTimeouts.delete(format);
+      }, EXPORT_STATUS_MS),
+    );
+  }
+
+  async function handleExportClick(
+    event: MouseEvent,
+    format: string,
+    extension: string,
+    item: ProjectExportSummary | undefined,
+  ): Promise<void> {
+    if (!item) {
+      event.preventDefault();
+      return;
+    }
+    if (!isTauri()) {
+      // Plain browser: keep the anchor's native <a download> behavior.
+      return;
+    }
+
+    event.preventDefault();
+    exportErrorByFormat = { ...exportErrorByFormat, [format]: null };
+    try {
+      const result = await saveExport(api.exportDownloadUrl(item.id), sanitizedFilename(extension));
+      if (result === "saved") {
+        showExportSaved(format);
+      }
+      // "cancelled": the user dismissed the native dialog — no-op by design.
+    } catch (err) {
+      exportErrorByFormat = {
+        ...exportErrorByFormat,
+        [format]: err instanceof Error ? err.message : "Export failed.",
+      };
+    }
   }
 
   function instrumentLabel(instrument: string): string {
@@ -583,19 +646,25 @@
         <div class="export-list">
           {#each EXPORT_FORMATS as { format, label, extension } (format)}
             {@const item = exportFor(format)}
-            <a
-              class="export-button"
-              class:disabled={!item}
-              href={item ? api.exportDownloadUrl(item.id) : undefined}
-              download={item ? sanitizedFilename(extension) : undefined}
-              aria-disabled={!item}
-              tabindex={item ? 0 : -1}
-              onclick={(event) => {
-                if (!item) event.preventDefault();
-              }}
-            >
-              Export {label}
-            </a>
+            <div class="export-row">
+              <a
+                class="export-button"
+                class:disabled={!item}
+                href={item ? api.exportDownloadUrl(item.id) : undefined}
+                download={item ? sanitizedFilename(extension) : undefined}
+                aria-disabled={!item}
+                tabindex={item ? 0 : -1}
+                onclick={(event) => handleExportClick(event, format, extension, item)}
+              >
+                Export {label}
+              </a>
+              {#if exportSavedFormat[format]}
+                <span class="export-status">Saved</span>
+              {/if}
+              {#if exportErrorByFormat[format]}
+                <p class="field-error">{exportErrorByFormat[format]}</p>
+              {/if}
+            </div>
           {/each}
         </div>
       </section>
@@ -820,6 +889,34 @@
     opacity: 0.4;
     cursor: default;
     pointer-events: none;
+  }
+
+  /* --- Export native-save confirmation/error (Task 9) -------------------- */
+
+  .export-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .export-status {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #7fb069;
+    animation: export-status-fade 2s ease forwards;
+  }
+
+  @keyframes export-status-fade {
+    0% {
+      opacity: 1;
+    }
+    70% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
   }
 
   /* --- Editable facts (Task 7) ------------------------------------------ */
