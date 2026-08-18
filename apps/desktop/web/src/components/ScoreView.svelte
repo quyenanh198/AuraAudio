@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import type { Note } from "opensheetmusicdisplay";
 
   import { api } from "../lib/api";
   import { createCoalescer } from "../lib/coalesce";
+  import { buildEventPositionIndex, type StepNoteInfo } from "../lib/correlate";
+  import { editor } from "../lib/editor";
   import { createAudioSource, playback } from "../lib/playback";
   import { createSynthSource, type SynthInstrument, type SynthPlaybackSource } from "../lib/synth";
   import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
@@ -89,27 +92,93 @@
     sidebarCollapsed = !sidebarCollapsed;
   }
 
+  /** `note.halfTone` is real MIDI (middle C = 60) minus 12 (one octave) —
+   * NOT the ready-made MIDI number it looks like. Determined empirically,
+   * not from source-reading (two earlier readings of the installed 2.1.2
+   * bundle's `Pitch` internals — one alleging a flat `+24` offset, one
+   * alleging `.halfTone` was unreliable per-note — were both disproven by
+   * live data; see task-6-report.md "MIDI pitch" for the full trail).
+   * Confirmed against every note manually clicked in both task5-guitar and
+   * task5-piano (17 notes total, 0 exceptions) by cross-referencing
+   * `note.halfTone + 12` against the exported MusicXML's own `<step>`/
+   * `<octave>` for that note and against `ScoreEvent.pitch` for the score
+   * event it was expected to correlate to — e.g. task5-guitar's first
+   * chord (`<step>E</step><octave>3</octave>` plus a `<chord/>`-tagged
+   * `<step>E</step><octave>2</octave>`, i.e. real MIDI 52 and 40) read
+   * `note.halfTone` as 40 and 28 respectively — each exactly 12 short. */
+  const OSMD_HALFTONE_TO_MIDI_OFFSET = 12;
+
+  function midiPitchOf(note: Note): number {
+    return note.halfTone + OSMD_HALFTONE_TO_MIDI_OFFSET;
+  }
+
   /** Walks the real, loaded OSMD cursor once from reset() to EndReached,
-   * recording which step indices are NOT rest-only steps. A step is
-   * rest-only when every NotesUnderCursor() entry is a rest (or there are
-   * none) — confirmed rest steps only ever appear as the MusicXML
-   * exporter's explicit gap-filling (task-1b R2); the guitar TAB staff's
-   * duplicate per-staff notes never affect this (both staves agree on
-   * isRest() for the same musical instant). Leaves the cursor reset to the
-   * start when done, ready for playback. */
-  function walkNonRestStepIndices(cursor: OSMDCursorHandle): number[] {
-    const indices: number[] = [];
+   * recording (a) which step indices are NOT rest-only steps, for
+   * timeline.ts's `buildTimeline`, and (b) — extending the same walk, not a
+   * second one (task-6-brief.md) — every non-rest note's pitch/staff/
+   * graphical position at each such step, for correlate.ts's
+   * `buildEventPositionIndex`. A step is rest-only when every
+   * NotesUnderCursor() entry is a rest (or there are none) — confirmed rest
+   * steps only ever appear as the MusicXML exporter's explicit gap-filling
+   * (task-1b R2); the guitar TAB staff's duplicate per-staff notes never
+   * affect this (both staves agree on isRest() for the same musical
+   * instant). `notesUnderCursor()[i]` and `gNotesUnderCursor()[i]` are
+   * index-aligned (verified: both iterate the exact same
+   * `VoicesUnderCursor().Notes` array in the installed bundle — see
+   * task-6-report.md), so zipping them by index is safe. Leaves the cursor
+   * reset to the start when done, ready for playback. */
+  function walkCursor(cursor: OSMDCursorHandle): { nonRestStepIndices: number[]; stepNotes: StepNoteInfo[] } {
+    const nonRestStepIndices: number[] = [];
+    const stepNotes: StepNoteInfo[] = [];
     cursor.reset();
     let step = 0;
     while (!cursor.isEndReached()) {
       const notes = cursor.notesUnderCursor();
+      const gNotes = cursor.gNotesUnderCursor();
       const isRestStep = notes.length === 0 || notes.every((note) => note.isRest());
-      if (!isRestStep) indices.push(step);
+      if (!isRestStep) {
+        nonRestStepIndices.push(step);
+        const stepEntry: StepNoteInfo = { step, notes: [] };
+        for (let i = 0; i < notes.length; i += 1) {
+          const note = notes[i];
+          if (note.isRest()) continue;
+          const pos = gNotes[i].PositionAndShape.AbsolutePosition;
+          stepEntry.notes.push({
+            pitch: midiPitchOf(note),
+            staffId: note.ParentStaff.Id,
+            x: pos.x,
+            y: pos.y,
+          });
+        }
+        stepNotes.push(stepEntry);
+      }
       step += 1;
       cursor.next();
     }
     cursor.reset();
-    return indices;
+    return { nonRestStepIndices, stepNotes };
+  }
+
+  /** Re-walks the cursor (see `walkCursor`) and re-runs correlate.ts against
+   * the already-built `timeline`/`score` (stable across re-renders — only
+   * the OSMD graphical layout, and therefore each note's unit position, can
+   * change) to refresh `notation`'s position index, then re-applies
+   * whatever is currently selected so the highlight follows the note to its
+   * new position. No-op if the cursor/score aren't available, or if the
+   * walk/correlate fails — click-to-select degrades silently rather than
+   * throwing out of a re-render callback (the existing `syncError` state
+   * already covers the load-time failure case; a rebuild failure here just
+   * leaves the previous, possibly stale, positions in place). */
+  function rebuildEventPositions(): void {
+    if (!cursorHandle || !score) return;
+    try {
+      const { stepNotes } = walkCursor(cursorHandle);
+      const positions = buildEventPositionIndex(stepNotes, timeline, score);
+      notation?.setEventPositions(positions);
+    } catch {
+      // Leave whatever positions were already set — degrade gracefully.
+    }
+    notation?.highlightEvent($editor.selectedEventId);
   }
 
   /** IMPORTANT 2: `osmd.render()` (triggered by Notation's applyZoom()/
@@ -125,6 +194,14 @@
    * applyCursorForTime() for the current playback position. */
   function handleNotationRerender(): void {
     if (!cursorHandle) return;
+    // Task 6: rebuild click-to-select positions (and reapply the current
+    // highlight at its new position) BEFORE the playback-cursor resync below
+    // — `rebuildEventPositions` performs its own full walk (`walkCursor`
+    // itself resets/traverses/resets the cursor), and doing that first, then
+    // letting the existing resync below move the cursor to where playback
+    // actually is, keeps the two concerns (click-to-select positions vs.
+    // playback cursor position) from interleaving their cursor.next() calls.
+    rebuildEventPositions();
     cursorHandle.reset();
     cursorHandle.show();
     lastTimelineIndex = -1;
@@ -238,10 +315,21 @@
     try {
       const cursor = notation?.getCursor() ?? null;
       if (!cursor) return;
-      const nonRestStepIndices = walkNonRestStepIndices(cursor);
+      const { nonRestStepIndices, stepNotes } = walkCursor(cursor);
       timeline = buildTimeline(score_, nonRestStepIndices);
       cursor.show();
       cursorHandle = cursor;
+      // Click-to-select (Task 6) is a separate, non-fatal concern from
+      // playback-cursor sync above: a failure here must not set `syncError`
+      // (which disables the transport's playback controls) — it should just
+      // leave `notation` with no known positions, so clicks find nothing and
+      // clear the selection instead of throwing.
+      try {
+        const positions = buildEventPositionIndex(stepNotes, timeline, score_);
+        notation?.setEventPositions(positions);
+      } catch {
+        // Click-to-select unavailable for this score; playback is unaffected.
+      }
     } catch (err: unknown) {
       syncError = err instanceof Error ? err.message : String(err);
     }
@@ -255,6 +343,9 @@
     timeline = [];
     lastTimelineIndex = -1;
     performedNextCalls = 0;
+    // A selection from a previous project (or a previous failed load) has no
+    // meaning for whatever loads next.
+    editor.clearSelection();
     playback.reset();
     if (synthSource) {
       playback.attachSource("synth", null);
@@ -314,6 +405,18 @@
   $effect(() => {
     const el = audioEl;
     playback.attachSource("recording", el ? createAudioSource(el) : null);
+  });
+
+  // Single place responsible for "selection changed -> redraw highlight":
+  // reacts to every source of a `selectedEventId` change (Notation's own
+  // click handler included — it only calls `editor.select()`/
+  // `clearSelection()`, never `highlightEvent()` directly) so Task 7's
+  // sidebar can select a note the same way and get the same highlight for
+  // free. Re-render-triggered position rebuilds (`rebuildEventPositions`)
+  // reapply the highlight separately, since a rebuild can move the SAME
+  // selected id to a new position without `selectedEventId` itself changing.
+  $effect(() => {
+    notation?.highlightEvent($editor.selectedEventId);
   });
 
   onMount(() => {
