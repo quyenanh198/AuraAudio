@@ -12,6 +12,15 @@ from music21 import articulations, chord, clef, duration, instrument, key as m21
 # inlined "6 - internal_string" guitar-numbering conversion.
 _STANDARD_PIANO_RANGE = (21, 108)
 
+# Grid floor for clamped durations, in quarterLength (ql). quantize.py
+# (workers/transcription/src/aura_worker/stages/quantize.py) snaps every
+# onset and duration to GRID_BEATS = Fraction(1, 4) of a beat, and a "beat"
+# there is one quarter note = 1.0 quarterLength here — so the finest grid
+# step is 0.25 ql. Duplicated as a constant rather than imported for the
+# same cross-package reason as _STANDARD_PIANO_RANGE above; if quantize.py's
+# GRID_BEATS ever changes, this must be updated to match.
+_GRID_FLOOR_QL = 0.25
+
 
 def _notated_fraction_to_quarter_length(value: str) -> float:
     """A notated value like '1/4' means one quarter of a whole note (a
@@ -126,13 +135,36 @@ def _insert_notated_events(
     content is already in the measure, under- or over-filling gaps) —
     verified directly while implementing this. Filling gaps by hand sidesteps
     that entirely and is simple to reason about.
+
+    Duration clamp (fix for CRITICAL 1): quantize.py's quantization grid is
+    coarser than the underlying onset/offset detection, so two notated
+    durations can legitimately overlap — either within one measure (the
+    second note's onset falls before the first note's notated end) or across
+    a bar line (a note's notated duration would run past the measure's
+    length). Left unclamped, an overlap inside the measure produces
+    over-full measures (more than measure_length_ql of content) and a
+    bar-crossing overlap leaves music21's own writer to silently split the
+    note into a tied continuation in the next measure — a note that has no
+    corresponding onset group in the score JSON. Both are eliminated by
+    capping each element's effective duration to the room actually
+    available before the next onset (or the end of the measure, for the
+    last element), while never enlarging a note into a real gap — a gap
+    still becomes an explicit rest, per R2 above. The cap is floored at
+    _GRID_FLOOR_QL only as a last-resort safety net; the elements are
+    already onset/duration-quantized to that grid, so available room should
+    never actually fall below it.
     """
     cursor = 0.0
-    for offset_ql, element in elements:
+    for index, (offset_ql, element) in enumerate(elements):
         if offset_ql > cursor:
             m21_measure.insert(cursor, note.Rest(quarterLength=offset_ql - cursor))
+        next_onset_ql = elements[index + 1][0] if index + 1 < len(elements) else measure_length_ql
+        available_ql = min(next_onset_ql, measure_length_ql) - offset_ql
+        capped_ql = min(element.duration.quarterLength, available_ql)
+        effective_duration_ql = max(capped_ql, _GRID_FLOOR_QL)
+        element.duration = duration.Duration(effective_duration_ql)
         m21_measure.insert(offset_ql, element)
-        cursor = offset_ql + element.duration.quarterLength
+        cursor = offset_ql + effective_duration_ql
     if cursor < measure_length_ql:
         m21_measure.insert(cursor, note.Rest(quarterLength=measure_length_ql - cursor))
 

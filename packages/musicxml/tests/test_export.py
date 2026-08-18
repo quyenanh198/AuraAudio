@@ -405,3 +405,92 @@ def test_score_json_to_musicxml_guitar_gap_between_onsets_becomes_rest(tmp_path:
 
     rests = list(notation_part.recurse().getElementsByClass(music21.note.Rest))
     assert any(r.duration.quarterLength == 1.0 for r in rests)  # the 1/4-1/2 gap
+
+
+# --- CRITICAL 1: clamp overlapping/bar-crossing durations ------------------
+
+
+def test_score_json_to_musicxml_clamps_intra_measure_overlap(tmp_path: Path):
+    # note at 0/1 dur 2 beats (half note) overlaps note at 1/4 dur 1 beat
+    # (quarter note at beat 1) in 4/4 — the first note's notated duration
+    # must be clamped down to the room before the second note's onset, the
+    # second note must stay exactly at beat 1, and the measure must come out
+    # to exactly 4 quarterLengths (no over-full measure).
+    score = _sample_score()
+    score["parts"][0]["measures"][0]["events"] = [
+        {
+            "id": "note_00", "pitch": 64, "onsetSeconds": 0.0, "offsetSeconds": 1.0,
+            "notatedOnset": "0/1", "notatedDuration": "1/2", "voice": 1,
+            "confidence": 0.9, "locked": False,
+        },
+        {
+            "id": "note_01", "pitch": 67, "onsetSeconds": 0.5, "offsetSeconds": 1.0,
+            "notatedOnset": "1/4", "notatedDuration": "1/4", "voice": 1,
+            "confidence": 0.85, "locked": False,
+        },
+    ]
+    out_path = tmp_path / "guitar_overlap.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    notes = list(notation_part.recurse().notes)
+    assert len(notes) == 2
+    assert notes[0].offset == 0.0
+    assert notes[0].duration.quarterLength == 1.0  # clamped from 2.0 down to the room before beat 1
+    assert notes[1].offset == 1.0  # second note stays at beat 1, not displaced
+    assert notes[1].duration.quarterLength == 1.0  # unchanged, it already fit
+
+    measure = notation_part.recurse().getElementsByClass(music21.stream.Measure)[0]
+    assert measure.duration.quarterLength == 4.0  # exactly one 4/4 bar, not over-full
+
+
+def test_score_json_to_musicxml_clamps_bar_crossing_duration(tmp_path: Path):
+    # A note at beat 3 with a notated duration of 2 beats would run past the
+    # 4/4 measure's end (beat 4) into the next measure. It must be clamped
+    # to end exactly at the bar line instead of overrunning into a tied
+    # continuation note that has no corresponding onset group in the score
+    # JSON. The next measure's own note must still land at its own true
+    # onset (beat 0 of measure 2), and both measures must be exactly 4
+    # quarterLengths long.
+    score = _sample_score()
+    score["parts"][0]["measures"] = [
+        {
+            "number": 1,
+            "events": [
+                {
+                    "id": "note_00", "pitch": 64, "onsetSeconds": 1.5, "offsetSeconds": 2.5,
+                    "notatedOnset": "3/4", "notatedDuration": "1/2", "voice": 1,
+                    "confidence": 0.9, "locked": False,
+                },
+            ],
+        },
+        {
+            "number": 2,
+            "events": [
+                {
+                    "id": "note_01", "pitch": 67, "onsetSeconds": 2.0, "offsetSeconds": 2.5,
+                    "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+                    "confidence": 0.85, "locked": False,
+                },
+            ],
+        },
+    ]
+    out_path = tmp_path / "guitar_barcross.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    measures = notation_part.recurse().getElementsByClass(music21.stream.Measure)
+    assert len(measures) == 2
+    assert measures[0].duration.quarterLength == 4.0
+    assert measures[1].duration.quarterLength == 4.0
+
+    notes = list(notation_part.recurse().notes)
+    assert len(notes) == 2  # no stray tied-continuation note with no JSON onset
+    assert notes[0].offset == 3.0  # measure 1, beat 3 (bar-relative)
+    assert notes[0].duration.quarterLength == 1.0  # clamped to end exactly at the bar line
+    assert not notes[0].tie  # no tie-continuation was created
+
+    assert notes[1].offset == 0.0  # measure 2, beat 0 (bar-relative)
+    assert notes[1].duration.quarterLength == 1.0
