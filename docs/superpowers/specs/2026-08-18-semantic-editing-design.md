@@ -59,8 +59,9 @@ playback sync and synth scheduling stay correct.
   a typed error carrying a human-readable reason.
 - New router `apps/api/src/aura_api/routers/edits.py`:
   - `POST /v1/projects/{id}/edits` — body is one typed op (shape above).
-    Applies to the HEAD score version, writes the result as `assign`
-    StageArtifact version N+1, updates the head pointer, enqueues a
+    Applies to the HEAD score revision (bootstrapping the baseline from
+    the `assign` artifact on first edit), inserts the next
+    `ScoreRevision`, updates the head pointer, enqueues a
     re-derive job (4.3), returns `{version, score, rederiveJobId}`
     (the edited JSON so the inspector updates instantly; the job id is
     observable via the existing `GET /v1/jobs/{id}` for the
@@ -76,24 +77,36 @@ playback sync and synth scheduling stay correct.
 
 ### 4.2 Versioning and the head pointer
 
-- Every applied edit = one new `assign` artifact version (durable,
-  local-JSON-cheap). Undo/redo walks versions; a NEW edit while
-  rewound truncates nothing — it writes N+1 where N is the head
-  (versions above the head become unreachable and are deleted at that
-  point, standard linear-history semantics).
-- Head pointer: new nullable column `score_head_version` on `Project`
-  (single migration). NULL means "latest version", preserving today's
-  behavior for untouched projects. `GET /v1/projects/{id}/score`,
-  exports, and re-derive all resolve through the head pointer.
+- Edit history reuses the EXISTING `ScoreRevision` table (project-scoped
+  rows with `revision` int, `parent_id` chain, `score_json` payload;
+  quantize already writes revision 0). On a project's first edit, a
+  baseline revision is bootstrapped from the current `assign` artifact
+  (`created_by="baseline"`); every applied edit inserts the next
+  revision. A NEW edit while rewound first deletes the revisions above
+  the head (standard linear-history truncation), then inserts.
+- Head pointer: `Project.settings["scoreHeadRevisionId"]` (the settings
+  JSON column already exists — no migration). Key absent means "no
+  edits, use the assign artifact", preserving today's behavior for
+  untouched projects. `GET /v1/projects/{id}/score`, exports, and
+  re-derive all resolve through the head pointer.
+- "Revert to original" moves the head to the baseline revision.
 
 ### 4.3 Re-derivation (the slow half, decoupled)
 
-- New in-process job type `rederive` running on the existing desktop
-  thread-pool runner (aura-api stays decoupled from worker internals,
-  same as transcription jobs): re-runs the fingering/hand DP over the
-  head score honoring `locked` events (locked notes keep their
-  string/fret/hand; the DP optimizes around them), then re-exports
-  MusicXML + MIDI, replacing the project's export artifacts.
+- Re-derive runs on the existing in-process thread-pool queue as its
+  own job function (aura-api stays decoupled from worker internals,
+  same as transcription jobs). It is observable through the existing
+  `GET /v1/jobs/{id}` by recording it as a `TranscriptionJob` row with
+  `stage="rederive"` (no schema change). It re-runs the fingering/hand
+  DP over the head score honoring `locked` events (locked notes keep
+  their string/fret/hand; the DP optimizes around them), writes the
+  re-assigned result back into the head revision's `score_json`
+  (derived data, not user intent), then re-exports MusicXML + MIDI —
+  the MIDI written from the score's events (`onsetSeconds`/
+  `offsetSeconds`), since raw inference notes don't reflect edits —
+  updating the project's existing `Export` rows in place (`revision`
+  bumped, `object_key` swapped) so export ids stay stable for the
+  frontend.
 - Coalescing: at most one re-derive runs per project; a new edit while
   one is running marks it stale and re-enqueues once. The API applies
   edits synchronously regardless — only notation/export refresh waits.
