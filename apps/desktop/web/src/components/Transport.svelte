@@ -109,8 +109,6 @@
       type="button"
       class="source-button"
       class:active={$playback.source === "synth"}
-      disabled
-      title="Available after synthesis — Task 8"
       onclick={() => selectSource("synth")}
     >
       Synth

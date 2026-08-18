@@ -1,12 +1,14 @@
-// Playback store contract (kept exact — Task 8 builds a synth PlaybackSource
-// on top of this): {position, duration, playing, source, volume} with
-// play(), pause(), seek(t), setSource(s), setVolume(v).
+// Playback store contract: {position, duration, playing, source, volume}
+// with play(), pause(), seek(t), setSource(s), setVolume(v).
 //
-// `PlaybackSource` is the seam Task 8 needs: `createAudioSource()` below
-// wraps an `HTMLAudioElement` behind it, and the store itself never touches
-// `HTMLAudioElement` directly — only `PlaybackSource`. That's also what
-// keeps this file's store logic unit-testable without a real `<audio>`
-// element (a plain object satisfying the interface stands in for one).
+// `PlaybackSource` is the seam that lets multiple playback backends share
+// one store: `createAudioSource()` below wraps an `HTMLAudioElement` behind
+// it, and Task 8's `createSynthSource()` (src/lib/synth.ts) wraps a WebAudio
+// scheduler behind the same interface. The store itself never touches
+// `HTMLAudioElement` (or WebAudio) directly — only `PlaybackSource`. That's
+// also what keeps this file's store logic unit-testable without a real
+// `<audio>` element (a plain object satisfying the interface stands in for
+// one).
 
 import { writable, type Readable } from "svelte/store";
 
@@ -49,6 +51,13 @@ export interface PlaybackStore extends Readable<PlaybackState> {
   setDuration(d: number): void;
   /** Driven by the owning component's rAF loop while playing. */
   syncPosition(t: number): void;
+  /** The currently active source's live `currentTime()`, or `null` if no
+   * source is attached for the current `kind`. The owning component's rAF
+   * loop reads this (instead of e.g. an `<audio>` element directly) so
+   * cursor/position sync works identically for whichever `PlaybackSource`
+   * (recording or synth) is currently selected — the loop doesn't need to
+   * know which kind is active. */
+  activeSourceTime(): number | null;
   /** Back to position 0 / duration 0 / not playing, for reuse across project
    * navigations (this store is a module-level singleton). Leaves `volume`
    * and `source` as the user left them. */
@@ -137,12 +146,29 @@ export function createPlaybackStore(): PlaybackStore {
     update((s) => ({ ...s, position: t }));
   }
 
+  function activeSourceTime(): number | null {
+    const src = active();
+    return src ? src.currentTime() : null;
+  }
+
   function reset(): void {
     active()?.pause();
     update((s) => ({ ...s, position: 0, duration: 0, playing: false }));
   }
 
-  return { subscribe, play, pause, seek, setSource, setVolume, attachSource, setDuration, syncPosition, reset };
+  return {
+    subscribe,
+    play,
+    pause,
+    seek,
+    setSource,
+    setVolume,
+    attachSource,
+    setDuration,
+    syncPosition,
+    activeSourceTime,
+    reset,
+  };
 }
 
 /** Wraps a real `HTMLAudioElement` behind `PlaybackSource` — the only place

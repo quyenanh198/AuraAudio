@@ -209,6 +209,31 @@ describe("playback store", () => {
     expect(state.source).toBe("recording");
   });
 
+  it("activeSourceTime() returns null when no source is attached for the current kind", () => {
+    const store = createPlaybackStore();
+    expect(store.activeSourceTime()).toBeNull();
+  });
+
+  it("activeSourceTime() reads the active source's currentTime()", () => {
+    const store = createPlaybackStore();
+    const recording = fakeSource({ currentTime: vi.fn(() => 2.5) });
+    store.attachSource("recording", recording);
+
+    expect(store.activeSourceTime()).toBe(2.5);
+  });
+
+  it("activeSourceTime() follows setSource() to the newly active source", () => {
+    const store = createPlaybackStore();
+    const recording = fakeSource({ currentTime: vi.fn(() => 1) });
+    const synth = fakeSource({ currentTime: vi.fn(() => 9) });
+    store.attachSource("recording", recording);
+    store.attachSource("synth", synth);
+
+    store.setSource("synth");
+
+    expect(store.activeSourceTime()).toBe(9);
+  });
+
   it("play()/pause()/seek()/setVolume() are safe no-ops with no source attached at all", () => {
     const store = createPlaybackStore();
     expect(() => {

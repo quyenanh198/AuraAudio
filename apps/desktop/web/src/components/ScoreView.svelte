@@ -4,8 +4,9 @@
   import { api } from "../lib/api";
   import { createCoalescer } from "../lib/coalesce";
   import { createAudioSource, playback } from "../lib/playback";
+  import { createSynthSource, type SynthInstrument, type SynthPlaybackSource } from "../lib/synth";
   import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
-  import type { ProjectListItem, ScoreJson } from "../lib/types";
+  import type { ProjectListItem, ScoreJson, ScorePart } from "../lib/types";
   import Notation, { type OSMDCursorHandle } from "./Notation.svelte";
   import Sidebar from "./Sidebar.svelte";
   import Transport from "./Transport.svelte";
@@ -49,6 +50,12 @@
   // loadScore() (see there for the reset).
   let cursorHandle: OSMDCursorHandle | null = null;
   let timeline: TimelineEntry[] = [];
+  /** The synth `PlaybackSource` for the currently loaded project — owns a
+   * real `AudioContext`, so it's explicitly disposed (not just garbage
+   * collected) whenever `loadScore()` replaces it or the component
+   * unmounts. Rebuilt every `loadScore()` since it's derived from the
+   * score's events + instrument. */
+  let synthSource: SynthPlaybackSource | null = null;
   /** Index into `timeline` the cursor is currently showing; -1 = "before the
    * first entry" (freshly reset, nothing has sounded yet). */
   let lastTimelineIndex = -1;
@@ -142,10 +149,19 @@
 
   function tick(): void {
     rafId = requestAnimationFrame(tick);
-    if (!audioEl) return;
-    const t = audioEl.currentTime;
+    // Read through the active `PlaybackSource` (not the `<audio>` element
+    // directly) so cursor/position sync works the same whether "recording"
+    // or "synth" is selected — see playback.ts's `activeSourceTime()`.
+    const t = playback.activeSourceTime();
+    if (t === null) return;
     playback.syncPosition(t);
     applyCursorForTime(t);
+    // The synth source has no native "ended" event to drive
+    // handleAudioEnded() the way the `<audio>` element does — detect
+    // reaching the end here instead, for either source.
+    if ($playback.playing && $playback.duration > 0 && t >= $playback.duration) {
+      playback.pause();
+    }
   }
 
   function startLoop(): void {
@@ -173,6 +189,13 @@
     playback.pause();
   }
 
+  /** Defaults to "guitar" for any unrecognized value — mirrors the
+   * `tabAvailable` check below, which treats "guitar" as the known,
+   * explicitly-handled case. */
+  function resolveSynthInstrument(part: ScorePart | undefined): SynthInstrument {
+    return part?.instrument === "piano" ? "piano" : "guitar";
+  }
+
   async function loadScore(): Promise<void> {
     loading = true;
     error = null;
@@ -181,6 +204,11 @@
     lastTimelineIndex = -1;
     performedNextCalls = 0;
     playback.reset();
+    if (synthSource) {
+      playback.attachSource("synth", null);
+      synthSource.dispose();
+      synthSource = null;
+    }
     try {
       const [projects, scoreJson] = await Promise.all([
         api.listProjects(),
@@ -201,6 +229,10 @@
       score = scoreJson;
       tabVisible = true;
       zoomPercent = 100;
+
+      synthSource = createSynthSource(scoreJson, resolveSynthInstrument(scoreJson.parts[0]));
+      playback.attachSource("synth", synthSource);
+
       await notation?.loadMusicXml(xmlText);
 
       const cursor = notation?.getCursor() ?? null;
@@ -226,6 +258,9 @@
     stopLoop();
     playback.pause();
     playback.attachSource("recording", null);
+    playback.attachSource("synth", null);
+    synthSource?.dispose();
+    synthSource = null;
   });
 
   let part = $derived(score?.parts[0] ?? null);
