@@ -22,6 +22,43 @@ was assumed, written into a plan, and turned out wrong — see
 Do tasks 1–4 first regardless. They fix a live bug and stand on their own
 even if the shell work is deferred.
 
+## Execution status
+
+**Tasks 1–4: DONE (2026-08-18)**, commits `1641257`, `e67cdb8`, `c76ee33`,
+`63dc5bc`. Suite 157/157; ruff unchanged at its 96-error baseline. Each
+task's tests were mutation-checked rather than merely observed passing —
+see each commit message for what was broken and which tests caught it.
+
+All four were then verified together against a real `uvicorn` process with
+a fresh data directory, a token set, and explicit binary paths — i.e. the
+configuration the shell will actually produce: readiness poll open without
+a token (200), API rejected without one (401) and with a wrong one (401),
+foreign `Host` rejected (400), upload and project creation accepted (201),
+and a full transcription driven to `succeeded`. Interrupted-job recovery
+was verified by planting a `running` row and restarting: it came back
+`failed` with the interruption reason, and an already-succeeded job in the
+same database was left untouched.
+
+Two things surfaced during execution that were not in the plan as written:
+
+- **The Alembic move needed `parents[2]`, not `parents[1]`**, in
+  `env.py`'s `sys.path` climb, and `alembic.ini`'s `script_location` is
+  relative and had to change too — re-check the CLI from `apps/api` after
+  the move.
+- **The test conftest bootstrapped the schema with
+  `Base.metadata.create_all`, which conflicts with the new startup
+  migration.** `create_all` leaves no `alembic_version` row, so Alembic
+  then tried to create tables that already existed and failed with "table
+  projects already exists". This was invisible until a test entered a
+  `TestClient` as a context manager — that is what runs the lifespan
+  handler; the existing tests use `TestClient(app)` without `with` and so
+  never ran startup at all. The conftest now bootstraps via
+  `run_migrations()`, so tests exercise the same path production does.
+  Worth knowing for task 6: any future test that needs startup behaviour
+  must use the context-manager form.
+
+**Tasks 5–8: not started.** They need a Rust toolchain and a display.
+
 ## Global Constraints
 
 - Every task ends with the full suite green: `source .envrc && make test`.

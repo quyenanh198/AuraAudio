@@ -297,9 +297,17 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    does not stop a browser page POSTing to `127.0.0.1` (CORS blocks
    reading the response, not sending the request).
 
-   **Tasks 1-4 of that plan are backend-only, fully testable without a
-   desktop, and fix a live bug — do them first even if the shell work
-   slips.** Task 1 in particular: **a fresh install is broken today.**
+   **Tasks 1-4 of that plan are DONE (2026-08-18)** — commits `1641257`,
+   `e67cdb8`, `c76ee33`, `63dc5bc`; suite 157/157. Migrations now run at
+   startup, jobs left `running` by a previous exit are failed, the API
+   takes an optional per-launch token plus a `Host` check, and the worker
+   resolves `ffmpeg`/`ffprobe` from `AURA_FFMPEG_PATH`/`AURA_FFPROBE_PATH`
+   when set. All four verified together against a real uvicorn process
+   configured the way the shell will configure it, including a full
+   transcription to `succeeded` and a restart that recovered a planted
+   interrupted job. **Tasks 5-8 (the Tauri shell itself) are not started**
+   and need a Rust toolchain and a display. For context, the bug task 1
+   fixed:
    Nothing runs Alembic at startup (only `tests/conftest.py` creates the
    schema, via `create_all`), so on a clean data directory `/healthz` is
    ok and `POST /v1/uploads` returns 201 — it only touches the filesystem
@@ -309,9 +317,19 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    because it ran against a data dir whose tables already existed. The fix
    (programmatic `command.upgrade(cfg, "head")` with an **absolute**
    `script_location`) was verified working from `/` as the working
-   directory and verified idempotent; note `apps/api/alembic/` is outside
-   the wheel's `packages = ["src/aura_api"]` and must move into the
-   package to ship at all.
+   directory and verified idempotent; `apps/api/alembic/` was outside the
+   wheel's `packages = ["src/aura_api"]` and has been moved into the
+   package so it ships at all.
+
+   One gotcha the execution surfaced, worth knowing before writing any
+   test that touches startup: `TestClient(app)` does **not** run the
+   lifespan handler, only `with TestClient(app)` does. The test conftest
+   had been bootstrapping the schema with `Base.metadata.create_all`,
+   which leaves no `alembic_version` row and so collides with the startup
+   migration ("table projects already exists") — invisible until the first
+   test entered a TestClient as a context manager. The conftest now
+   bootstraps via `run_migrations()` so tests exercise the production
+   path.
 3. **Score preview + playback UI** — not started. See "Direction change"
    above for scope notes.
 
