@@ -21,12 +21,11 @@ import type { TimelineEntry } from "./timeline";
  * `.GNotesUnderCursor` both `forEach` the exact same
  * `VoicesUnderCursor().Notes` array, one via a bare push and the other via
  * `.map(rules.GNote)`, so index i is the same underlying note in both.
- * `pitch` is real MIDI (e.g. middle C = 60) — computed from the `Note`'s
- * `Pitch` (fundamental + octave + accidental) by the walker, NOT here (see
- * ScoreView.svelte's `midiPitchOf` for the formula and why it reads
- * `Pitch`'s parts rather than OSMD's own `Note.halfTone`), and NOT CSS
- * pixels: `x`/`y` are `GraphicalNote.PositionAndShape.AbsolutePosition`
- * verbatim, in raw OSMD engraving units. */
+ * `pitch` is real MIDI (e.g. middle C = 60) — computed by the walker, NOT
+ * here; see ScoreView.svelte's `midiPitchOf` for the formula and the
+ * empirical trail behind it. NOT CSS pixels either: `x`/`y` are
+ * `GraphicalNote.PositionAndShape.AbsolutePosition` verbatim, in raw OSMD
+ * engraving units. */
 export interface StepNoteInfo {
   /** The real OSMD cursor step index this entry was walked at (matches
    * `TimelineEntry.step`). */
