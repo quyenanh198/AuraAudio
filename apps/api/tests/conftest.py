@@ -15,12 +15,25 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
 os.environ["AURA_DATA_DIR"] = tempfile.gettempdir()
 
 from aura_api.db import Base  # noqa: E402
+from aura_api.migrations import run_migrations  # noqa: E402
+
+# Bootstrap the test database the same way the real app does — via Alembic,
+# not Base.metadata.create_all. The two disagree: create_all leaves no
+# alembic_version row, so the startup migration then tries to create tables
+# that already exist and dies with "table projects already exists". Any test
+# that enters a TestClient as a context manager (which runs the lifespan
+# handler, and so the startup migration) hit that; tests using TestClient
+# without `with` never ran startup and silently did not.
+#
+# The stale file from a previous run is removed first: it may predate this
+# and carry create_all-made tables with no stamp.
+_TEST_DB_PATH.unlink(missing_ok=True)
 
 
 @pytest.fixture()
 def db_session():
     engine = create_engine(os.environ["DATABASE_URL"], connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
+    run_migrations()
     Session = sessionmaker(bind=engine)
     session = Session()
     try:

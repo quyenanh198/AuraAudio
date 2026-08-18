@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from aura_api.auth import local_auth_middleware
 from aura_api.migrations import run_migrations
 from aura_api.startup import recover_interrupted_jobs
 
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="AuraAudio API", lifespan=lifespan)
+    app.middleware("http")(local_auth_middleware)
 
     @app.get("/healthz")
     def healthz():
