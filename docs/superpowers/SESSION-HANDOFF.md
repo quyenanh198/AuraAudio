@@ -389,10 +389,95 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
    closed with one small, targeted, independently-verified follow-up
    rather than a third full review cycle — matching exactly how
    sub-project 1 closed its own equivalent residual finding.
-3. **Score preview + playback UI** — not started. See "Direction change"
-   above for scope notes.
+3. **Score preview + playback UI. 9 of 9 tasks implemented and reviewed
+   clean (Task 1 gated through a corrective exporter fix, 1b); final
+   whole-branch review pending.** Built the whole product/UI surface for
+   this sub-project: a Home screen (upload via drag-drop or file picker,
+   instrument choice, live transcription progress polling, a project list
+   with retry-on-failure); a Score view (OSMD-rendered notation with a
+   collapsible sidebar showing detection facts — key/tempo/meter with
+   confidence dots — a TAB-staff visibility toggle for guitar, zoom
+   controls, and MusicXML/MIDI export buttons); two interchangeable
+   playback sources behind one `PlaybackSource` interface — the original
+   recording (a real `<audio>` element) and a synthesized rendition (`smplr`
+   WebAudio sampler over bundled soundfont samples) — switchable mid-
+   playback in either direction with position preserved; and an OSMD-cursor
+   sync layer that walks the cursor in step with whichever source is
+   playing (chord = one step, rests filtered, TAB staff's duplicate
+   per-staff notes deduped — rules discovered during Task 1's OSMD spike and
+   consumed directly by Task 7). Task 1's spike also caught and fixed (via a
+   corrective Task 1b) a real defect in `packages/musicxml` predating this
+   sub-project: the exporter never emitted a TAB clef for guitar, ignored
+   per-event onsets (collapsing piano's cross-hand rhythm), and never
+   grouped same-onset events into `<chord/>` — all fixed before Task 1's
+   OSMD-vs-Verovio gate was re-run and passed. Backend got 3 new/adjusted
+   endpoints (project listing with job/export summaries, score JSON,
+   normalized-audio streaming) plus origin-allowlisted CORS scoped to just
+   `/v1/*` (both the dev Vite origin and the real `tauri://localhost`
+   production origin — see Task 9's verification below for how the
+   production half was empirically closed, not just source-verified). Spec:
+   `docs/superpowers/specs/2026-08-17-score-preview-playback-ui-design.md`.
+   Plan: `docs/superpowers/plans/2026-08-17-score-preview-playback-ui.md`.
+   SDD workspace: `.superpowers/sdd/2026-08-17-score-preview-playback-ui/`.
+
+   **Task 9's verification** (2026-08-18): a full guitar+piano journey
+   (upload → live progress → score render → play the recording with the
+   OSMD cursor visibly stepping in sync with `audio.currentTime` → toggle
+   to the synth mid-playback and back, position preserved both directions,
+   zero external network requests → export both formats) ran against the
+   real `cargo tauri dev` process (real spawned backend, real webview)
+   end-to-end, driven via Playwright against the Vite dev origin per this
+   process's established "same bytes, same backend" precedent (Task 1,
+   Task 8). `make test` is **151/151** across all 6 packages; the web suite
+   is **74/74** (`vitest`) plus a clean `svelte-check`/`tsc` and `vite
+   build`; `cargo build`/`cargo clippy` in `apps/desktop/src-tauri` are
+   clean (Rust genuinely untouched by this frontend-only sub-project). A
+   fresh `cargo tauri build` produced a real `.deb` bundling the new
+   frontend, launched successfully under Xvfb from a `dpkg -x` extraction,
+   and **closed a residual left open by Task 4**: Task 4 had source-verified
+   (not observed) that the Linux production webview serves from
+   `tauri://localhost`; Task 9 empirically confirmed both that the real
+   packaged webview's origin genuinely is `tauri://localhost` and that a
+   fetch from it to `http://127.0.0.1:8317/v1/projects` succeeds (`200 OK`,
+   confirmed via a temporary on-page diagnostic reverted before commit, same
+   discipline as Task 4's own probe).
+
+   Two things worth knowing about, both documented in Task 9's report
+   (`.superpowers/sdd/2026-08-17-score-preview-playback-ui/task-9-report.md`)
+   rather than fixed there (neither is a regression from this sub-project's
+   own tasks, and both are out of a verification task's scope to patch):
+   1. **A real, intermittent WebKitGTK `fetch()` flake, newly discovered.**
+      The real webview (dev *and* packaged) sometimes fails its first
+      `fetch()` call to the local backend with a generic `TypeError: Load
+      failed`, then either self-recovers on retry or doesn't for several
+      retries — genuinely non-deterministic, not a simple cold-start race (a
+      90s wait didn't reliably fix it). Ruled out as CORS, backend, or app-
+      code related via multiple independent checks: `curl` with the exact
+      `Origin` header always succeeds; a Playwright/Chromium session hitting
+      the identical dev server never failed once across the whole journey;
+      `strace -f -e trace=network` on both `WebKitNetworkProcess` and
+      `WebKitWebProcess` showed **zero `connect()`/`socket()` syscalls** on a
+      failing attempt (the failure happens before any network I/O, which
+      also rules out a CORS-preflight rejection — that would still show a
+      completed, blocked request). Most likely a quirk of this specific
+      sandboxed container's `webkit2gtk-4.1` build, not a product defect;
+      worth a real investigation in a future session if it recurs outside
+      this environment. The existing Home screen's "Retry" button lets a
+      user recover from it today.
+   2. **Export-to-cwd, carried from Task 6, still real.** `<a download>` in
+      the real WebKitGTK webview has no Rust `download-started` wiring, so
+      exported MusicXML/MIDI files land in the Tauri process's cwd, not a
+      user-chosen location. Needs `src-tauri` wiring to Tauri's
+      `download-started`/save-dialog APIs — a good candidate for a small,
+      bounded follow-up task before or alongside sub-project 4, since
+      semantic editing will make exports something users reach for
+      constantly, not just once per transcription.
+
 4. **Semantic editing** — not started. See "Direction change" above for
-   scope notes.
+   scope notes. Once sub-project 3's final whole-branch review completes,
+   this is next — the edit-operation model (add/delete/move note, undo/redo,
+   optimistic locking, locks) plus the UI to drive it, building on the Score
+   view/OSMD/export foundation sub-project 3 just built.
 
 **Known follow-up, not yet its own sub-project:** `musicxml/export.py`
 appends notes to each measure/staff in list order rather than sorting by
@@ -411,15 +496,16 @@ sub-project 4 (semantic editing) starts building on top of
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
-desktop app sub-projects" further down for current status. Sub-project 1
-(offline backend adaptation) is done. Sub-project 2 (desktop shell +
-packaging, Tauri) has all 8 tasks implemented and reviewed clean; its
-final whole-branch review has NOT run yet — that's the immediate next
-step (same `subagent-driven-development` process sub-project 1 used for
-its own final review), before sub-project 2 can be marked done. Once that
-review (and any fix wave it produces) completes, pick up sub-project 3
-(score preview + playback UI) next — no spec exists yet for it, start
-with `superpowers:brainstorming`.
+desktop app sub-projects" further down for current status. Sub-projects 1
+and 2 (offline backend adaptation; desktop shell + packaging) are both done,
+including their final whole-branch reviews. Sub-project 3 (score preview +
+playback UI) has all 9 tasks implemented and reviewed clean (Task 1 gated
+through a corrective exporter fix, 1b); its final whole-branch review has
+NOT run yet — that's the immediate next step (same
+`subagent-driven-development` process sub-projects 1 and 2 used), before
+sub-project 3 can be marked done. Once that review (and any fix wave it
+produces) completes, pick up sub-project 4 (semantic editing) next — no
+spec exists yet for it, start with `superpowers:brainstorming`.
 
 ## Working process (established this session, keep using it)
 
@@ -502,12 +588,81 @@ correct — check it.
   `tensorflow` version pulled in by `basic-pitch` is ABI-incompatible with
   numpy 2.x; found and fixed during sub-project 1's e2e test migration
   (task 8).
+- **`cargo tauri dev` must be invoked from the repo root with an explicit
+  `--config` path**, not from `apps/desktop`:
+  `cd /home/user/AuraAudio && xvfb-run -a cargo tauri dev --config
+  apps/desktop/src-tauri/tauri.conf.json`. Invoking it from inside
+  `apps/desktop` hits an ENOENT path-doubling bug in this tauri-cli version
+  (found during sub-project 3, task 1). Same pattern applies to
+  `cargo tauri build`.
+- **Svelte 5 + `svelte-check@4.7.3` + `typescript@6.0.2`** (this project's
+  pinned versions): a nullable `$state()` needs an **explicit generic**, not
+  just a `let` type annotation — `$state<Foo | null>(null)`, not
+  `let x: Foo | null = $state(null)`. With the annotation-only form,
+  svelte-check infers the reactive type as the literal `null` and silently
+  ignores the `let` annotation, surfacing only as a confusing "Property 'x'
+  does not exist on type 'never'" wherever the value is later narrowed or
+  accessed. Confirmed via a minimal repro during sub-project 3 (tasks 6-8).
+- **`smplr@1.0.0`'s `Sampler({buffers})` has two real upstream bugs**,
+  both worked around (not patched upstream) and both regression-tested —
+  see `apps/desktop/web/src/lib/synth.ts`'s doc comments for the full
+  traces: (1) `samplerToPreset` computes pitch/keyRange from a
+  MIDI-sorted view internally but zips the result positionally against the
+  *original* (alphabetical-by-filename) buffers-map key order, corrupting
+  pitch mapping unless the buffers map is pre-sorted by MIDI number before
+  construction; (2) omitting `decayTime`/`lpfCutoffHz`/`detune` from the
+  `Sampler()` options (rather than passing them as explicit finite numbers)
+  lets an internal `Object.assign`-style merge overwrite the library's own
+  defaults with `undefined`, making every note's computed `detune` become
+  `NaN` and throw inside `new Voice()`.
+- **The bundled synth soundfont assets are ~22MB** (`tonejs-instrument-*`
+  MP3 samples for piano + guitar, MIT-licensed), well above a typical "few
+  MB" web-asset budget — a deliberate sub-project 3 (task 8) tradeoff:
+  full-chromatic sample quality over size, justified against a desktop app
+  whose backend PyInstaller bundle is already ~1.6GB. Revisit with a
+  sparser, pitch-shifted sample set if package size ever becomes a real
+  constraint.
+- **Exported files (MusicXML/MIDI) land in the Tauri process's cwd, not a
+  user-chosen location.** The Score view's export buttons use a plain
+  `<a download>`, which WebKitGTK honors but with no native save dialog —
+  Tauri's Rust side would need `download-started` event wiring plus a save-
+  dialog API call to fix this properly. Known and accepted since sub-project
+  3's task 6, re-confirmed still true by task 9's real-app verification.
+  Worth a small bounded follow-up task, ideally before sub-project 4 makes
+  exports something users reach for constantly.
+- **After changing anything under `apps/api`'s routes** (the backend the
+  desktop app bundles), the PyInstaller `aura-backend` bundle
+  (`apps/desktop/dist/aura-backend/`, staged into
+  `apps/desktop/src-tauri/resources/aura-backend/`) goes stale and must be
+  rebuilt via `apps/desktop/build-backend.sh` before `cargo tauri
+  build`/`dev` will reflect the change — the bundle is not automatically
+  regenerated by `cargo build`/`tauri dev`, only re-staged/copied from
+  wherever it already is. Sub-project 3 didn't touch backend routes after
+  task 2-4 landed, so this wasn't hit again, but it's an easy trap for
+  sub-project 4 (semantic editing), which will add real new endpoints.
+- **Playwright** (kept as a deliberate `apps/desktop/web` devDependency,
+  originally for sub-project 3 task 1's OSMD spike verification, reused
+  through task 9's full journey) needs an explicit `executablePath` —
+  `/opt/pw-browsers/chromium-1194/chrome-linux/chrome` — because the plain
+  `/opt/pw-browsers/chromium` symlink in this sandbox points at a revision
+  the installed `playwright` package doesn't expect.
+- **A real, intermittent WebKitGTK `fetch()` "Load failed" flake**, newly
+  discovered during sub-project 3's task 9 (see that task's report for the
+  full diagnostic trail: `strace` showing no `connect()`/`socket()` syscall
+  at all on a failing attempt, ruling out CORS/backend/app-code causes).
+  Affects the real webview (both `cargo tauri dev` and the packaged
+  `.deb`), not Playwright/Chromium sessions against the same dev server —
+  purely an artifact of this sandboxed container's `webkit2gtk-4.1` build,
+  most likely. Self-recovers on retry in some runs, doesn't in others; the
+  Home screen's existing "Retry" button is today's only mitigation. Worth
+  a real look if it recurs in a future session.
 
 ## Quick start for a fresh session
 
 ```bash
 cd /home/user/AuraAudio
-source .envrc && make test   # expect all five packages green (126/126 as of sub-project 1's task 9)
+source .envrc && make test   # expect all six packages green (151/151 as of sub-project 3's task 9;
+                              # apps/desktop's suite joined the other five during sub-project 2)
 ```
 
 No external services to start first — see "Environment gotchas" above.
