@@ -123,4 +123,35 @@ describe("projects store polling", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(listProjectsMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not resurrect polling when stopPolling() runs while a refresh() is still in flight", async () => {
+    // Pin the race from the review: onDestroy -> stopPolling() can land
+    // while the onMount (or in-flight interval tick) refresh() is still
+    // awaiting the network. That refresh() must not be allowed to schedule
+    // a fresh interval once it finally resolves — there's no component
+    // left alive to stop it.
+    let resolveFetch: (items: ReturnType<typeof project>[]) => void = () => {};
+    const pending = new Promise<ReturnType<typeof project>[]>((resolve) => {
+      resolveFetch = resolve;
+    });
+    listProjectsMock.mockReturnValueOnce(pending);
+
+    const { projects } = await import("./projects");
+
+    const refreshPromise = projects.refresh();
+    // Simulate the owning component unmounting mid-fetch.
+    projects.stopPolling();
+
+    resolveFetch([project({ job: job("running") })]);
+    await refreshPromise;
+
+    expect(listProjectsMock).toHaveBeenCalledTimes(1);
+    // The late data is still committed to the store...
+    expect(get(projects).items[0].job?.status).toBe("running");
+
+    // ...but no interval should have been (re)armed from the stale fetch,
+    // even though its result reports an active job.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(listProjectsMock).toHaveBeenCalledTimes(1);
+  });
 });
