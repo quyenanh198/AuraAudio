@@ -20,6 +20,9 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
+          # tensorflow==2.14.0 (pulled in by basic-pitch) only ships cp311
+          # wheels; the ubuntu-latest runner's system Python is 3.12.
+          python-version: "3.11"
 
       - name: Install python dependencies
         run: uv sync --all-packages
@@ -92,6 +95,20 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri
 
+      # tauri.conf.json's bundle.resources references
+      # resources/aura-backend/ (the PyInstaller-built backend, produced by
+      # apps/desktop/build-backend.sh — gitignored, heavy: tensorflow +
+      # basic-pitch model weights). tauri-build's build.rs checks that every
+      # declared resource path exists on disk on every `cargo build`, not
+      # just full `tauri build` bundling — it does not need to be a real,
+      # working binary for that check, so a placeholder file is enough and
+      # avoids duplicating the python job's heavy PyInstaller build here.
+      - name: Stub backend resource for tauri-build's resource check
+        run: |
+          mkdir -p apps/desktop/src-tauri/resources/aura-backend
+          touch apps/desktop/src-tauri/resources/aura-backend/aura-backend
+          chmod +x apps/desktop/src-tauri/resources/aura-backend/aura-backend
+
       - name: cargo build
         working-directory: apps/desktop/src-tauri
         run: cargo build
@@ -116,6 +133,9 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
+          # tensorflow==2.14.0 (pulled in by basic-pitch) only ships cp311
+          # wheels; the ubuntu-latest runner's system Python is 3.12.
+          python-version: "3.11"
 
       - name: Install python dependencies
         run: uv sync --all-packages
