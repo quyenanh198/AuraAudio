@@ -844,12 +844,26 @@ Cutting a release: bump the version in
 already fixed as "AuraAudio" / `com.auraaudio.desktop` — only `version`
 changes per release), commit it on `main`, then push a `vX.Y.Z` tag
 matching that version. `.github/workflows/release.yml` builds the real
-PyInstaller backend, `cargo tauri build`s the Linux `.deb`, and attaches
-it to a GitHub Release for that tag. The same workflow also runs on
-`workflow_dispatch` (no tag) for build-only testing — it uploads the
-`.deb` as a workflow artifact but does not cut a Release in that mode.
-There is currently only a Linux `.deb` build; add sibling jobs the same
-way if other targets (Windows `.msi`, macOS `.dmg`) are needed later.
+PyInstaller backend, `cargo tauri build`s both the Linux `.deb` and the
+macOS `.dmg`, and attaches both to a GitHub Release for that tag. The
+same workflow also runs on `workflow_dispatch` (no tag) for build-only
+testing — it uploads both as workflow artifacts but does not cut a
+Release in that mode. **There is no Windows `.msi` job** — verified
+CI-infeasible under this project's current pins, not merely unattempted;
+see item 2 below and the long comment in `release.yml` (where the
+`windows-msi` job used to be) for the full evidence.
+
+**Runtime note, both new platforms (not a regression from this work,
+pre-existing on Linux too):** neither the macOS `.dmg` nor a
+hypothetical Windows `.msi` bundles `ffmpeg` — the backend
+(`aura_worker/stages/probe.py`/`normalize.py`/`ffmpeg_utils.py`) shells
+out to a system `ffmpeg`/`ffprobe` binary at transcription-request time,
+and PyInstaller's `--onedir` bundle never collects it (only
+`--collect-data basic_pitch` is passed). The Linux `.deb`'s own metadata
+declares no dependency on ffmpeg either (`tauri.conf.json` sets no
+`bundle.linux.deb.depends`), so this isn't a new gap introduced here —
+just now also true for macOS. Users on any platform need ffmpeg on PATH
+themselves; documenting/bundling it is future work, not done here.
 
 **Current ship-readiness roadmap** (user-approved order, in progress):
 1. **Branding + release workflow — DONE.** Real app icon (amber
@@ -866,10 +880,84 @@ way if other targets (Windows `.msi`, macOS `.dmg`) are needed later.
    AppImage tooling). NOTE: `tauri.conf.json` `bundle.targets` is still
    "all" — a LOCAL `cargo tauri build` without `--bundles deb` can hit
    the same AppImage hang; scope it or pass the flag.
-2. **Windows `.msi` + macOS `.dmg` jobs** — not started. Windows also
-   needs `http://tauri.localhost` added to `WEBVIEW_ORIGINS` in
-   `apps/desktop/run_backend.py` (ruling recorded when the CORS
-   allowlist was built: excluded because only Linux shipped).
+2. **Windows `.msi` + macOS `.dmg` jobs — macOS DONE, Windows genuinely
+   CI-infeasible under current pins (reported, not hacked around).**
+   `http://tauri.localhost` (the Windows/Android WebView2 production
+   origin, per `tauri-2.11.5/src/manager/mod.rs`'s `cfg!(windows)`
+   branch) is now in `WEBVIEW_ORIGINS` in `apps/desktop/run_backend.py`,
+   with a matching `test_v1_allows_windows_webview_origin` test in
+   `apps/desktop/tests/test_cors_scope.py` — the previously-recorded
+   ruling is closed regardless of whether Windows CI works, since a real
+   future Windows build (developer machine, or CI once the blocker below
+   clears) needs it. `apps/desktop/src-tauri/src/backend.rs`'s
+   `resolve_backend_executable` also now resolves `aura-backend.exe` on
+   Windows vs `aura-backend` elsewhere (`BACKEND_EXE_NAME`, `cfg(windows)`)
+   — a real correctness bug (PyInstaller names the Windows executable
+   with `.exe`; the old code hardcoded the extensionless name) fixed
+   ahead of when it'll actually matter.
+
+   **macOS (`macos-dmg`, macos-latest/arm64): DONE, real green run.**
+   Mirrors the Linux job (uv/Python 3.11, npm build, `bash
+   build-backend.sh`, `cargo tauri build --bundles dmg`). Required one
+   real fix first: basic-pitch 0.4.0's PyPI metadata has a marker bug —
+   its bare `tensorflow-macos` dependency only activates for
+   `python_version > "3.11"`, so macOS + this project's Python 3.11 pin
+   (forced by tensorflow's cp311-only wheels) resolved NEITHER tensorflow
+   package at all, even though a matching
+   `tensorflow_macos-2.14.0-cp311-cp311-macosx_12_0_arm64.whl` exists on
+   PyPI. Fixed by opting `workers/transcription/pyproject.toml`'s
+   `basic-pitch` dependency into basic-pitch's own `tf` extra
+   (`basic-pitch[tf]`), whose `tensorflow-macos` marker
+   (`python_version > "3.7"`) doesn't have the bug — confirmed directly
+   against PyPI's `requires_dist` and against `uv.lock`'s resolution
+   before/after. No tensorflow version was changed. First real green run:
+   **32240106566** (dispatched to `claude/multi-ai-skills-caveman-7tx5l0`
+   at commit `c9dd524`) — `macos-dmg` produced a `.dmg` artifact
+   (`auraaudio-macos-dmg`, ~456M) alongside Linux's `.deb` staying green
+   in the same run; the tag-gated `release` job correctly skipped on the
+   non-tag ref.
+
+   **Windows (`windows-msi`, windows-latest): genuinely CI-infeasible
+   under this project's current pins — reported, not worked around, per
+   this roadmap item's own operating rule.** Real run **32239242311**'s
+   `windows-msi` job failed `uv sync --all-packages --all-extras` in 2
+   seconds, before touching Rust/Tauri/PyInstaller at all:
+   ```
+   error: Distribution `tensorflow-io-gcs-filesystem==0.37.1` can't be
+   installed because it doesn't have a source distribution or wheel for
+   the current platform
+   hint: You're on Windows (`win_amd64`), but `tensorflow-io-gcs-
+   filesystem` (v0.37.1) only has wheels for: manylinux_2_17_aarch64,
+   manylinux2014_aarch64, manylinux_2_17_x86_64, manylinux2014_x86_64,
+   macosx_10_14_x86_64, macosx_12_0_arm64
+   ```
+   This is a DIFFERENT shape of problem than the macOS gap above (which
+   was a marker bug excluding a wheel that genuinely exists). Here,
+   verified directly against PyPI's file listing across
+   `tensorflow-io-gcs-filesystem` 0.34.0/0.35.0/0.36.0/0.37.0/0.37.1: the
+   package shipped its LAST `win_amd64` wheel at **0.31.0** (April 2023)
+   and has shipped **zero** Windows wheels of any kind at every version
+   since. `tensorflow==2.14.0` itself has a real `win_amd64` cp311 wheel
+   (confirmed in `uv.lock`) and only requires
+   `tensorflow-io-gcs-filesystem>=0.23.1` (no upper bound), so uv
+   correctly resolves the latest release — which has no Windows wheel.
+   The only way to make this resolve on Windows is forcing
+   `tensorflow-io-gcs-filesystem` back to `<=0.31.0` (uv's own error hint
+   suggests exactly this, via `tool.uv.required-environments`) — a real
+   downgrade of an ML-adjacent transitive dependency, by over a year, to
+   route around a missing wheel. That is exactly the class of hack this
+   roadmap item's own instructions ruled out ("do NOT change pinned ML
+   deps or fake green"), so it was not attempted. The `windows-msi` job
+   definition was removed from `release.yml` after this one confirming
+   run (its full step-by-step definition, for reference, is in git
+   history at commit `1c8c073`) rather than left permanently red, since a
+   failing `needs:` dependency would have permanently blocked the
+   tag-gated `release` job from ever cutting a release. The blocker and
+   evidence are preserved inline as a comment in `release.yml` where the
+   job used to be. **Revisit if/when `tensorflow-io-gcs-filesystem`
+   regains Windows wheel support upstream, or if this project ever moves
+   off the `tensorflow==2.14.0` pin for an unrelated reason — neither
+   decided here.**
 3. **Editing v2 / meter expansion** — direction to be chosen by the user
    (structure ops, multi-select, drag editing, MIDI-in / more meters).
 
