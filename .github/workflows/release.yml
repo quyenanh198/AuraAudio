@@ -20,15 +20,17 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     # Sum of this job's own step timeouts (18 ffmpeg + 15 Tauri deps + 25
-    # PyInstaller + 60 tauri build = 118) intentionally exceeds this job
-    # timeout — each individual apt/build step budgets for its own worst
-    # case (retried apt installs, a cold rust release compile), but those
-    # worst cases are not expected to all land in the same run. 105
-    # minutes is sized off what's actually been observed across runs
-    # 32223992523/32226451850/32228859288 (a hung apt step, a
-    # too-tight cargo tauri build timeout, and an apt step that hit its
-    # retry-loop's own bound) plus real slack, not off the step-timeout
-    # sum.
+    # PyInstaller + 30 tauri build = 88) intentionally leaves slack below
+    # this job timeout rather than matching it exactly — each individual
+    # apt/build step budgets for its own worst case independently, and
+    # those worst cases haven't co-occurred in any run so far. 105 minutes
+    # is sized off what's actually been observed across runs
+    # 32223992523/32226451850/32228859288/32230007168/32231230142 (a hung
+    # apt step, a too-tight cargo tauri build timeout, an apt step that
+    # hit its retry-loop's own bound, and cargo tauri build completing
+    # its real work in ~4 minutes but then hanging on an unwanted
+    # appimage bundle for the rest of its 60-minute budget) plus real
+    # slack, not off the step-timeout sum.
     timeout-minutes: 105
     outputs:
       deb_path: ${{ steps.deb.outputs.path }}
@@ -163,18 +165,23 @@ jobs:
       # (installed above via npm ci) so this resolves to a prebuilt binary
       # download instead of a from-source `cargo install tauri-cli` build.
       #
-      # 20 minutes was too tight: run 32226451850 hit that timeout almost
-      # exactly (07:17:49 -> 07:38:02, ~20m13s) and was killed mid-build.
-      # Swatinem/rust-cache had nothing to restore on that run (its own
-      # step completed in ~1s), so this was a genuinely cold
-      # release-profile compile of Tauri/webkit2gtk plus bundling the
-      # ~1.6GB PyInstaller backend — slower than the earlier estimate.
-      # The job has ample headroom for a bigger number: only ~9.5 of its
-      # 90 minutes were spent reaching this step.
+      # --bundles deb: tauri.conf.json's bundle.targets is "all", which on
+      # Linux also means rpm + appimage. Run 32231230142's actual log
+      # shows why that's wrong here: the release compile finished in 2m37s
+      # and the .deb bundle built successfully at 08:17:27, the .rpm
+      # bundle built successfully at 08:17:59 — then the step produced
+      # zero further output for 57 straight minutes until the 60-minute
+      # timeout killed it. The real .deb existed the whole time; only a
+      # subsequent step (near-certainly the appimage bundler, which
+      # downloads `linuxdeploy` tooling over the network at build time —
+      # the same class of "silent network stall" already hit twice on the
+      # apt steps) never returned. Scoping to the one bundle format this
+      # workflow actually ships avoids that path entirely, not just works
+      # around it.
       - name: cargo tauri build
-        timeout-minutes: 60
+        timeout-minutes: 30
         working-directory: apps/desktop/src-tauri
-        run: ../web/node_modules/.bin/tauri build
+        run: ../web/node_modules/.bin/tauri build --bundles deb
 
       - name: Verify .deb and report size
         id: deb
