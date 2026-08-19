@@ -5,6 +5,17 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: >-
+          Optional version tag (e.g. v1.0.0). When set, the run cuts a
+          GitHub Release under this tag (creating the tag at this run's
+          commit if it does not exist). Leave empty for a build-only run.
+          Exists because this repo's automation credentials can push
+          branches but not tag refs, so tag-push triggering isn't always
+          available.
+        required: false
+        default: ""
 
 # Default to read; the `release` job below elevates to write for itself
 # only, since a plain workflow_dispatch (build-only) run never needs it.
@@ -536,14 +547,19 @@ jobs:
           path: apps/desktop/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: warn
 
-  # Only cut a Release when this run was triggered by a version tag. A
-  # plain workflow_dispatch run (no tag) stops after `build`'s artifact
-  # upload, so the workflow is testable without tagging — and never
-  # needs `contents: write` to do so.
+  # Only cut a Release when this run was triggered by a version tag, or
+  # by a workflow_dispatch that explicitly names one via the release_tag
+  # input (softprops creates the tag at this run's commit when it doesn't
+  # exist yet). A plain workflow_dispatch run (no tag, empty input) stops
+  # after the build jobs' artifact uploads, so the workflow is testable
+  # without tagging — and never needs `contents: write` to do so.
   release:
     name: release
     needs: [build, macos-dmg, windows-msi]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' &&
+       startsWith(github.event.inputs.release_tag, 'v'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -570,6 +586,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Empty on tag-push runs (softprops falls back to github.ref's
+          # tag); set on dispatch runs, where softprops creates the tag
+          # at this run's commit if it doesn't exist.
+          tag_name: ${{ github.event.inputs.release_tag }}
           files: |
             dist/*.deb
             dist/*.dmg
