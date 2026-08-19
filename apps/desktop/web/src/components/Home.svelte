@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
 
   import { api } from "../lib/api";
+  import { deps, detectPlatform, installCommandFor } from "../lib/deps";
   import { projects } from "../lib/projects";
   import type { ProjectListItem } from "../lib/types";
 
@@ -21,10 +22,37 @@
   // job via GET /v1/jobs/{id} so the chip's tooltip can show the real
   // reason instead of just the bare status.
   let errorDetails: Record<string, string> = $state({});
+  let depsCopyFeedback = $state(false);
+
+  const installCommand = installCommandFor(detectPlatform());
 
   onMount(() => {
     void projects.refresh();
+    void deps.check();
   });
+
+  function missingBinaryNames(): string {
+    const detail = $deps.detail;
+    if (!detail) return "ffmpeg/ffprobe";
+    const missing = [
+      !detail.ffmpeg.found ? "ffmpeg" : null,
+      !detail.ffprobe.found ? "ffprobe" : null,
+    ].filter((name): name is string => name !== null);
+    return missing.length > 0 ? missing.join(" and ") : "ffmpeg/ffprobe";
+  }
+
+  async function copyInstallCommand(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(installCommand);
+      depsCopyFeedback = true;
+      setTimeout(() => {
+        depsCopyFeedback = false;
+      }, 2000);
+    } catch {
+      // Clipboard access can be denied by the platform; the command is
+      // already visible in the banner for the user to copy by hand.
+    }
+  }
 
   $effect(() => {
     for (const item of $projects.items) {
@@ -266,10 +294,24 @@
           <p class="filename">{pendingFile.name}</p>
           <p class="prompt">Which instrument is this?</p>
           <div class="choice-buttons">
-            <button type="button" onclick={() => chooseInstrument("guitar")} disabled={creating}>
+            <button
+              type="button"
+              onclick={() => chooseInstrument("guitar")}
+              disabled={creating || $deps.status === "missing"}
+              title={$deps.status === "missing"
+                ? `ffmpeg is required for transcription — install it below, then "Check again".`
+                : undefined}
+            >
               {@render guitarIcon()} Guitar
             </button>
-            <button type="button" onclick={() => chooseInstrument("piano")} disabled={creating}>
+            <button
+              type="button"
+              onclick={() => chooseInstrument("piano")}
+              disabled={creating || $deps.status === "missing"}
+              title={$deps.status === "missing"
+                ? `ffmpeg is required for transcription — install it below, then "Check again".`
+                : undefined}
+            >
               {@render pianoIcon()} Piano
             </button>
           </div>
@@ -285,6 +327,29 @@
         </button>
       {/if}
     </div>
+
+    {#if $deps.status === "missing" || ($deps.status === "checking" && $deps.detail !== null && !$deps.detail.allFound)}
+      <div class="deps-banner" role="alert">
+        <p class="deps-message">
+          <strong>{missingBinaryNames()}</strong> not found on your system. ffmpeg is required to decode
+          audio before transcription can run.
+        </p>
+        <div class="deps-command-row">
+          <code class="deps-command">{installCommand}</code>
+          <button type="button" class="deps-copy" onclick={copyInstallCommand}>
+            {depsCopyFeedback ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <button
+          type="button"
+          class="deps-recheck"
+          disabled={$deps.status === "checking"}
+          onclick={() => deps.recheck()}
+        >
+          {$deps.status === "checking" ? "Checking…" : "Check again"}
+        </button>
+      </div>
+    {/if}
 
     {#if creationError}
       <div class="error-panel">{creationError}</div>
@@ -538,6 +603,76 @@
     cursor: pointer;
     text-decoration: underline;
     padding: 0;
+  }
+
+  .deps-banner {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 9px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .deps-message {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .deps-message strong {
+    color: var(--accent);
+  }
+
+  .deps-command-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .deps-command {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  .deps-copy,
+  .deps-recheck {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .deps-copy:hover:not(:disabled),
+  .deps-recheck:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .deps-recheck {
+    align-self: flex-start;
+  }
+
+  .deps-recheck:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .error-panel {

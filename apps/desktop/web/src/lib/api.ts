@@ -1,4 +1,4 @@
-import type { EditOp, EditResponse, ProjectListItem } from "./types";
+import type { EditOp, EditResponse, ProjectListItem, SystemDepsResponse } from "./types";
 
 // Fixed dev/desktop backend port — apps/desktop/run_backend.py:43
 // (`AURA_BACKEND_PORT = 8317`), bound to 127.0.0.1 only.
@@ -125,4 +125,10 @@ export const api = {
     fetch(`${BASE}/v1/projects/${projectId}/edits/revert`, { method: "POST" }).then((r) =>
       editJson<EditResponse>(r),
     ),
+  // `cache: "no-store"` — same reasoning as every other mutable-content
+  // fetch in this file: the binaries on a user's PATH can change between
+  // checks (e.g. right after the user runs the suggested install command),
+  // so a cached 200 must never mask that.
+  getSystemDeps: () =>
+    fetch(`${BASE}/v1/system/deps`, { cache: "no-store" }).then((r) => json<SystemDepsResponse>(r)),
 };

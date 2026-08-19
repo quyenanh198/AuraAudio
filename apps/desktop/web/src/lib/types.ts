@@ -169,3 +169,17 @@ export interface EditResponse {
   score: ScoreJson;
   rederive_job_id: string;
 }
+
+// GET /v1/system/deps — mirrors apps/api/src/aura_api/schemas.py's
+// DependencyStatus/SystemDepsResponse verbatim.
+
+export interface DependencyStatus {
+  found: boolean;
+  version: string | null;
+}
+
+export interface SystemDepsResponse {
+  ffmpeg: DependencyStatus;
+  ffprobe: DependencyStatus;
+  allFound: boolean;
+}
