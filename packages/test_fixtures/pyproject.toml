@@ -2,7 +2,10 @@
 name = "test-fixtures"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "scipy>=1.13"]
+dependencies = ["numpy>=1.26", "scipy>=1.13", "score-schema"]
+
+[tool.uv.sources]
+score-schema = { workspace = true }
 
 [project.optional-dependencies]
 test = ["pytest>=8.2"]

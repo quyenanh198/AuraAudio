@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 from scipy.io import wavfile
 
+from score_schema.meters import beats_per_measure, is_compound
+
 
 def write_guitar_pluck_wav(path: Path, duration_s: float = 2.0, sample_rate: int = 44100) -> Path:
     """Synthesize a short, rights-free guitar-pluck-like signal: a decaying
@@ -127,6 +129,71 @@ def write_metronome_pulse_wav(
             i0 = int(t0 * sample_rate)
             end = min(i0 + len(c), len(signal))
             signal[i0:end] += c[: end - i0]
+    signal = (signal / np.max(np.abs(signal)) * 0.9 * 32767).astype(np.int16)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wavfile.write(str(path), sample_rate, signal)
+    return path
+
+
+def generate_metered_clicks(
+    meter: str,
+    tempo_bpm: float,
+    measures: int,
+    path: Path,
+    sample_rate: int = 22050,
+) -> Path:
+    """Synthesize an accent-patterned click track for meter-detection tests.
+
+    Unlike write_metronome_pulse_wav (one click per notated beat, fixed
+    4/4 or 3/4 pattern), this generator supports every meter in
+    score_schema.meters.SUPPORTED_METERS and encodes a fixed accent
+    contract used as ground truth by detection tests:
+
+    - Simple meters with an integral quarter-beat count (2/4, 3/4, 4/4,
+      5/4, 2/2): one click per quarter-note beat. Downbeat loud (1.0),
+      every other beat soft (0.4).
+    - Simple meters whose quarter-beat count is non-integral (3/8, 7/8):
+      one click per eighth note. Downbeat loud (1.0), every other eighth
+      soft (0.4).
+    - Compound meters (6/8, 9/8, 12/8): one click per eighth note.
+      Downbeat (eighth 0) loudest (1.0); the secondary accent at the
+      midpoint dotted-quarter group (eighth 3 of 6/8) is louder than the
+      rest but softer than the downbeat (0.7); everything else is soft
+      (0.4).
+
+    Raises ValueError for any meter not in SUPPORTED_METERS (via
+    is_compound's own membership guard).
+    """
+    numerator = int(meter.split("/")[0])
+    seconds_per_quarter = 60.0 / tempo_bpm
+
+    if is_compound(meter):
+        grid_size = numerator  # one click per eighth note
+        step_s = seconds_per_quarter / 2.0
+        secondary_index = grid_size // 2  # eighth 3 of 6 for 6/8
+        amps = [1.0 if i == 0 else 0.7 if i == secondary_index else 0.4 for i in range(grid_size)]
+    else:
+        quarter_beats = beats_per_measure(meter)
+        if quarter_beats.denominator == 1:
+            grid_size = int(quarter_beats)
+            step_s = seconds_per_quarter
+        else:
+            # non-integral quarter-beat count (3/8, 7/8): click per eighth.
+            grid_size = numerator
+            step_s = seconds_per_quarter / 2.0
+        amps = [1.0 if i == 0 else 0.4 for i in range(grid_size)]
+
+    measure_len_s = grid_size * step_s
+    total_len_s = measures * measure_len_s
+    signal = np.zeros(int(round(total_len_s * sample_rate)))
+    for m in range(measures):
+        for i, amp in enumerate(amps):
+            t0 = m * measure_len_s + i * step_s
+            c = _click(duration=0.03, freq=200.0, amp=amp, sample_rate=sample_rate)
+            i0 = int(t0 * sample_rate)
+            end = min(i0 + len(c), len(signal))
+            if end > i0:
+                signal[i0:end] += c[: end - i0]
     signal = (signal / np.max(np.abs(signal)) * 0.9 * 32767).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
     wavfile.write(str(path), sample_rate, signal)

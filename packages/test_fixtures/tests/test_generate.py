@@ -1,6 +1,9 @@
 import wave
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from test_fixtures.generate import write_guitar_pluck_wav
 
 
@@ -107,3 +110,97 @@ def test_write_diatonic_melody_wav_is_not_silent(tmp_path: Path):
     write_diatonic_melody_wav(out_path, key="A minor", duration_s=4.0, sample_rate=22050)
     _, data = wavfile.read(str(out_path))
     assert np.max(np.abs(data)) > 1000
+
+
+def _click_peak(data, sr: int, t0: float, window_s: float = 0.03) -> float:
+    """Max |amplitude| in a short window starting at t0 seconds -- a proxy
+    for "how loud was the click placed at this grid position."""
+    i0 = int(t0 * sr)
+    i1 = int((t0 + window_s) * sr)
+    return float(np.max(np.abs(data[i0:i1])))
+
+
+@pytest.mark.parametrize("tempo_bpm", [90.0, 140.0])
+def test_generate_metered_clicks_duration_simple_meter(tmp_path: Path, tempo_bpm: float):
+    from test_fixtures.generate import generate_metered_clicks
+
+    path = generate_metered_clicks("3/4", tempo_bpm=tempo_bpm, measures=4, path=tmp_path / "m34.wav")
+    assert path.exists()
+
+    with wave.open(str(path), "rb") as wf:
+        sr = wf.getframerate()
+        frames = wf.getnframes()
+    # 3/4: one click per quarter beat; measure = 3 * (60/tempo)s; 4 measures.
+    seconds_per_quarter = 60.0 / tempo_bpm
+    expected_s = 4 * 3 * seconds_per_quarter
+    assert abs(frames / sr - expected_s) < 0.1
+
+
+def test_generate_metered_clicks_duration_compound_6_8(tmp_path: Path):
+    from test_fixtures.generate import generate_metered_clicks
+
+    path = generate_metered_clicks("6/8", tempo_bpm=120.0, measures=4, path=tmp_path / "m68.wav")
+    assert path.exists()
+
+    with wave.open(str(path), "rb") as wf:
+        sr = wf.getframerate()
+        frames = wf.getnframes()
+    # 6/8 at 120bpm (quarter = 0.5s): measure = 3 quarter beats = 1.5s; 4 measures = 6s
+    assert abs(frames / sr - 6.0) < 0.1
+
+
+def test_generate_metered_clicks_rejects_unsupported_meter(tmp_path: Path):
+    from test_fixtures.generate import generate_metered_clicks
+
+    with pytest.raises(ValueError):
+        generate_metered_clicks("13/16", tempo_bpm=120.0, measures=2, path=tmp_path / "x.wav")
+
+
+@pytest.mark.parametrize("meter,n_clicks_per_measure", [("2/4", 2), ("3/4", 3)])
+def test_generate_metered_clicks_simple_meter_accent_pattern(
+    tmp_path: Path, meter: str, n_clicks_per_measure: int
+):
+    """Downbeat (grid slot 0) is loud (amp 1.0); every other beat is soft
+    (amp 0.4) -- one click per quarter-note beat for simple meters."""
+    from scipy.io import wavfile
+
+    from test_fixtures.generate import generate_metered_clicks
+
+    tempo_bpm = 100.0
+    seconds_per_quarter = 60.0 / tempo_bpm
+    path = generate_metered_clicks(meter, tempo_bpm=tempo_bpm, measures=3, path=tmp_path / "m.wav")
+    sr, data = wavfile.read(str(path))
+
+    # second measure (index 1), so the very first sample isn't a boundary case
+    measure_len_s = n_clicks_per_measure * seconds_per_quarter
+    peaks = [
+        _click_peak(data, sr, measure_len_s * 1 + i * seconds_per_quarter)
+        for i in range(n_clicks_per_measure)
+    ]
+    downbeat, *rest = peaks
+    assert all(downbeat > weak for weak in rest)
+    # off-beats are all roughly equally soft
+    assert max(rest) - min(rest) < 0.15 * max(rest)
+
+
+def test_generate_metered_clicks_compound_6_8_accent_pattern(tmp_path: Path):
+    """6/8: one click per eighth note; eighths 0 and 3 are loud (0 louder
+    than 3: 1.0 vs 0.7), the rest are soft (0.4)."""
+    from scipy.io import wavfile
+
+    from test_fixtures.generate import generate_metered_clicks
+
+    tempo_bpm = 120.0
+    seconds_per_eighth = (60.0 / tempo_bpm) / 2.0
+    path = generate_metered_clicks("6/8", tempo_bpm=tempo_bpm, measures=3, path=tmp_path / "m68acc.wav")
+    sr, data = wavfile.read(str(path))
+
+    measure_len_s = 6 * seconds_per_eighth
+    peaks = [
+        _click_peak(data, sr, measure_len_s * 1 + i * seconds_per_eighth) for i in range(6)
+    ]
+    downbeat, secondary = peaks[0], peaks[3]
+    weak = [peaks[i] for i in (1, 2, 4, 5)]
+
+    assert downbeat > secondary > max(weak)
+    assert max(weak) - min(weak) < 0.15 * max(weak)
