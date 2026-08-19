@@ -51,26 +51,32 @@ jobs:
 
       # The pipeline's probe/normalize steps shell out to ffmpeg/ffprobe.
       #
-      # `Acquire::Retries` alone isn't enough: it only retries a request
-      # that came back with an *error*, not a connection that's simply
-      # hanging with no response — which is exactly what happened. Run
-      # 32223992523 hung on this apt-get for 30+ minutes with zero
-      # progress (manually cancelled); the next attempt (32226451850,
-      # after adding Acquire::Retries + a 10-minute step timeout)
-      # succeeded in ~3 minutes; the attempt after that (32228859288)
-      # hung again and hit the same 10-minute timeout almost exactly —
-      # proving this is genuine intermittent mirror flakiness, not a
-      # one-off. A `timeout`-wrapped bash retry loop can actually recover
-      # from a hang (kill the stuck attempt, try again — sometimes on a
-      # different mirror) instead of just failing faster.
+      # Root cause, found from run 32230007168's actual job log (not
+      # guessed): `apt-get update` always completes in seconds, but
+      # `apt-get install` then hangs completely silently for exactly the
+      # outer 180s `timeout` on every one of 3 retry-loop attempts, back
+      # to back — i.e. NOT random intermittent flakiness recoverable by
+      # retrying, but the SAME stuck package-fetch every time on this
+      # runner. `Acquire::Retries=3` never helped because it only retries
+      # a request that already came back with an error; apt's own
+      # *default* per-connection timeout for the actual .deb download is
+      # far longer than our outer kill, so apt never got the chance to
+      # time out one bad mirror on its own and fail over to the next
+      # candidate in its mirrorlist — our outer `timeout` just kills the
+      # whole process and restarts update+install from zero instead.
+      # `Acquire::http(s)::Timeout=15` makes apt itself abort a stalled
+      # per-connection fetch quickly and move to the next mirror, which
+      # is what should actually recover from this rather than a same-VM
+      # retry loop with no visibility into *which* mirror is bad.
       - name: Install ffmpeg
         timeout-minutes: 18
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
           for attempt in 1 2 3; do
-            if timeout 180 sudo apt-get update -o Acquire::Retries=3 && \
-               timeout 180 sudo apt-get install -y -o Acquire::Retries=3 --fix-missing ffmpeg; then
+            if timeout 90 sudo apt-get update $APT_OPTS && \
+               timeout 90 sudo apt-get install -y $APT_OPTS --fix-missing ffmpeg; then
               exit 0
             fi
             echo "::warning::apt-get install ffmpeg attempt $attempt failed or hung, retrying" >&2
@@ -79,17 +85,18 @@ jobs:
           echo "::error::apt-get install ffmpeg failed after 3 attempts" >&2
           exit 1
 
-      # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job,
-      # plus the same timeout-wrapped retry loop as ffmpeg above — same
-      # apt-mirror-stall risk, same fix).
+      # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job),
+      # same per-connection-timeout fix as ffmpeg above and for the same
+      # reason — same runner, same apt-mirror-fetch stall risk.
       - name: Install Tauri system dependencies
         timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
           for attempt in 1 2 3; do
-            if timeout 180 sudo apt-get update -o Acquire::Retries=3 && \
-               timeout 180 sudo apt-get install -y -o Acquire::Retries=3 --fix-missing \
+            if timeout 90 sudo apt-get update $APT_OPTS && \
+               timeout 90 sudo apt-get install -y $APT_OPTS --fix-missing \
                  libwebkit2gtk-4.1-dev \
                  build-essential \
                  curl \
