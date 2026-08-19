@@ -124,8 +124,20 @@ AURA_BACKEND_PORT = 8317
 #     server binds both `localhost` and `127.0.0.1` on 5173 by default and
 #     a browser/webview treats them as distinct origins for CORS purposes
 #     even though they resolve to the same host.
+#   - "http://tauri.localhost" — the PRODUCTION origin on Windows/Android
+#     WebView2, now in scope now that the release workflow builds a
+#     Windows `.msi` (roadmap item 2). Confirmed by the same
+#     `tauri-2.11.5/src/manager/mod.rs:339-346` `tauri_protocol_url`
+#     already cited above for the Linux origin: `if cfg!(windows) ||
+#     cfg!(target_os = "android") { http(s)://tauri.localhost } else {
+#     tauri://localhost }` — Windows takes the `if` branch (`http`, not
+#     `https`, since this app's `tauri.conf.json` sets no dev/prod TLS
+#     config), so the packaged Windows app's webview loads from this exact
+#     origin in production, the same way `tauri://localhost` does on
+#     Linux/WebKitGTK.
 WEBVIEW_ORIGINS = [
     "tauri://localhost",  # production webview origin, Linux/WebKitGTK
+    "http://tauri.localhost",  # production webview origin, Windows/Android WebView2
     "http://localhost:5173",  # `cargo tauri dev` — observed live, see above
     "http://127.0.0.1:5173",  # same dev server, alternate loopback form
 ]

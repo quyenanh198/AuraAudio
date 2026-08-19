@@ -46,6 +46,7 @@ CROSS_ORIGIN = "http://example.com"
 # each one was verified (tauri crate source for the production origin,
 # a live `cargo tauri dev` trace for the dev origin).
 WEBVIEW_ORIGIN = "tauri://localhost"
+WINDOWS_WEBVIEW_ORIGIN = "http://tauri.localhost"
 DEV_ORIGIN = "http://localhost:5173"
 FOREIGN_ORIGIN = "http://evil.example"
 
@@ -137,6 +138,22 @@ def test_v1_allows_webview_origin() -> None:
     response = _client().get("/v1/jobs/some-job-id", headers={"Origin": WEBVIEW_ORIGIN})
 
     assert response.headers.get("access-control-allow-origin") == WEBVIEW_ORIGIN
+
+
+def test_v1_allows_windows_webview_origin() -> None:
+    """The real Windows/Android WebView2 production origin must get CORS headers.
+
+    Roadmap item 2 (Windows `.msi` build job): `http://tauri.localhost` is
+    the origin `tauri-2.11.5`'s `tauri_protocol_url` resolves to on Windows
+    (`cfg!(windows)`) — see `run_backend.WEBVIEW_ORIGINS`'s inline comment
+    for the cited source. Mirrors `test_v1_allows_webview_origin` above for
+    the Linux/WebKitGTK origin.
+    """
+    assert WINDOWS_WEBVIEW_ORIGIN in run_backend.WEBVIEW_ORIGINS
+
+    response = _client().get("/v1/jobs/some-job-id", headers={"Origin": WINDOWS_WEBVIEW_ORIGIN})
+
+    assert response.headers.get("access-control-allow-origin") == WINDOWS_WEBVIEW_ORIGIN
 
 
 def test_v1_allows_vite_dev_origin() -> None:
