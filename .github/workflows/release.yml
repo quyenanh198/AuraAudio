@@ -48,8 +48,20 @@ jobs:
           df -h /
 
       # The pipeline's probe/normalize steps shell out to ffmpeg/ffprobe.
+      #
+      # Hardened the same way as "Install Tauri system dependencies" below
+      # (Acquire::Retries + a step timeout): run 32223992523 hung on this
+      # exact plain `apt-get` for 30+ minutes with zero progress before
+      # being manually cancelled — the same apt-mirror-stall failure mode
+      # ci.yml's rust job already had to guard against, just hitting a
+      # different apt step this time.
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --fix-missing ffmpeg
 
       # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job).
       #
