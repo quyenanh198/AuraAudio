@@ -11,6 +11,7 @@
     pitchToName,
     stepDuration,
     stepOnset,
+    validateMeasureNumber,
   } from "../lib/noteEdit";
   import { isTauri, saveExport } from "../lib/saveExport";
   import type { EditOp, ProjectExportSummary, ScoreEvent, ScorePart } from "../lib/types";
@@ -161,15 +162,39 @@
   let addNoteOctave = $state(4);
   let addNoteDuration = $state("1/4");
 
-  function addNoteTarget(): { measureNumber: number; notatedOnset: string } {
-    if (selectedEntry) {
-      return { measureNumber: selectedEntry.measureNumber, notatedOnset: selectedEntry.event.notatedOnset };
-    }
-    return { measureNumber: 1, notatedOnset: "0/1" };
-  }
+  // Measure target: a plain-text field so an out-of-range/non-integer value
+  // can be held and reported inline (matching the tempo/fingering
+  // client-error pattern) instead of silently clamping. Defaults to the
+  // selected note's measure (or 1) whenever the selection changes, letting
+  // the user then type any measure — including a silent one with no
+  // selectable note — to add into.
+  let addNoteMeasureInput = $state("1");
+  let addNoteMeasureClientError = $state<string | null>(null);
+
+  $effect(() => {
+    addNoteMeasureInput = String(selectedEntry?.measureNumber ?? 1);
+  });
+
+  // Measures are numbered contiguously 1..max by construction (see
+  // score_schema/edits.py::_rebucket's invariant), so the part's measure
+  // count IS the max valid measure number. Falls back to 1 when there's no
+  // score yet, matching addNoteMeasureInput's own default.
+  let maxMeasureNumber = $derived(part && part.measures.length > 0 ? part.measures.length : 1);
 
   function handleAddNote(): void {
-    const { measureNumber, notatedOnset } = addNoteTarget();
+    const validation = validateMeasureNumber(addNoteMeasureInput, maxMeasureNumber);
+    if (!validation.ok) {
+      lastEditField = "add-note";
+      addNoteMeasureClientError = validation.error;
+      return;
+    }
+    addNoteMeasureClientError = null;
+    const { measureNumber } = validation;
+    // Reuse the selected note's onset only when adding into that SAME
+    // measure — a different (e.g. silent) target measure has no meaningful
+    // relation to the selected note's onset, so it starts at beat 0.
+    const notatedOnset =
+      selectedEntry && selectedEntry.measureNumber === measureNumber ? selectedEntry.event.notatedOnset : "0/1";
     applyOp("add-note", {
       type: "add_note",
       measureNumber,
@@ -587,6 +612,17 @@
       <section class="section">
         <h2 class="section-title">Add note</h2>
         <div class="add-note-form">
+          <input
+            class="fact-input small"
+            type="number"
+            min="1"
+            max={maxMeasureNumber}
+            step="1"
+            value={addNoteMeasureInput}
+            oninput={(e) => (addNoteMeasureInput = (e.currentTarget as HTMLInputElement).value)}
+            aria-label="Measure"
+            title={`Measure (1-${maxMeasureNumber})`}
+          />
           <select class="fact-select" bind:value={addNoteName} aria-label="Pitch name">
             {#each NOTE_NAME_OPTIONS as name (name)}
               <option value={name}>{name}</option>
@@ -602,12 +638,10 @@
               <option value={value}>{label}</option>
             {/each}
           </select>
-          <button type="button" class="add-note-button" onclick={handleAddNote}>
-            Add at {selectedEvent ? "selection" : "measure 1, beat 0"}
-          </button>
+          <button type="button" class="add-note-button" onclick={handleAddNote}> Add note </button>
         </div>
-        {#if fieldError("add-note")}
-          <p class="field-error">{fieldError("add-note")}</p>
+        {#if addNoteMeasureClientError || fieldError("add-note")}
+          <p class="field-error">{addNoteMeasureClientError ?? fieldError("add-note")}</p>
         {/if}
       </section>
 

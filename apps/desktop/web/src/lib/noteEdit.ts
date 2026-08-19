@@ -140,6 +140,28 @@ export function nameOctaveToPitch(name: string, octave: number): number {
 
 export const NOTE_NAME_OPTIONS: readonly string[] = NOTE_NAMES;
 
+// --- Add-note measure targeting -----------------------------------------
+
+export type MeasureNumberValidation = { ok: true; measureNumber: number } | { ok: false; error: string };
+
+/** Validates the Add-note form's measure-number field: `raw` must parse as
+ * an integer within `[1, maxMeasure]` (score measures are numbered
+ * contiguously 1..max — see score_schema's `_rebucket` invariant). Returns
+ * either the parsed measure number or a user-facing error string, matching
+ * the inline field-error pattern the rest of Sidebar's mini-forms already
+ * use (tempo, fingering). */
+export function validateMeasureNumber(raw: string, maxMeasure: number): MeasureNumberValidation {
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (trimmed === "" || !Number.isInteger(value)) {
+    return { ok: false, error: `Measure must be a whole number between 1 and ${maxMeasure}.` };
+  }
+  if (value < 1 || value > maxMeasure) {
+    return { ok: false, error: `Measure must be between 1 and ${maxMeasure}.` };
+  }
+  return { ok: true, measureNumber: value };
+}
+
 // --- Score-JSON event lookup --------------------------------------------
 
 export interface FoundEvent {

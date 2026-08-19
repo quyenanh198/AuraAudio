@@ -9,6 +9,7 @@ import {
   pitchToName,
   stepDuration,
   stepOnset,
+  validateMeasureNumber,
 } from "./noteEdit";
 import type { ScoreEvent, ScoreJson } from "./types";
 
@@ -132,6 +133,40 @@ describe("findEvent", () => {
     expect(findEvent(s, "does-not-exist")).toBeNull();
     expect(findEvent(null, "e1")).toBeNull();
     expect(findEvent(s, null)).toBeNull();
+  });
+});
+
+describe("validateMeasureNumber", () => {
+  it("accepts an in-range integer", () => {
+    expect(validateMeasureNumber("3", 8)).toEqual({ ok: true, measureNumber: 3 });
+    expect(validateMeasureNumber("1", 8)).toEqual({ ok: true, measureNumber: 1 });
+    expect(validateMeasureNumber("8", 8)).toEqual({ ok: true, measureNumber: 8 });
+  });
+
+  it("rejects a measure number below 1 or above the score's max measure", () => {
+    expect(validateMeasureNumber("0", 8)).toEqual({
+      ok: false,
+      error: "Measure must be between 1 and 8.",
+    });
+    expect(validateMeasureNumber("9", 8)).toEqual({
+      ok: false,
+      error: "Measure must be between 1 and 8.",
+    });
+  });
+
+  it("rejects a non-integer value", () => {
+    expect(validateMeasureNumber("2.5", 8)).toEqual({
+      ok: false,
+      error: "Measure must be a whole number between 1 and 8.",
+    });
+    expect(validateMeasureNumber("abc", 8)).toEqual({
+      ok: false,
+      error: "Measure must be a whole number between 1 and 8.",
+    });
+    expect(validateMeasureNumber("", 8)).toEqual({
+      ok: false,
+      error: "Measure must be a whole number between 1 and 8.",
+    });
   });
 });
 
