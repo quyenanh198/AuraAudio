@@ -90,6 +90,12 @@ def _rebucket(part: dict, old_meter: str, new_meter: str) -> None:
     """
     old_bpm = beats_per_measure(old_meter)
     new_bpm = beats_per_measure(new_meter)
+    # `old_max_number * old_bpm` below is used as the old range's total beat
+    # count, which assumes `part["measures"]` has no gaps -- i.e. measure
+    # numbers run contiguously 1..old_max_number. That's guaranteed by
+    # construction since the silent-measures fix (quantize.py and this same
+    # function both always emit every number in range(1, max+1), never a
+    # sparse set), so this max is safe to use as a count here.
     old_max_number = max((measure["number"] for measure in part["measures"]), default=0)
 
     flat: list[tuple[Fraction, dict]] = []

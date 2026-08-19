@@ -366,6 +366,19 @@ describe("editor store", () => {
       expect(state.error).toBeNull();
       expect(state.updating).toBe(false);
     });
+
+    it("404 falls through to a user-facing error, unlike a 409 bound", async () => {
+      const { createEditorStore } = await import("./editor");
+      const { EditApiError } = await import("./api");
+      const store = createEditorStore();
+
+      undoEditMock.mockRejectedValueOnce(new EditApiError(404, "project not found"));
+      await store.undo("p1");
+
+      const state = get(store);
+      expect(state.error).toBe("project not found");
+      expect(state.updating).toBe(false);
+    });
   });
 
   describe("redo()", () => {

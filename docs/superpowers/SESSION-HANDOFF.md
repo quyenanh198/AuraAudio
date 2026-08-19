@@ -655,34 +655,23 @@ the quantization grid — see `_insert_notated_events`'s own docstring and
 `test_score_json_to_musicxml_clamps_intra_measure_overlap` /
 `test_score_json_to_musicxml_clamps_bar_crossing_duration` tests.
 
-**RESOLVED (silent-measure fidelity fix, 2026-08-19)**: the limit
-described in this paragraph (kept below for history) is fixed.
-`quantize.py` now emits an explicit empty-events entry for every measure
-number in `[1, max(occupied measure number)]` (`STAGE_VERSION` bumped for
-cache invalidation), `_insert_notated_events` in `export.py` already
-rendered a zero-event measure as one whole-measure rest per staff (pinned
-with new tests, no code change needed there), and `_rebucket` in
-`score_schema/edits.py` got the matching fix so a meter change no longer
-drops a measure that has gone silent (e.g. via `delete_note` removing its
-only event). See `packages/musicxml/tests/test_export.py`,
+**RESOLVED (silent-measure fidelity fix, 2026-08-19)**: a measure spanning
+pure silence (an inter-phrase rest with no note onsets at all) used to be
+dropped entirely from the score JSON's `measures` array instead of kept as
+an empty-events entry, which packed exported bars contiguously with
+non-consecutive `<measure number="…">` labels (e.g. 1, 3, 5) rather than a
+true gap. Fixed: `quantize.py` now emits an explicit empty-events entry for
+every measure number in `[1, max(occupied measure number)]`
+(`STAGE_VERSION` bumped for cache invalidation), `_insert_notated_events` in
+`export.py` already rendered a zero-event measure as one whole-measure rest
+per staff (pinned with new tests, no code change needed there), and
+`_rebucket` in `score_schema/edits.py` got the matching fix so a meter
+change no longer drops a measure that has gone silent (e.g. via
+`delete_note` removing its only event). See
+`packages/musicxml/tests/test_export.py`,
 `workers/transcription/tests/test_quantize.py`, and
 `packages/score_schema/tests/test_edits.py` for the pinning/regression
-tests. Original description, for context:
-
-`quantize.py`'s `measures` dict only ever gets an entry
-for a measure number that has at least one note event in it — a measure
-spanning pure silence (an inter-phrase rest with no onsets at all) never
-appears in the score JSON's `measures` array, not even as an empty-events
-entry. `_build_single_staff`/`_build_piano_grand_staff`/
-`_build_guitar_notation_and_tab` all iterate `part_data["measures"]`
-directly, so a silent measure is not rendered as a full-measure rest —
-it's simply absent, and the exported bars end up packed contiguously with
-non-consecutive `<measure number="…">` labels (e.g. 1, 3, 5) rather than a
-true gap. Worth a small bounded fix on its own — have `quantize.py` emit
-an explicit empty-events entry for every measure number in
-`[1, last_measure_with_a_note]`, and have `export.py` render those as a
-plain full-measure rest — before it's forgotten as "always been like
-that."
+tests.
 
 Recommendation if picking up cold: read "Direction change" at the top of
 this document first — it supersedes the framing below, and see "Offline
@@ -692,8 +681,7 @@ packaging; score preview + playback UI; semantic editing) are DONE,
 including their final whole-branch reviews and fix waves, and merged to
 main. The next piece of work has no spec yet — start with
 `superpowers:brainstorming` on whatever the user directs (candidate
-follow-ups are recorded in the sub-project sections above: an
-an automated
+follow-ups are recorded in the sub-project sections above: an automated
 Playwright edit-journey regression test, silent-measure fidelity in
 quantize (RESOLVED 2026-08-19, see above), and re-transcription
 head-pointer invalidation (RESOLVED 2026-08-19, see gotcha 8 above)).
