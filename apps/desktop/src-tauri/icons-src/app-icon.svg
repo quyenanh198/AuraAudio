@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="0" y="0" width="1024" height="1024" rx="180" ry="180" fill="#1e1d21"/>
+
+  <!-- waveform trace, arriving horizontally at the note stem -->
+  <path
+    d="M160,560 L230,560 L300,380 L410,760 L520,380 L590,530 L660,530"
+    fill="none"
+    stroke="#d99a4e"
+    stroke-width="58"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- note stem: a single vertical run the waveform lands on partway up -->
+  <path
+    d="M660,220 L660,700"
+    fill="none"
+    stroke="#d99a4e"
+    stroke-width="58"
+    stroke-linecap="round"
+  />
+
+  <!-- eighth-note flag -->
+  <path
+    d="M660,220
+       C766,236 826,326 804,418
+       C782,352 726,304 656,288
+       Z"
+    fill="#d99a4e"
+  />
+
+  <!-- notehead -->
+  <ellipse
+    cx="606"
+    cy="744"
+    rx="122"
+    ry="90"
+    fill="#d99a4e"
+    transform="rotate(-18 606 744)"
+  />
+</svg>
