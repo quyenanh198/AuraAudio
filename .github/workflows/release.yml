@@ -19,15 +19,17 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
-    # Sum of this job's own step timeouts (10 apt + 25 PyInstaller + 20
-    # tauri build = 55) already exceeds a tighter job budget once
-    # checkout/uv-sync/npm-ci/verify/upload are added on top, and the
-    # tensorflow-backend + release-profile tauri bundle combo has never
-    # run end-to-end anywhere yet — a cold cache run could plausibly
-    # blow past 55 partway through `cargo tauri build`. 90 minutes gives
-    # real headroom instead of a timeout that's arithmetically too tight
-    # before the job has even started.
-    timeout-minutes: 90
+    # Sum of this job's own step timeouts (18 ffmpeg + 15 Tauri deps + 25
+    # PyInstaller + 60 tauri build = 118) intentionally exceeds this job
+    # timeout — each individual apt/build step budgets for its own worst
+    # case (retried apt installs, a cold rust release compile), but those
+    # worst cases are not expected to all land in the same run. 105
+    # minutes is sized off what's actually been observed across runs
+    # 32223992523/32226451850/32228859288 (a hung apt step, a
+    # too-tight cargo tauri build timeout, and an apt step that hit its
+    # retry-loop's own bound) plus real slack, not off the step-timeout
+    # sum.
+    timeout-minutes: 105
     outputs:
       deb_path: ${{ steps.deb.outputs.path }}
     steps:
@@ -49,41 +51,61 @@ jobs:
 
       # The pipeline's probe/normalize steps shell out to ffmpeg/ffprobe.
       #
-      # Hardened the same way as "Install Tauri system dependencies" below
-      # (Acquire::Retries + a step timeout): run 32223992523 hung on this
-      # exact plain `apt-get` for 30+ minutes with zero progress before
-      # being manually cancelled — the same apt-mirror-stall failure mode
-      # ci.yml's rust job already had to guard against, just hitting a
-      # different apt step this time.
+      # `Acquire::Retries` alone isn't enough: it only retries a request
+      # that came back with an *error*, not a connection that's simply
+      # hanging with no response — which is exactly what happened. Run
+      # 32223992523 hung on this apt-get for 30+ minutes with zero
+      # progress (manually cancelled); the next attempt (32226451850,
+      # after adding Acquire::Retries + a 10-minute step timeout)
+      # succeeded in ~3 minutes; the attempt after that (32228859288)
+      # hung again and hit the same 10-minute timeout almost exactly —
+      # proving this is genuine intermittent mirror flakiness, not a
+      # one-off. A `timeout`-wrapped bash retry loop can actually recover
+      # from a hang (kill the stuck attempt, try again — sometimes on a
+      # different mirror) instead of just failing faster.
       - name: Install ffmpeg
-        timeout-minutes: 10
+        timeout-minutes: 18
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y -o Acquire::Retries=3 --fix-missing ffmpeg
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3 && \
+               timeout 180 sudo apt-get install -y -o Acquire::Retries=3 --fix-missing ffmpeg; then
+              exit 0
+            fi
+            echo "::warning::apt-get install ffmpeg attempt $attempt failed or hung, retrying" >&2
+            sleep 5
+          done
+          echo "::error::apt-get install ffmpeg failed after 3 attempts" >&2
+          exit 1
 
-      # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job).
-      #
-      # DEBIAN_FRONTEND=noninteractive avoids any interactive prompts, and
-      # Acquire::Retries + a step-level timeout keep an apt mirror stall
-      # from silently eating the whole job's budget.
+      # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job,
+      # plus the same timeout-wrapped retry loop as ffmpeg above — same
+      # apt-mirror-stall risk, same fix).
       - name: Install Tauri system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y -o Acquire::Retries=3 --fix-missing \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3 && \
+               timeout 180 sudo apt-get install -y -o Acquire::Retries=3 --fix-missing \
+                 libwebkit2gtk-4.1-dev \
+                 build-essential \
+                 curl \
+                 wget \
+                 file \
+                 libxdo-dev \
+                 libssl-dev \
+                 libayatana-appindicator3-dev \
+                 librsvg2-dev; then
+              exit 0
+            fi
+            echo "::warning::Tauri system deps install attempt $attempt failed or hung, retrying" >&2
+            sleep 5
+          done
+          echo "::error::Tauri system deps install failed after 3 attempts" >&2
+          exit 1
 
       - uses: dtolnay/rust-toolchain@stable
 
