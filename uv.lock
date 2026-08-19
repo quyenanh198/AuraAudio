@@ -3060,6 +3060,7 @@ source = { editable = "packages/test_fixtures" }
 dependencies = [
     { name = "numpy" },
     { name = "scipy" },
+    { name = "score-schema" },
 ]
 
 [package.optional-dependencies]
@@ -3072,6 +3073,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.2" },
     { name = "scipy", specifier = ">=1.13" },
+    { name = "score-schema", editable = "packages/score_schema" },
 ]
 provides-extras = ["test"]
 
