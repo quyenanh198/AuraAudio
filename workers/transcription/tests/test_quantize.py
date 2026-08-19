@@ -106,6 +106,46 @@ def test_quantize_emits_empty_measures_for_leading_silence(db_session, sample_jo
     assert len(measures[4]["events"]) == 1
 
 
+def test_quantize_clears_stale_score_head_revision_pointer(db_session, sample_job, workdir):
+    """Guards against a re-transcription leaving project.settings pointing at
+    an old, now-orphaned ScoreRevision from a prior edit session: writing the
+    new rev-0 must also clear any stale scoreHeadRevisionId so the API
+    serves this fresh baseline instead of the stale edited revision."""
+    from aura_api.models import Project
+
+    project = db_session.get(Project, sample_job.project_id)
+    project.settings = {"scoreHeadRevisionId": "some-old-revision-id"}
+    db_session.commit()
+
+    notes = [NoteEvent(pitch=64, onset_s=0.02, offset_s=0.48, velocity=90, confidence=0.9)]
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    quantize.run(ctx, notes, _structure_120_four_four())
+    db_session.commit()
+
+    db_session.refresh(project)
+    assert "scoreHeadRevisionId" not in (project.settings or {})
+
+
+def test_quantize_leaves_settings_untouched_when_no_head_pointer_set(db_session, sample_job, workdir):
+    from aura_api.models import Project
+
+    project = db_session.get(Project, sample_job.project_id)
+    project.settings = {"someOtherKey": "kept"}
+    db_session.commit()
+
+    notes = [NoteEvent(pitch=64, onset_s=0.02, offset_s=0.48, velocity=90, confidence=0.9)]
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    quantize.run(ctx, notes, _structure_120_four_four())
+    db_session.commit()
+
+    db_session.refresh(project)
+    assert project.settings == {"someOtherKey": "kept"}
+
+
 def test_quantize_emits_empty_measures_for_interior_gap(db_session, sample_job, workdir):
     """A note in measure 1 and another in measure 4 (4/4, 120bpm) must
     leave measures 2-3 present as empty-events entries."""

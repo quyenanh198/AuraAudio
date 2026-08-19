@@ -5,6 +5,8 @@ import hashlib
 import json
 from fractions import Fraction
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
 from aura_worker.stages.structure import METER_CANDIDATES, StructureResult
 from score_schema.models import NoteEvent, build_score
@@ -98,6 +100,22 @@ def run(ctx: StageContext, notes: list[NoteEvent], structure: StructureResult) -
         score_json=score, created_by="system",
     )
     ctx.session.add(revision)
+
+    # Defensive: if this project were ever re-transcribed, a prior edit
+    # session could have already pointed project.settings["scoreHeadRevisionId"]
+    # at an old, now-orphaned ScoreRevision (edited on top of the PREVIOUS
+    # rev-0). Writing a fresh rev-0 above without clearing that pointer would
+    # leave the API serving the stale head instead of this new baseline.
+    # Mirrors apps/api/routers/edits.py's `_set_head` idiom: dict copy +
+    # reassignment (not an in-place mutation) so SQLAlchemy's JSON-column
+    # change tracking picks it up.
+    project = ctx.job.project
+    if "scoreHeadRevisionId" in (project.settings or {}):
+        settings = dict(project.settings or {})
+        del settings["scoreHeadRevisionId"]
+        project.settings = settings
+        flag_modified(project, "settings")
+
     save_artifact(
         ctx, "quantize", STAGE_VERSION, object_key=object_key,
         sha256=hashlib.sha256(payload).hexdigest(), metrics={"measure_count": len(measure_list)},

@@ -607,12 +607,14 @@ complete (same pattern as "Phase 2 backend sub-projects" above).
       edited. Confirmed by an isolated re-test with the identical wait
       pattern that the product itself has no export-staleness bug here —
       only that one test script's row-selection was ambiguous mid-session.
-   8. **Latent head-pointer staleness if re-transcription is ever added**:
-      not possible via today's UI (each upload makes a new project, so no
-      flow re-transcribes an existing one), but if one is ever added it must
-      invalidate that project's `scoreHeadRevisionId` settings pointer (Task
-      3) — otherwise the project would keep serving the old, edited score
-      instead of the fresh transcription.
+   8. **RESOLVED — head-pointer staleness on re-transcription**: was latent
+      (no UI flow re-transcribes an existing project), now closed defensively
+      regardless — `quantize.run` clears a project's stale
+      `scoreHeadRevisionId` settings pointer (Task 3) whenever it writes a
+      fresh rev-0 `ScoreRevision`, so a project would no longer keep serving
+      an old, edited score after a hypothetical re-transcription. See
+      `workers/transcription/src/aura_worker/stages/quantize.py` and its
+      tests in `workers/transcription/tests/test_quantize.py`.
    9. **The transcribe->edit->undo->export journey is now automated** (a
       follow-up flagged at the top of this document, closed): a committed
       Playwright regression test, `apps/desktop/web/e2e/edit-journey.spec.ts`
@@ -694,7 +696,7 @@ follow-ups are recorded in the sub-project sections above: an
 an automated
 Playwright edit-journey regression test, silent-measure fidelity in
 quantize (RESOLVED 2026-08-19, see above), and re-transcription
-head-pointer invalidation).
+head-pointer invalidation (RESOLVED 2026-08-19, see gotcha 8 above)).
 
 ## Working process (established this session, keep using it)
 
