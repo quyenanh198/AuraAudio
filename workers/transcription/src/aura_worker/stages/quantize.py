@@ -10,7 +10,7 @@ from aura_worker.stages.structure import METER_CANDIDATES, StructureResult
 from score_schema.models import NoteEvent, build_score
 from score_schema.validate import validate_score
 
-STAGE_VERSION = 2
+STAGE_VERSION = 3
 GRID_BEATS = Fraction(1, 4)  # snap to 16th notes (1/4 of a beat, since a beat = quarter note)
 
 
@@ -56,9 +56,16 @@ def run(ctx: StageContext, notes: list[NoteEvent], structure: StructureResult) -
         }
         measures.setdefault(measure_number, []).append(event)
 
+    # Emit every measure number 1..max(occupied), not just measures that
+    # received an event — a pure-silence measure (leading or interior) gets
+    # an explicit empty-events entry instead of being omitted, which would
+    # otherwise shift every later measure's notated content left. Trailing
+    # silence (after the last note) is out of scope: there is no detected
+    # signal for how many silent measures follow the last note.
+    max_measure_number = max(measures.keys(), default=0)
     measure_list = [
-        {"number": number, "events": events}
-        for number, events in sorted(measures.items())
+        {"number": number, "events": measures.get(number, [])}
+        for number in range(1, max_measure_number + 1)
     ]
     time_map = [
         {"beat": 0, "seconds": 0.0},

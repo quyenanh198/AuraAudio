@@ -77,5 +77,51 @@ def test_quantize_respects_three_four_measure_length(db_session, sample_job, wor
 
     # seconds_per_beat = 0.5; onset_beats = 3.2/0.5 = 6.4, snapped to nearest
     # 1/4-beat = 6.5; measure_number = int(6.5 // 3) + 1 = 3 (3 beats/measure).
-    measure_numbers = [m["number"] for m in score["parts"][0]["measures"]]
-    assert measure_numbers == [3]
+    # Measures 1-2 are pure silence and must now be emitted as empty-events
+    # entries rather than dropped (silent-measure fidelity).
+    measures = score["parts"][0]["measures"]
+    assert [m["number"] for m in measures] == [1, 2, 3]
+    assert measures[0]["events"] == []
+    assert measures[1]["events"] == []
+    assert len(measures[2]["events"]) == 1
+
+
+def test_quantize_emits_empty_measures_for_leading_silence(db_session, sample_job, workdir):
+    """First note lands in measure 3 (4/4, 120bpm) -> measures 1-2 must be
+    emitted as empty-events entries, not omitted (would otherwise shift
+    every later measure's musical content left when notated)."""
+    notes = [NoteEvent(pitch=60, onset_s=9.0, offset_s=9.4, velocity=80, confidence=0.7)]
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    score = quantize.run(ctx, notes, _structure_120_four_four())
+
+    measures = score["parts"][0]["measures"]
+    validate_score(score)
+    assert [m["number"] for m in measures] == [1, 2, 3, 4, 5]
+    assert measures[0]["events"] == []
+    assert measures[1]["events"] == []
+    assert measures[2]["events"] == []
+    assert measures[3]["events"] == []
+    assert len(measures[4]["events"]) == 1
+
+
+def test_quantize_emits_empty_measures_for_interior_gap(db_session, sample_job, workdir):
+    """A note in measure 1 and another in measure 4 (4/4, 120bpm) must
+    leave measures 2-3 present as empty-events entries."""
+    notes = [
+        NoteEvent(pitch=60, onset_s=0.0, offset_s=0.4, velocity=80, confidence=0.7),
+        NoteEvent(pitch=64, onset_s=6.0, offset_s=6.4, velocity=80, confidence=0.7),
+    ]
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    score = quantize.run(ctx, notes, _structure_120_four_four())
+
+    measures = score["parts"][0]["measures"]
+    validate_score(score)
+    assert [m["number"] for m in measures] == [1, 2, 3, 4]
+    assert len(measures[0]["events"]) == 1
+    assert measures[1]["events"] == []
+    assert measures[2]["events"] == []
+    assert len(measures[3]["events"]) == 1
