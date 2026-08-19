@@ -116,10 +116,25 @@ def _detect_meter(y, sr, beat_times: np.ndarray) -> tuple[str, float]:
     rank_mean = {m: i for i, m in enumerate(by_mean)}
     rank_peak = {m: i for i, m in enumerate(by_peak)}
     combined_rank = {m: rank_mean[m] + rank_peak[m] for m in DETECTABLE_METERS}
-    # min() over DETECTABLE_METERS (iterated in its declared order) keeps the
-    # first-encountered candidate on an exact tie, preserving 4/4 as the
-    # default tie-break.
-    best_meter = min(DETECTABLE_METERS, key=lambda m: combined_rank[m])
+    # combined_rank ties happen routinely for 6/8 vs. 3/4: a real secondary
+    # accent makes mean_margin favor 6/8 decisively while the SAME accent
+    # makes peak_margin favor 3/4 decisively (see the module-level note
+    # above), and this holds whether the underlying clip truly is 6/8 or is
+    # 3/4 data whose period-3 pattern aliases into the period-6 comb (3
+    # divides 6). We investigated breaking these ties by mean_margin
+    # magnitude (largest wins): it does resolve a hand-built noiseless 6/8
+    # accent pattern correctly, but it also flips the pre-existing 3/4
+    # regression fixture (write_metronome_pulse_wav) to 6/8 — its
+    # mean_margin ratio between the two candidates (~1.81x) is not
+    # reliably smaller than a genuine 6/8 clip's ratio (~1.75x in the same
+    # hand-built pattern), so magnitude alone cannot separate "real 6/8"
+    # from "3/4 aliased as 6/8" with this scoring signal. Given that, ties
+    # fall back to DETECTABLE_METERS's declared order (4/4, 3/4, 6/8, 2/4),
+    # which conservatively prefers the simpler/shorter meter whenever the
+    # two margins disagree — see test_detects_6_8_across_validated_tempos
+    # for the resulting (real, not universal) set of tempi at which a
+    # genuinely 6/8 clip wins outright rather than tying.
+    best_meter = min(DETECTABLE_METERS, key=lambda m: (combined_rank[m], DETECTABLE_METERS.index(m)))
 
     total_margin = sum(max(m, 0.0) for m in mean_margins.values())
     confidence = (max(mean_margins[best_meter], 0.0) / total_margin) if total_margin > 0 else 0.5
