@@ -84,7 +84,7 @@ function clampFraction(value: Fraction, min: Fraction, max: Fraction): Fraction 
 }
 
 /** A measure's length in whole notes, from a meter string like "4/4" or
- * "3/4". Mirrors `score_schema.edits.beats_per_measure(meter) / 4` exactly
+ * "3/4". Mirrors `score_schema.meters.beats_per_measure(meter) / 4` exactly
  * — `beats_per_measure("n/d") = n * 4/d`, so dividing by 4 leaves `n/d`
  * itself; i.e. the meter string, read as a fraction, already IS the
  * measure's length in whole notes. */

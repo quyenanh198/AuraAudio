@@ -1110,9 +1110,15 @@ than pretending a cleverer rule generalizes, and the test suite asserts
 only what was actually measured: a tempo sweep over `range(40, 141, 2)`
 bpm found just **{50, 62, 100, 124} bpm** win 6/8 decisively (not by
 tie-break) — a narrow, non-contiguous, but real and reproducible set
-(`test_detects_6_8_across_validated_tempos`). 4/4 and 2/4 detect reliably
-across a wide tempo range; 6/8 does not, and that's documented rather
-than glossed over.
+(`test_detects_6_8_across_validated_tempos`). 4/4 detects reliably across
+a wide tempo range — a throwaway sweep of the shipped 2/4 fixture over
+70-140 bpm in 10 bpm steps confirmed 4/4 correct at all 8 points. **2/4
+is NOT reliable**, the same throwaway sweep found: correct at 70/110/
+120/130 bpm, but wrong at 80 bpm (→ 3/4), 90 bpm (→ 4/4), 100 bpm (→
+6/8), and 140 bpm (→ 6/8) — 4 wrong out of 8. Like 6/8, treat a detected
+2/4 as a hint, not a fact: correct it via the inspector's `set_part_fact`
+meter picker when wrong, the same path already used for any other
+detected meter.
 
 **The bidirectional-risk caveat (unchanged from the fix-round that wrote
 it — preserved here verbatim):** 6/8 vs. 3/4 miscategorization is
@@ -1172,8 +1178,16 @@ separate in any future combined-sweep tooling).
 
 ```bash
 cd /home/user/AuraAudio
-source .envrc && make test   # expect all six packages green (151/151 as of sub-project 3's task 9;
-                              # apps/desktop's suite joined the other five during sub-project 2)
+source .envrc && make test   # expect all six packages green (386/386 as of this fix-round's
+                              # verification: score_schema 173, test_fixtures 16, musicxml 47,
+                              # aura-worker 92, aura-api apps/api 48 + apps/desktop 10 — run as
+                              # two separate pytest invocations per this repo's own Makefile, see
+                              # the cross-file test-pollution gotcha above. The frontend Vitest
+                              # suite (141/141) is not part of `make test` — run it separately via
+                              # `npm run test` in apps/desktop/web. These are the counts as of this
+                              # fix-round, not the 151/151 recorded for sub-project 3's task 9
+                              # above — they will drift again as the codebase grows, so re-run and
+                              # recount rather than trusting either number blindly.)
 ```
 
 No external services to start first — see "Environment gotchas" above.
