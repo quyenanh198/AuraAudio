@@ -848,8 +848,30 @@ PyInstaller backend, `cargo tauri build`s the Linux `.deb`, and attaches
 it to a GitHub Release for that tag. The same workflow also runs on
 `workflow_dispatch` (no tag) for build-only testing — it uploads the
 `.deb` as a workflow artifact but does not cut a Release in that mode.
-There is currently only a `linux-deb` job; add sibling jobs the same way
-if other targets (Windows `.msi`, macOS `.dmg`) are needed later.
+There is currently only a Linux `.deb` build; add sibling jobs the same
+way if other targets (Windows `.msi`, macOS `.dmg`) are needed later.
+
+**Current ship-readiness roadmap** (user-approved order, in progress):
+1. **Branding + release workflow — branding DONE and merged** (real app
+   icon: amber waveform-into-eighth-note mark on #1e1d21, generated via
+   SVG→Chromium raster + `cargo tauri icon`; productName/version 0.1.0;
+   favicon + README de-scaffolded). The release workflow itself is
+   written and reviewed (build/release job split, least-privilege
+   permissions, 90-min budget) but its first green `workflow_dispatch`
+   run is STILL BEING FOUGHT FOR at the time of this note: GitHub's
+   ubuntu runners were suffering intermittent multi-minute apt mirror
+   stalls that day (the same stall once hit ci.yml's rust job on main),
+   forcing several hardening iterations (apt retry loops, cold-compile
+   timeout bumps — commits 652b140/6080528/a00946a on the working
+   branch). If picking up cold: check the latest release.yml dispatch
+   run before assuming the workflow is broken — the failures so far were
+   ALL runner-environment, never workflow logic.
+2. **Windows `.msi` + macOS `.dmg` jobs** — not started. Windows also
+   needs `http://tauri.localhost` added to `WEBVIEW_ORIGINS` in
+   `apps/desktop/run_backend.py` (ruling recorded when the CORS
+   allowlist was built: excluded because only Linux shipped).
+3. **Editing v2 / meter expansion** — direction to be chosen by the user
+   (structure ops, multi-select, drag editing, MIDI-in / more meters).
 
 ## Quick start for a fresh session
 
