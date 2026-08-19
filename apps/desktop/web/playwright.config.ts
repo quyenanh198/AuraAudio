@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig } from "@playwright/test";
 
 // End-to-end regression config for the transcribe -> edit -> undo -> export
@@ -8,16 +9,23 @@ import { defineConfig } from "@playwright/test";
 // and not part of `npm test`/`make test`. Run via `npm run test:e2e`
 // (apps/desktop web) or `make e2e-web` (repo root).
 //
-// Offline-only, no browser download: this sandbox pre-stages Chromium at
+// Sandbox-only pinned Chromium: this dev sandbox pre-stages Chromium at
 // PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers, but the bare `chromium` path
 // under that root is a symlink to a revision this installed `playwright`
 // version doesn't expect (see docs/superpowers/SESSION-HANDOFF.md's
 // "Environment gotchas" — Playwright was already a dependency here for
 // sub-project 3's OSMD spike verification, and that gotcha was found then).
-// `launchOptions.executablePath` below pins the exact concrete binary
-// instead of relying on PLAYWRIGHT_BROWSERS_PATH auto-resolution, so no
-// `npx playwright install` / download is ever attempted.
-const CHROMIUM_EXECUTABLE = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+// The pinned path below is used ONLY when it actually exists on disk (this
+// sandbox) or is overridden via env var; everywhere else — including CI,
+// where `npx playwright install --with-deps chromium` puts the browser at
+// the default PLAYWRIGHT_BROWSERS_PATH location — `executablePath` is left
+// undefined so Playwright falls back to its own default resolution.
+const SANDBOX_CHROMIUM_EXECUTABLE =
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ??
+  "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+const CHROMIUM_EXECUTABLE = existsSync(SANDBOX_CHROMIUM_EXECUTABLE)
+  ? SANDBOX_CHROMIUM_EXECUTABLE
+  : undefined;
 
 const VITE_PORT = 5173;
 
@@ -51,7 +59,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: {
-      executablePath: CHROMIUM_EXECUTABLE,
+      ...(CHROMIUM_EXECUTABLE ? { executablePath: CHROMIUM_EXECUTABLE } : {}),
     },
   },
   webServer: {
