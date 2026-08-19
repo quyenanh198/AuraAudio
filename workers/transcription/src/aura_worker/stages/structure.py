@@ -94,11 +94,28 @@ def _detect_meter(y, sr, beat_times: np.ndarray) -> tuple[str, float]:
     for meter_name in DETECTABLE_METERS:
         if is_compound(meter_name):
             period = int(meter_name.split("/")[0])  # 6 tracked eighths for 6/8
+            # Secondary-accent offsets are every dotted-quarter group start
+            # after the primary one — commit 0f2deab fixed the analogous
+            # `grid_size // 2` bug in the fixture generator
+            # (test_fixtures.generate.generate_metered_clicks) the same way,
+            # because a plain `period // 2` lands mid-group for 9/8 (index 4
+            # of a 9-long period, not a group start at 3 or 6). `range(3,
+            # period, 3)` generalizes to every meter's group starts; for
+            # period 6 (the only compound meter in DETECTABLE_METERS today)
+            # this is exactly `{offset + 3}`, a single-element average that
+            # is algebraically identical to the old `offset + period // 2`
+            # (6 // 2 == 3) — so 6/8's scoring is unchanged byte-for-byte.
+            # DETECTABLE_METERS must not gain 9/8 or 12/8 until this
+            # multi-group averaging has itself been validated against real
+            # 9/8 and 12/8 fixtures (untested here — only 6/8's single-group
+            # case is exercised by the test suite).
             offset_scores = []
             best = 0.0
             for offset in range(period):
                 primary = _comb_score(accents, period, offset)
-                secondary = _comb_score(accents, period, (offset + period // 2) % period)
+                group_starts = range(3, period, 3)
+                secondary_scores = [_comb_score(accents, period, (offset + s) % period) for s in group_starts]
+                secondary = float(np.mean(secondary_scores)) if secondary_scores else 0.0
                 blended = primary + SECONDARY_ACCENT_WEIGHT * secondary
                 offset_scores.append(blended)
                 best = max(best, blended)
