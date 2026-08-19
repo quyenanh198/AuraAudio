@@ -875,19 +875,36 @@ after the first produced a green-but-broken build) that adds the real
 actually works on Windows, backed by a smoke-test CI step on all three
 platforms so this class of gap can't ship silently again.
 
-**Runtime note, all three platforms (not a regression from this work,
-pre-existing on Linux too):** none of the `.deb`, `.dmg`, or `.msi`
-bundles `ffmpeg` — the backend
-(`aura_worker/stages/probe.py`/`normalize.py`/`ffmpeg_utils.py`) shells
-out to a system `ffmpeg`/`ffprobe` binary at transcription-request time,
-and PyInstaller's `--onedir` bundle never collects it (only
-`--collect-data basic_pitch` is passed). The Linux `.deb`'s own metadata
-declares no dependency on ffmpeg either (`tauri.conf.json` sets no
-`bundle.linux.deb.depends`), so this isn't a new gap introduced here —
-just now also true for macOS and Windows. Users on any platform need
-ffmpeg on PATH themselves (on Windows, that means a real ffmpeg.exe on
-`PATH`, e.g. via winget/choco or a manual download); documenting/bundling
-it is future work, not done here.
+**Runtime note, all three platforms (RESOLVED for Linux, mitigated for
+macOS/Windows):** none of the `.deb`, `.dmg`, or `.msi` bundles `ffmpeg`
+itself — the backend (`aura_worker/stages/probe.py`/`normalize.py`/
+`ffmpeg_utils.py`) still shells out to a system `ffmpeg`/`ffprobe` binary
+at transcription-request time, and PyInstaller's `--onedir` bundle still
+never collects it (only `--collect-data basic_pitch` is passed). What's
+new: the Linux `.deb` now declares `Depends: ffmpeg` via
+`bundle.linux.deb.depends: ["ffmpeg"]` in `tauri.conf.json` (verified
+against the real Tauri v2 schema — `tauri-utils`'s `DebConfig.depends:
+Option<Vec<String>>` nested under `LinuxConfig.deb` under
+`BundleConfig.linux`, plus the bundled `@tauri-apps/cli/config.schema.json`
+— not assumed from memory), so `apt`/`dpkg` installs ffmpeg automatically
+alongside the app on Linux; no build was run to confirm the resulting
+`.deb`'s control file (JSON validity + schema-path verification only), so
+the next CI `.deb` build is this change's real verification. macOS and
+Windows still can't auto-install a system package this way, so instead the
+app now detects the gap at runtime: a new `GET /v1/system/deps` backend
+endpoint (`apps/api/src/aura_api/routers/system.py`) reports
+`shutil.which`/`<bin> -version` results for both binaries, and the Home
+screen checks it on mount (`apps/desktop/web/src/lib/deps.ts`), showing a
+dismissal-free warning banner when either is missing — which binary is
+missing, a one-line per-OS install command with a Copy button (Windows:
+`winget install Gyan.FFmpeg`; macOS: `brew install ffmpeg`; Linux: `sudo
+apt install ffmpeg`, covering the pre-.deb-fix case and any other Linux
+packaging), and a "Check again" button — and disables the Guitar/Piano
+transcription-start buttons (with an explanatory tooltip) while deps are
+missing. Users on macOS/Windows still need to run the suggested command
+themselves and click "Check again"; true bundling (vendoring a static
+ffmpeg binary into the PyInstaller bundle) remains future work, not done
+here.
 
 **Current ship-readiness roadmap** (user-approved order, in progress):
 1. **Branding + release workflow — DONE.** Real app icon (amber
