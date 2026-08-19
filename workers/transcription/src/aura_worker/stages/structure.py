@@ -9,11 +9,17 @@ import numpy as np
 
 from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
+from score_schema.meters import DETECTABLE_METERS, is_compound, notated_beats
 from score_schema.models import JobErrorCode, NoteEvent
 
-STAGE_VERSION = 1
-METER_CANDIDATES = {"4/4": 4, "3/4": 3}
+STAGE_VERSION = 2
 ACCENT_HALF_WINDOW_S = 0.05
+SECONDARY_ACCENT_WEIGHT = 0.5
+
+# Deprecation alias: workers/transcription/src/aura_worker/stages/quantize.py
+# still imports this name. Task 4 (quantize meter-generic measure math)
+# removes it; do not add new usages.
+METER_CANDIDATES = {m: int(notated_beats(m)) for m in ("4/4", "3/4")}
 
 
 @dataclass
@@ -56,6 +62,11 @@ def _accent_at(onset_env: np.ndarray, onset_sr: float, t: float, half_window: fl
     return float(np.max(onset_env[i0:i1]))
 
 
+def _comb_score(accents: np.ndarray, period: int, offset: int) -> float:
+    comb = accents[offset::period]
+    return float(np.mean(comb)) if len(comb) >= 1 else 0.0
+
+
 def _detect_meter(y, sr, beat_times: np.ndarray) -> tuple[str, float]:
     import librosa
 
@@ -64,18 +75,59 @@ def _detect_meter(y, sr, beat_times: np.ndarray) -> tuple[str, float]:
     accents = np.array([_accent_at(onset_env, onset_sr, t) for t in beat_times])
     overall_mean = float(np.mean(accents)) if len(accents) else 0.0
 
-    margins: dict[str, float] = {}
-    for meter_name, group in METER_CANDIDATES.items():
-        offset_scores = [
-            float(np.mean(accents[offset::group]))
-            for offset in range(group)
-            if len(accents[offset::group]) >= 1
-        ]
-        margins[meter_name] = (max(offset_scores) - overall_mean) if offset_scores else 0.0
+    # Two complementary margins per candidate, blended by rank (below) rather
+    # than by a single formula:
+    #
+    # - mean_margins: winning offset's comb score minus the overall accent
+    #   mean. Robust when a meter has a genuine secondary accent (real 4/4's
+    #   beat 3, real 6/8's secondary eighth) — the classic approach.
+    # - peak_margins: winning offset's comb score minus its OWN runner-up
+    #   offset. This is what catches subharmonic aliasing: true 2/4 data
+    #   scores identically at every even offset of a 4/4-period comb (2
+    #   divides 4), so 4/4's peak_margin collapses toward zero and 4/4 stops
+    #   looking like a competitive candidate, correctly leaving 2/4 (whose
+    #   own comb has a real winner/runner-up gap) on top. The same relation
+    #   holds for 3/4 vs. 6/8 (3 divides 6).
+    #
+    # mean_margins alone cannot tell true 2/4 from 4/4-shaped-like-2/4 (both
+    # score identically); peak_margins alone is fooled by a real secondary
+    # accent (a non-trivial runner-up looks like "no clear winner" even
+    # though it is exactly the signature of the longer meter). Combining
+    # both by rank (Borda count) is what survives both fixture families.
+    mean_margins: dict[str, float] = {}
+    peak_margins: dict[str, float] = {}
+    for meter_name in DETECTABLE_METERS:
+        if is_compound(meter_name):
+            period = int(meter_name.split("/")[0])  # 6 tracked eighths for 6/8
+            offset_scores = []
+            best = 0.0
+            for offset in range(period):
+                primary = _comb_score(accents, period, offset)
+                secondary = _comb_score(accents, period, (offset + period // 2) % period)
+                blended = primary + SECONDARY_ACCENT_WEIGHT * secondary
+                offset_scores.append(blended)
+                best = max(best, blended)
+            mean_margins[meter_name] = best - (1.0 + SECONDARY_ACCENT_WEIGHT) * overall_mean
+        else:
+            period = notated_beats(meter_name)
+            offset_scores = [_comb_score(accents, period, o) for o in range(period)]
+            mean_margins[meter_name] = (max(offset_scores) - overall_mean) if offset_scores else 0.0
 
-    best_meter = max(margins, key=margins.get)
-    total_margin = sum(max(m, 0.0) for m in margins.values())
-    confidence = (max(margins[best_meter], 0.0) / total_margin) if total_margin > 0 else 0.5
+        ranked = sorted(offset_scores, reverse=True)
+        peak_margins[meter_name] = ranked[0] - (ranked[1] if len(ranked) > 1 else 0.0)
+
+    by_mean = sorted(DETECTABLE_METERS, key=lambda m: -mean_margins[m])
+    by_peak = sorted(DETECTABLE_METERS, key=lambda m: -peak_margins[m])
+    rank_mean = {m: i for i, m in enumerate(by_mean)}
+    rank_peak = {m: i for i, m in enumerate(by_peak)}
+    combined_rank = {m: rank_mean[m] + rank_peak[m] for m in DETECTABLE_METERS}
+    # min() over DETECTABLE_METERS (iterated in its declared order) keeps the
+    # first-encountered candidate on an exact tie, preserving 4/4 as the
+    # default tie-break.
+    best_meter = min(DETECTABLE_METERS, key=lambda m: combined_rank[m])
+
+    total_margin = sum(max(m, 0.0) for m in mean_margins.values())
+    confidence = (max(mean_margins[best_meter], 0.0) / total_margin) if total_margin > 0 else 0.5
     return best_meter, float(np.clip(confidence, 0.0, 1.0))
 
 

@@ -1,8 +1,14 @@
+import librosa
+
 from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext
 from aura_worker.stages import structure
 from score_schema.models import NoteEvent
-from test_fixtures.generate import write_diatonic_melody_wav, write_metronome_pulse_wav
+from test_fixtures.generate import (
+    generate_metered_clicks,
+    write_diatonic_melody_wav,
+    write_metronome_pulse_wav,
+)
 
 
 class FakeStorage:
@@ -128,3 +134,45 @@ def test_structure_second_call_resumes_without_recompute(db_session, sample_job,
     second = structure.run(ctx, normalized_path=wav_path, notes=_PLACEHOLDER_NOTES)
 
     assert second == first
+
+
+def _detect_on_fixture(tmp_path, meter, tempo=120.0, measures=8):
+    path = generate_metered_clicks(meter, tempo_bpm=tempo, measures=measures, path=tmp_path / "clip.wav")
+    y, sr = librosa.load(str(path), sr=None)
+    _, beat_times = structure._detect_tempo_and_beats(y, sr)
+    detected, confidence = structure._detect_meter(y, sr, beat_times)
+    return detected, confidence
+
+
+def test_detects_6_8_not_3_4(tmp_path):
+    # Tempo tweak (sanctioned by the meter-expansion plan's detection note):
+    # at the 120 bpm default, librosa's beat tracker locks onto a ~2-eighth
+    # pulse for this click fixture, discarding exactly the eighth-3
+    # secondary-accent information the 6/8 vs. 3/4 comb relies on. At 50
+    # bpm the tracker resolves the fixture's actual eighth-note grid (beat
+    # spacing matches the true eighth interval almost exactly), giving the
+    # detector the information it needs for a clearly-6/8 clip to detect as
+    # 6/8. See structure._detect_meter's docstring-style comment and the
+    # task report for the full diagnosis.
+    detected, confidence = _detect_on_fixture(tmp_path, "6/8", tempo=50.0)
+    assert detected == "6/8"
+    assert 0.0 <= confidence <= 1.0
+
+
+def test_detects_2_4(tmp_path):
+    detected, _ = _detect_on_fixture(tmp_path, "2/4")
+    assert detected == "2/4"
+
+
+def test_still_detects_4_4(tmp_path):
+    detected, _ = _detect_on_fixture(tmp_path, "4/4")
+    assert detected == "4/4"
+
+
+def test_still_detects_3_4(tmp_path):
+    detected, _ = _detect_on_fixture(tmp_path, "3/4")
+    assert detected == "3/4"
+
+
+def test_stage_version_bumped():
+    assert structure.STAGE_VERSION == 2
