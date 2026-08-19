@@ -156,10 +156,10 @@ def generate_metered_clicks(
       one click per eighth note. Downbeat loud (1.0), every other eighth
       soft (0.4).
     - Compound meters (6/8, 9/8, 12/8): one click per eighth note.
-      Downbeat (eighth 0) loudest (1.0); the secondary accent at the
-      midpoint dotted-quarter group (eighth 3 of 6/8) is louder than the
-      rest but softer than the downbeat (0.7); everything else is soft
-      (0.4).
+      Downbeat (eighth 0) loudest (1.0); every other dotted-quarter group
+      start (eighth 3, 6, 9 as applicable -- i.e. every 3rd eighth after
+      the downbeat) is louder than the rest but softer than the downbeat
+      (0.7); everything else is soft (0.4).
 
     Raises ValueError for any meter not in SUPPORTED_METERS (via
     is_compound's own membership guard).
@@ -170,8 +170,12 @@ def generate_metered_clicks(
     if is_compound(meter):
         grid_size = numerator  # one click per eighth note
         step_s = seconds_per_quarter / 2.0
-        secondary_index = grid_size // 2  # eighth 3 of 6 for 6/8
-        amps = [1.0 if i == 0 else 0.7 if i == secondary_index else 0.4 for i in range(grid_size)]
+        # Every dotted-quarter group start after the downbeat: eighth 3 for
+        # 6/8, eighths 3 and 6 for 9/8, eighths 3/6/9 for 12/8. grid_size //
+        # 2 (the prior formula) landed mid-group for 9/8 (index 4); group
+        # starts are always multiples of 3.
+        secondary_indices = set(range(3, grid_size, 3))
+        amps = [1.0 if i == 0 else 0.7 if i in secondary_indices else 0.4 for i in range(grid_size)]
     else:
         quarter_beats = beats_per_measure(meter)
         if quarter_beats.denominator == 1:

@@ -204,3 +204,42 @@ def test_generate_metered_clicks_compound_6_8_accent_pattern(tmp_path: Path):
 
     assert downbeat > secondary > max(weak)
     assert max(weak) - min(weak) < 0.15 * max(weak)
+
+
+@pytest.mark.parametrize(
+    ("meter", "secondary_indices", "weak_indices"),
+    [
+        ("9/8", (3, 6), (1, 2, 4, 5, 7, 8)),
+        ("12/8", (3, 6, 9), (1, 2, 4, 5, 7, 8, 10, 11)),
+    ],
+)
+def test_generate_metered_clicks_compound_secondary_accents_land_on_group_starts(
+    tmp_path: Path, meter: str, secondary_indices: tuple[int, ...], weak_indices: tuple[int, ...]
+):
+    """9/8 and 12/8: one click per eighth note; every dotted-quarter group
+    start after the downbeat (every 3rd eighth) is a secondary accent
+    (0.7); grid_size // 2 would land mid-group for 9/8 (index 4) instead
+    of on a group start -- this pins the corrected, generalized indices."""
+    from scipy.io import wavfile
+
+    from test_fixtures.generate import generate_metered_clicks
+
+    tempo_bpm = 120.0
+    seconds_per_eighth = (60.0 / tempo_bpm) / 2.0
+    grid_size = int(meter.split("/")[0])
+    path = generate_metered_clicks(meter, tempo_bpm=tempo_bpm, measures=3, path=tmp_path / "m_group.wav")
+    sr, data = wavfile.read(str(path))
+
+    measure_len_s = grid_size * seconds_per_eighth
+    peaks = [
+        _click_peak(data, sr, measure_len_s * 1 + i * seconds_per_eighth) for i in range(grid_size)
+    ]
+    downbeat = peaks[0]
+    secondary = [peaks[i] for i in secondary_indices]
+    weak = [peaks[i] for i in weak_indices]
+
+    assert downbeat > max(secondary)
+    for s in secondary:
+        assert s > max(weak)
+    assert max(weak) - min(weak) < 0.15 * max(weak)
+    assert max(secondary) - min(secondary) < 0.15 * max(secondary)
