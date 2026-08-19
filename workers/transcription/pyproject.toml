@@ -17,6 +17,22 @@ dependencies = [
     # itself ships for this — not a version-pin change, not a manual
     # workaround.
     "basic-pitch[tf]>=0.4",
+    # On Windows, PyPI's `tensorflow==2.14.0` wheel is a metadata-only stub
+    # (no Python code) whose real implementation is split out into a
+    # separate `tensorflow-intel` wheel via a Windows-only marker in its own
+    # METADATA (`Requires-Dist: tensorflow-intel (==2.14.0) ;
+    # platform_system == "Windows"`). uv's PEP 508 resolver does NOT expand
+    # markers found only in an installed *stub* wheel's own metadata into a
+    # transitive pull the way pip's install-time resolver effectively does
+    # here -- basic-pitch's `tf` extra only asks for bare `tensorflow`/
+    # `tensorflow-macos`, so without this explicit entry `tensorflow-intel`
+    # never lands in uv.lock at all and Windows ends up with a stub
+    # tensorflow that has zero inference backend (verified directly: CI's
+    # PyInstaller log showed "WARNING:root:Tensorflow is not installed"
+    # despite `tensorflow==2.14.0` being "installed"). Adding it explicitly,
+    # scoped to `sys_platform == 'win32'`, is the fix -- confirmed this is
+    # the real ~271MB implementation wheel, not another stub.
+    "tensorflow-intel==2.14.0 ; sys_platform == 'win32'",
     "mido>=1.3",
     "numpy>=1.26,<2",  # tensorflow 2.14 (via basic-pitch) is ABI-incompatible with numpy 2.x
     "librosa>=0.10",

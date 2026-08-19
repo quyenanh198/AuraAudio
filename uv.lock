@@ -244,6 +244,7 @@ dependencies = [
     { name = "score-schema" },
     { name = "setuptools" },
     { name = "sqlalchemy" },
+    { name = "tensorflow-intel", marker = "sys_platform == 'win32'" },
 ]
 
 [package.optional-dependencies]
@@ -265,6 +266,7 @@ requires-dist = [
     { name = "score-schema", editable = "packages/score_schema" },
     { name = "setuptools", specifier = "<81" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "tensorflow-intel", marker = "sys_platform == 'win32'", specifier = "==2.14.0" },
     { name = "test-fixtures", marker = "extra == 'test'", editable = "packages/test_fixtures" },
 ]
 provides-extras = ["test"]
@@ -302,8 +304,8 @@ name = "cattrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "attrs", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "attrs", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a0/ec/ba18945e7d6e55a58364d9fb2e46049c1c2998b3d805f19b703f14e81057/cattrs-26.1.0.tar.gz", hash = "sha256:fa239e0f0ec0715ba34852ce813986dfed1e12117e209b816ab87401271cdd40", size = 495672, upload-time = "2026-02-18T22:15:19.406Z" }
 wheels = [
@@ -719,14 +721,14 @@ name = "coremltools"
 version = "9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "attrs", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "cattrs", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "packaging", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "protobuf", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "pyaml", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "sympy", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "tqdm", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "attrs", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "cattrs", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "numpy", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "packaging", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "pyaml", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "sympy", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "tqdm", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/79/e6/8cb11a246f61736e75b20488b9c3cf9c208f500c9a3f92d717dbf592348c/coremltools-9.0.tar.gz", hash = "sha256:4ff346b29c31c4b45acd19a20e0f0a1ac65180a96776e62f15bd5c46f4926687", size = 1656978, upload-time = "2025-11-10T21:51:23.855Z" }
 wheels = [
@@ -1467,7 +1469,7 @@ name = "macholib"
 version = "1.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "altgraph", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "altgraph", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz", hash = "sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362", size = 59427, upload-time = "2025-11-22T08:28:38.373Z" }
 wheels = [
@@ -2049,7 +2051,7 @@ name = "pyaml"
 version = "26.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyyaml", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "pyyaml", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/15/6a/acfdf17de0d6947b419da8696e02b781b18de2cf49e0472298b50e1f0711/pyaml-26.7.0.tar.gz", hash = "sha256:11cda3a796efc6dbce0d56836be56cfd26289dad07bcd78e9904086729929c93", size = 30669, upload-time = "2026-07-04T00:34:38.532Z" }
 wheels = [
@@ -2858,7 +2860,7 @@ name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mpmath", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "mpmath", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
@@ -2941,6 +2943,38 @@ wheels = [
 ]
 
 [[package]]
+name = "tensorflow-intel"
+version = "2.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py", marker = "sys_platform == 'win32'" },
+    { name = "astunparse", marker = "sys_platform == 'win32'" },
+    { name = "flatbuffers", marker = "sys_platform == 'win32'" },
+    { name = "gast", marker = "sys_platform == 'win32'" },
+    { name = "google-pasta", marker = "sys_platform == 'win32'" },
+    { name = "grpcio", marker = "sys_platform == 'win32'" },
+    { name = "h5py", marker = "sys_platform == 'win32'" },
+    { name = "keras", marker = "sys_platform == 'win32'" },
+    { name = "libclang", marker = "sys_platform == 'win32'" },
+    { name = "ml-dtypes", marker = "sys_platform == 'win32'" },
+    { name = "numpy", marker = "sys_platform == 'win32'" },
+    { name = "opt-einsum", marker = "sys_platform == 'win32'" },
+    { name = "packaging", marker = "sys_platform == 'win32'" },
+    { name = "protobuf", marker = "sys_platform == 'win32'" },
+    { name = "setuptools", marker = "sys_platform == 'win32'" },
+    { name = "six", marker = "sys_platform == 'win32'" },
+    { name = "tensorboard", marker = "sys_platform == 'win32'" },
+    { name = "tensorflow-estimator", marker = "sys_platform == 'win32'" },
+    { name = "tensorflow-io-gcs-filesystem", version = "0.31.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'win32'" },
+    { name = "termcolor", marker = "sys_platform == 'win32'" },
+    { name = "typing-extensions", marker = "sys_platform == 'win32'" },
+    { name = "wrapt", marker = "sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/6e/1bfe367855dd87467564f7bf9fa14f3b17889988e79598bc37bf18f5ffb6/tensorflow_intel-2.14.0-cp311-cp311-win_amd64.whl", hash = "sha256:51f96c729d61ff8e2e340df5b3b4db81a938258f1c9282ab09277896d0c408ae", size = 284178594, upload-time = "2023-09-26T23:43:30.021Z" },
+]
+
+[[package]]
 name = "tensorflow-io-gcs-filesystem"
 version = "0.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2983,29 +3017,28 @@ name = "tensorflow-macos"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "absl-py", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "astunparse", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "flatbuffers", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "gast", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "google-pasta", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "grpcio", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "h5py", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "keras", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "libclang", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "ml-dtypes", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "opt-einsum", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "packaging", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "protobuf", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "setuptools", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "six", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "tensorboard", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "tensorflow-estimator", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "tensorflow-io-gcs-filesystem", version = "0.31.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' and sys_platform == 'win32'" },
+    { name = "absl-py", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "astunparse", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "flatbuffers", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "gast", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "google-pasta", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "grpcio", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "h5py", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "keras", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "libclang", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "ml-dtypes", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "numpy", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "opt-einsum", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "packaging", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "six", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "tensorboard", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "tensorflow-estimator", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
     { name = "tensorflow-io-gcs-filesystem", version = "0.37.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
-    { name = "termcolor", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
-    { name = "wrapt", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "termcolor", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
+    { name = "wrapt", marker = "(python_full_version < '3.12' and sys_platform != 'win32') or sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/4b/ae9037ea22ba94eb2cf267e991384c3444f3e6142fa49923352b4ab73e14/tensorflow_macos-2.14.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:064e98b67d7a89e72c37c90254c0a322a0b8d0ce9b68f23286816210e3ef6685", size = 199710290, upload-time = "2023-09-27T13:38:19.679Z" },
@@ -3055,9 +3088,6 @@ wheels = [
 name = "tqdm"
 version = "4.70.0"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "python_full_version < '3.12' and sys_platform == 'win32'" },
-]
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953", size = 80184, upload-time = "2026-07-27T11:33:13.167Z" },
