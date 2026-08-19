@@ -7,6 +7,33 @@ members = [
     "packages/test_fixtures",
 ]
 
+[tool.uv]
+# tensorflow-io-gcs-filesystem shipped its LAST win_amd64 wheel at 0.31.0
+# (April 2023) and has shipped zero Windows wheels since. tensorflow==2.14.0
+# (pulled in transitively by basic-pitch, this workspace's pin) only
+# requires `tensorflow-io-gcs-filesystem>=0.23.1` with no upper bound, so an
+# unconstrained resolve picks the latest release on every platform -- which
+# has no Windows wheel, and breaks `uv sync` on windows-latest.
+#
+# Scoped to `sys_platform == 'win32'` only: 0.31.0 has no macosx arm64 wheel
+# (only macosx_10_14_x86_64) and older-tagged manylinux wheels, so applying
+# it globally would break the green macOS arm64 `.dmg` job and could affect
+# Linux. This marker keeps Linux/darwin resolution untouched -- verify via
+# `git diff uv.lock` that only the win32 fork of this one package changes.
+#
+# Accepted, user-approved downgrade (not a version pin change to
+# tensorflow/basic-pitch themselves): this package's only functionality is
+# reading/writing TensorFlow data from Google Cloud Storage
+# (`gs://`) URIs. AuraAudio is 100% offline and never performs GCS I/O, so
+# an ~1.5-year-old build of a package whose functionality this app never
+# exercises carries no practical risk here. Revisit if/when
+# tensorflow-io-gcs-filesystem regains Windows wheel support upstream, or if
+# this project ever moves off the tensorflow==2.14.0 pin for an unrelated
+# reason.
+constraint-dependencies = [
+    "tensorflow-io-gcs-filesystem<=0.31.0 ; sys_platform == 'win32'",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
