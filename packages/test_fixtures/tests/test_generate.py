@@ -24,6 +24,36 @@ def test_write_guitar_pluck_wav_is_not_silent(tmp_path: Path):
     assert np.max(np.abs(data)) > 1000
 
 
+def test_write_guitar_pluck_with_silence_wav_has_a_true_silent_gap(tmp_path: Path):
+    import numpy as np
+    from scipy.io import wavfile
+
+    from test_fixtures.generate import write_guitar_pluck_with_silence_wav
+
+    out_path = tmp_path / "silence_gap.wav"
+    write_guitar_pluck_with_silence_wav(
+        out_path, pre_note_count=2, silence_s=4.0, post_note_count=2,
+        note_len=0.5, sample_rate=44100,
+    )
+
+    sr, data = wavfile.read(str(out_path))
+    assert sr == 44100
+    # total duration: 1.0s notes + 4.0s silence + 1.0s notes = 6.0s
+    assert abs(len(data) / sr - 6.0) < 0.01
+
+    # the mid-clip silence region (roughly [1.0, 5.0)s) must be true zero
+    # signal, not merely quiet — pick a safely-interior slice to avoid any
+    # edge/decay-tail ambiguity right at the note/silence boundary.
+    silence_region = data[int(1.5 * sr):int(4.5 * sr)]
+    assert np.max(np.abs(silence_region)) == 0
+
+    # both the pre- and post-silence regions have real signal.
+    pre_region = data[: int(0.4 * sr)]
+    post_region = data[int(5.1 * sr):int(5.9 * sr)]
+    assert np.max(np.abs(pre_region)) > 1000
+    assert np.max(np.abs(post_region)) > 1000
+
+
 def test_write_metronome_pulse_wav_has_correct_duration_and_click_count(tmp_path: Path):
     import numpy as np
     from scipy.io import wavfile
