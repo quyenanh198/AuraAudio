@@ -837,6 +837,20 @@ correct — check it.
   Home screen's existing "Retry" button is today's only mitigation. Worth
   a real look if it recurs in a future session.
 
+## Release
+
+Cutting a release: bump the version in
+`apps/desktop/src-tauri/tauri.conf.json` (`productName`/`identifier`
+already fixed as "AuraAudio" / `com.auraaudio.desktop` — only `version`
+changes per release), commit it on `main`, then push a `vX.Y.Z` tag
+matching that version. `.github/workflows/release.yml` builds the real
+PyInstaller backend, `cargo tauri build`s the Linux `.deb`, and attaches
+it to a GitHub Release for that tag. The same workflow also runs on
+`workflow_dispatch` (no tag) for build-only testing — it uploads the
+`.deb` as a workflow artifact but does not cut a Release in that mode.
+There is currently only a `linux-deb` job; add sibling jobs the same way
+if other targets (Windows `.msi`, macOS `.dmg`) are needed later.
+
 ## Quick start for a fresh session
 
 ```bash
