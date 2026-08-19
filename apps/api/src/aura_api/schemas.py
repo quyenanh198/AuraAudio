@@ -82,3 +82,14 @@ class ProjectListItem(BaseModel):
     duration_ms: int | None
     job: ProjectJobSummary | None
     exports: list[ProjectExportSummary]
+
+
+class DependencyStatus(BaseModel):
+    found: bool
+    version: str | None
+
+
+class SystemDepsResponse(BaseModel):
+    ffmpeg: DependencyStatus
+    ffprobe: DependencyStatus
+    allFound: bool
