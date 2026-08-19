@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -82,10 +83,19 @@ jobs:
       - uses: actions/checkout@v7
 
       # Tauri v2 Linux build prerequisites.
+      #
+      # DEBIAN_FRONTEND=noninteractive avoids any interactive prompts, and
+      # Acquire::Retries + a step-level timeout keep an apt mirror stall
+      # from silently eating the whole job's 30-minute budget (observed in
+      # run 32206874312: the apt step hung for 30 minutes with no fast-fail
+      # until the job timeout cancelled it).
       - name: Install Tauri system dependencies
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --fix-missing \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
