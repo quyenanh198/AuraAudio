@@ -880,8 +880,17 @@ themselves; documenting/bundling it is future work, not done here.
    AppImage tooling). NOTE: `tauri.conf.json` `bundle.targets` is still
    "all" — a LOCAL `cargo tauri build` without `--bundles deb` can hit
    the same AppImage hang; scope it or pass the flag.
-2. **Windows `.msi` + macOS `.dmg` jobs — macOS DONE, Windows genuinely
-   CI-infeasible under current pins (reported, not hacked around).**
+2. **Windows `.msi` + macOS `.dmg` jobs — DONE (macOS shipped; Windows
+   genuinely CI-infeasible under current pins — reported, not hacked
+   around). Reviewed and merged to main.** Final confirming run
+   **32241058793** (head `189f422`): Linux `.deb` 680.9M + macOS `.dmg`
+   456.3M both green, tag-gated `release` correctly skipped on the
+   non-tag ref. Independent code review verified the run and artifact
+   sizes via the GitHub API, the `uv.lock` diff (zero version changes;
+   only basic-pitch's `tf` extra activation), the CORS invariants
+   (`aura_api.main` untouched, `/v1/*` exact-origin only), and
+   `release.yml` internal consistency — verdict: ready to merge, no
+   functional issues.
    `http://tauri.localhost` (the Windows/Android WebView2 production
    origin, per `tauri-2.11.5/src/manager/mod.rs`'s `cfg!(windows)`
    branch) is now in `WEBVIEW_ORIGINS` in `apps/desktop/run_backend.py`,
