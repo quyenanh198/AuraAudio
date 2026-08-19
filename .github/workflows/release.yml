@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-deb:
+    name: linux-deb
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # The pipeline's probe/normalize steps shell out to ffmpeg/ffprobe.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # Tauri v2 Linux build prerequisites (mirrors ci.yml's rust job).
+      #
+      # DEBIAN_FRONTEND=noninteractive avoids any interactive prompts, and
+      # Acquire::Retries + a step-level timeout keep an apt mirror stall
+      # from silently eating the whole job's budget.
+      - name: Install Tauri system dependencies
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --fix-missing \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          # tensorflow==2.14.0 (pulled in by basic-pitch) only ships cp311
+          # wheels; the ubuntu-latest runner's system Python is 3.12.
+          python-version: "3.11"
+
+      - name: Install python dependencies
+        run: uv sync --all-packages --all-extras
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/web/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/desktop/web
+        run: npm ci
+
+      # Heavy step: PyInstaller bundles tensorflow + basic-pitch's model
+      # weights into a --onedir backend (see apps/desktop/build-backend.sh)
+      # and stages it at src-tauri/resources/aura-backend/, which
+      # tauri.conf.json's bundle.resources copies into the final bundle.
+      - name: Build PyInstaller backend bundle
+        timeout-minutes: 25
+        run: bash apps/desktop/build-backend.sh
+
+      - name: npm run build
+        working-directory: apps/desktop/web
+        run: npm run build
+
+      # @tauri-apps/cli is a pinned devDependency of apps/desktop/web
+      # (installed above via npm ci) so this resolves to a prebuilt binary
+      # download instead of a from-source `cargo install tauri-cli` build.
+      - name: cargo tauri build
+        timeout-minutes: 20
+        working-directory: apps/desktop/src-tauri
+        run: ../web/node_modules/.bin/tauri build
+
+      - name: Verify .deb and report size
+        id: deb
+        run: |
+          DEB_PATH=$(find apps/desktop/src-tauri/target/release/bundle/deb -name '*.deb' -print -quit)
+          if [ -z "$DEB_PATH" ]; then
+            echo "::error::No .deb found under target/release/bundle/deb" >&2
+            exit 1
+          fi
+          SIZE_BYTES=$(stat -c%s "$DEB_PATH")
+          SIZE_HUMAN=$(du -h "$DEB_PATH" | cut -f1)
+          echo "path=$DEB_PATH" >> "$GITHUB_OUTPUT"
+          echo "size_human=$SIZE_HUMAN" >> "$GITHUB_OUTPUT"
+          echo "Built $DEB_PATH ($SIZE_HUMAN, $SIZE_BYTES bytes)"
+          {
+            echo "### AuraAudio .deb"
+            echo "- path: \`$DEB_PATH\`"
+            echo "- size: $SIZE_HUMAN ($SIZE_BYTES bytes)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload .deb artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: auraaudio-linux-deb
+          path: apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: warn
+
+      # Only cut a Release when this run was triggered by a version tag.
+      # A plain workflow_dispatch run (no tag) stops after the artifact
+      # upload above, so the workflow is testable without tagging.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.deb.outputs.path }}
+          fail_on_unmatched_files: true
