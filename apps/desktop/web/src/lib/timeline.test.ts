@@ -174,6 +174,27 @@ describe("buildTimeline", () => {
     expect(timeline.map((entry) => entry.step)).toEqual([0, 1, 2, 3, 4]);
   });
 
+  it("contributes no groups for a silent (empty-events) measure between two real measures", () => {
+    // quantize.py's silent-measure fidelity fix now emits a fully-silent
+    // interior measure as {"number": n, "events": []} instead of omitting
+    // it. buildTimeline must add zero onset groups for it — the walked
+    // OSMD cursor step for its whole-measure rest is filtered out
+    // upstream (ScoreView.svelte's walkNonRestStepIndices), so the two
+    // counts must still agree at 2, not 3.
+    const score = scoreWith([
+      [ev({ id: "m1n0", onsetSeconds: 0.0, notatedOnset: "0/1" })],
+      [], // silent measure — contributes nothing
+      [ev({ id: "m3n0", onsetSeconds: 2.0, notatedOnset: "0/1" })],
+    ]);
+
+    const timeline = buildTimeline(score, [0, 1]);
+
+    expect(timeline).toEqual([
+      { t: 0.0, step: 0 },
+      { t: 2.0, step: 1 },
+    ]);
+  });
+
   it("throws when nonRestStepIndices has fewer entries than distinct onsets", () => {
     const score = scoreWith([[ev({ id: "n0" }), ev({ id: "n1", onsetSeconds: 1, notatedOnset: "1/4" })]]);
     expect(() => buildTimeline(score, [0])).toThrow(/mismatch|non-rest cursor step/);

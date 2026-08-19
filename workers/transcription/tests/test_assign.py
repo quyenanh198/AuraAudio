@@ -51,6 +51,22 @@ def test_assign_stage_sets_string_and_fret_for_guitar(db_session, sample_job, wo
     validate_score(result)  # must not raise — v3-shaped output
 
 
+def test_assign_stage_handles_a_silent_measure_without_crashing(db_session, sample_job, workdir):
+    # A score with a zero-event measure (quantize.py's silent-measure
+    # fidelity fix) must pass through the assign stage untouched for that
+    # measure, without the guitar DP crashing on an empty events list.
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    score = _guitar_score()
+    score["parts"][0]["measures"].append({"number": 2, "events": []})
+
+    result = assign.run(ctx, score)
+
+    assert result["parts"][0]["measures"][1]["events"] == []
+    validate_score(result)
+
+
 def test_assign_stage_second_call_resumes_without_recompute(db_session, sample_job, workdir, monkeypatch):
     storage = FakeStorage()
     ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)

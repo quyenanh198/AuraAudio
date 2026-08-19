@@ -148,6 +148,13 @@ def test_assign_measure_handles_chords_as_one_state():
     assert len(chord2_strings) == 2
 
 
+def test_assign_measure_handles_empty_events_safely():
+    # A silent measure (quantize.py's silent-measure fidelity fix emits
+    # {"number": n, "events": []}) must not break the assign stage's guitar
+    # DP — no groups, no steps, empty result, no crash.
+    assert assign_measure([]) == {}
+
+
 def test_assign_measure_skips_wholly_unreachable_chord():
     # A "chord" where every pitch is unreachable contributes no state and
     # must not break the chain between the notes before and after it.

@@ -90,6 +90,13 @@ def test_assign_measure_handles_duplicate_pitch_chord():
     assert len(assignment) == 2
 
 
+def test_assign_measure_handles_empty_events_safely():
+    # A silent measure (quantize.py's silent-measure fidelity fix emits
+    # {"number": n, "events": []}) must not break the assign stage's piano
+    # DP — no groups, no steps, empty result, no crash.
+    assert assign_measure([]) == {}
+
+
 def test_assign_measure_left_never_exceeds_right_within_an_onset_property():
     # Spec Testing bullet 5 (matches ARCHITECTURE.md §9's property-testing
     # target, and sub-project 2's precedent of committing this directly

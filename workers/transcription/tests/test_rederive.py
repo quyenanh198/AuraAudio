@@ -41,7 +41,17 @@ def _score(locked_string: int = 2, locked_fret: int = 2, tempo_bpm: float = 120.
     }
 
 
-def _arrange_project(db_session, *, locked_string: int = 2, locked_fret: int = 2):
+def _score_with_silent_measure(locked_string: int = 2, locked_fret: int = 2) -> dict:
+    """Same as _score, but with a trailing silent measure (2) carrying no
+    events — the shape quantize.py's silent-measure fidelity fix now
+    produces for a mid-clip gap — to make sure rederive's full pipeline
+    (DP reassignment, MIDI write, MusicXML export) tolerates it."""
+    score = _score(locked_string, locked_fret)
+    score["parts"][0]["measures"].append({"number": 2, "events": []})
+    return score
+
+
+def _arrange_project(db_session, *, locked_string: int = 2, locked_fret: int = 2, score_json: dict | None = None):
     """Bootstraps a guitar project with a succeeded transcription job, a head
     ScoreRevision (with one locked + one unlocked event), and the transcription's
     original midi/musicxml Export rows — the state Task 4's rederive job
@@ -63,7 +73,7 @@ def _arrange_project(db_session, *, locked_string: int = 2, locked_fret: int = 2
 
     revision = ScoreRevision(
         project_id=project.id, revision=0,
-        score_json=_score(locked_string, locked_fret),
+        score_json=score_json if score_json is not None else _score(locked_string, locked_fret),
     )
     db_session.add(revision)
     db_session.flush()
@@ -143,6 +153,37 @@ def test_rederive_reassigns_unlocked_updates_revision_and_exports(db_session):
     assert xml_bytes.startswith(b"<?xml")
     midi_bytes = storage.get_bytes(refreshed_midi.object_key)
     assert midi_bytes[:4] == b"MThd"
+
+
+def test_rederive_over_score_with_silent_measure_succeeds(db_session):
+    # A score containing an empty-events measure (silent-measure fidelity)
+    # must rederive cleanly end-to-end: DP reassignment tolerates the empty
+    # measure, MIDI write skips it without error, and MusicXML export
+    # renders it as a whole-bar rest rather than crashing or dropping it.
+    ctx = _arrange_project(db_session, score_json=_score_with_silent_measure())
+    rederive_job = _make_rederive_job(db_session, ctx["project"], ctx["asset"], input_hash="rederive-silent")
+
+    run_rederive_job(rederive_job.id)
+    db_session.expire_all()
+
+    refreshed_job = db_session.get(TranscriptionJob, rederive_job.id)
+    assert refreshed_job.status == "succeeded"
+
+    refreshed_revision = db_session.get(ScoreRevision, ctx["revision"].id)
+    measures = refreshed_revision.score_json["parts"][0]["measures"]
+    assert [m["number"] for m in measures] == [1, 2]
+    assert measures[1]["events"] == []  # silent measure preserved, not dropped
+
+    project_id = ctx["project"].id
+    expected_base = f"projects/{project_id}/exports/rev0"
+    refreshed_xml = db_session.get(Export, ctx["xml_export"].id)
+    assert refreshed_xml.object_key == f"{expected_base}/output.musicxml"
+    assert refreshed_xml.status == "succeeded"
+
+    storage = LocalStorageClient()
+    xml_bytes = storage.get_bytes(refreshed_xml.object_key)
+    assert xml_bytes.startswith(b"<?xml")
+    assert b'number="2"' in xml_bytes  # measure 2 present in the exported file
 
 
 def test_rederive_superseded_job_skips(db_session):
