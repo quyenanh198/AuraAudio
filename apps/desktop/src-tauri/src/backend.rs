@@ -434,18 +434,27 @@ fn kill_hard(child: &mut Child) {
   }
 }
 
+/// File name PyInstaller gives the bundled executable inside
+/// `dist/aura-backend/` (see `apps/desktop/build-backend.sh`'s `--name
+/// aura-backend`). PyInstaller appends `.exe` on Windows and leaves the
+/// name bare on Linux/macOS — this is PyInstaller's own naming, not
+/// anything `build-backend.sh` controls, so the resolver has to match it
+/// per-platform rather than assuming one literal name.
+#[cfg(windows)]
+const BACKEND_EXE_NAME: &str = "aura-backend.exe";
+#[cfg(not(windows))]
+const BACKEND_EXE_NAME: &str = "aura-backend";
+
 /// Resolves the real on-disk path to the bundled `aura-backend` executable.
 ///
 /// `bundle.resources` in tauri.conf.json maps
 /// `resources/aura-backend/` -> `aura-backend/`, so the resolved resource
-/// path is `<resource_dir>/aura-backend/aura-backend` in both dev and
+/// path is `<resource_dir>/aura-backend/<BACKEND_EXE_NAME>` in both dev and
 /// production builds (see the module doc comment for why this resolves
 /// correctly under `tauri dev` too, not only `tauri build`).
 fn resolve_backend_executable(app: &AppHandle) -> Result<PathBuf, String> {
-  if let Ok(resource_path) = app
-    .path()
-    .resolve("aura-backend/aura-backend", BaseDirectory::Resource)
-  {
+  let resource_relative = format!("aura-backend/{BACKEND_EXE_NAME}");
+  if let Ok(resource_path) = app.path().resolve(&resource_relative, BaseDirectory::Resource) {
     if resource_path.exists() {
       return Ok(resource_path);
     }
@@ -453,8 +462,9 @@ fn resolve_backend_executable(app: &AppHandle) -> Result<PathBuf, String> {
 
   // Defensive fallback only — see module doc comment. Reads directly from
   // the staging directory `build-backend.sh` writes to.
-  let dev_path =
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/aura-backend/aura-backend");
+  let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+    "resources/aura-backend/{BACKEND_EXE_NAME}"
+  ));
   if dev_path.exists() {
     return Ok(dev_path);
   }
