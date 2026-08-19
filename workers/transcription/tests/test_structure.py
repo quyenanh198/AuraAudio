@@ -229,5 +229,25 @@ def test_still_detects_3_4_across_tempos(tmp_path):
         assert detected == "3/4", f"expected 3/4 at {tempo} bpm, got {detected}"
 
 
+def test_still_detects_3_4_across_tempos_legacy_fixture(tmp_path):
+    # Same sweep, but on the ORIGINAL write_metronome_pulse_wav fixture
+    # (not generate_metered_clicks) — the family backing
+    # test_structure_detects_three_four_meter. 100 and 110 bpm are
+    # deliberately excluded here, and this is the more serious half of the
+    # bidirectional risk: at those two tempi this legacy 3/4 fixture
+    # misdetects as 6/8 DECISIVELY, not merely via the tie-break (the alias
+    # candidate wins both mean_margin and peak_margin outright, confirmed
+    # by direct measurement: ~3.27x margin ratio in 6/8's favor). See
+    # docs/superpowers/SESSION-HANDOFF.md's meter-expansion caveat and the
+    # tie-break comment in structure._detect_meter.
+    for tempo in (80.0, 90.0, 120.0, 130.0, 140.0):
+        path = tmp_path / f"legacy34_{tempo}.wav"
+        write_metronome_pulse_wav(path, bpm=tempo, meter="3/4", duration_s=8.0)
+        y, sr = librosa.load(str(path), sr=None)
+        _, beat_times = structure._detect_tempo_and_beats(y, sr)
+        detected, _ = structure._detect_meter(y, sr, beat_times)
+        assert detected == "3/4", f"expected 3/4 at {tempo} bpm (legacy fixture), got {detected}"
+
+
 def test_stage_version_bumped():
     assert structure.STAGE_VERSION == 2

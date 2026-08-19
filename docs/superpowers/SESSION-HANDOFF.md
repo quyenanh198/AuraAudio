@@ -1064,22 +1064,20 @@ it is future work, not done here.
 ### Meter expansion (roadmap item 3, in progress — this stub will be expanded by that sub-project's final task)
 
 Structure-stage auto-detection now scores `score_schema.meters.DETECTABLE_METERS`
-(4/4, 3/4, 6/8, 2/4) instead of just {4/4, 3/4}. 4/4, 3/4, and 2/4 detect
-reliably across a range of tempi. **6/8 detection is best-effort, not
-reliable**: 6/8 vs. 3/4 is a subharmonic-alias case (a 3/4 clip's period-3
-accent pattern aliases perfectly into the period-6 comb 6/8 needs), and the
-two scoring signals `_detect_meter` blends genuinely disagree on it at most
-tempi — ties are resolved conservatively in favor of 3/4 rather than risking
-a tie-break that would misclassify real 3/4 material as 6/8 (verified: a
-magnitude-based tie-break flips the pre-existing 3/4 regression fixture to
-6/8, because the alias case's own margin ratio is not reliably smaller than
-a genuine 6/8 clip's). In practice this means a 6/8 clip may well come back
-tagged 3/4 unless its tempo happens to fall in the narrow validated set (see
-`test_detects_6_8_across_validated_tempos` in
-`workers/transcription/tests/test_structure.py`). Until this is hardened
-further, users should treat detected 6/8 as a hint and correct the meter via
-the inspector's `set_part_fact` edit when it's wrong — the same path already
-used to correct any other detected meter.
+(4/4, 3/4, 6/8, 2/4) instead of just {4/4, 3/4}. 4/4 and 2/4 detect reliably
+across a range of tempi. **6/8 vs. 3/4 miscategorization is bidirectional, not
+one-way**: it's a subharmonic-alias case (a 3/4 clip's period-3 accent pattern
+aliases into the period-6 comb 6/8 needs) that the two scoring signals
+`_detect_meter` blends genuinely disagree on at most tempi. A genuine 6/8 clip
+may come back tagged 3/4 outside the narrow validated tempo set (see
+`test_detects_6_8_across_validated_tempos`); separately, a genuine 3/4 clip at
+certain tempos (measured: bpm 100/110 on the legacy `write_metronome_pulse_wav`
+fixture) can come back tagged 6/8 *decisively*, not just via the conservative
+tie-break — the alias margins outright win both scoring signals there. Either
+direction silently misdirects downstream score structure (measure grouping,
+beaming). Until this is hardened further, treat detected 6/8 or 3/4 as a hint
+and correct via the inspector's `set_part_fact` meter picker when wrong — the
+same path already used for any other detected meter.
 
 ## Quick start for a fresh session
 

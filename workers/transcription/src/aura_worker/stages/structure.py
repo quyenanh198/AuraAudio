@@ -133,7 +133,11 @@ def _detect_meter(y, sr, beat_times: np.ndarray) -> tuple[str, float]:
     # which conservatively prefers the simpler/shorter meter whenever the
     # two margins disagree — see test_detects_6_8_across_validated_tempos
     # for the resulting (real, not universal) set of tempi at which a
-    # genuinely 6/8 clip wins outright rather than tying.
+    # genuinely 6/8 clip wins outright rather than tying. This tie-break
+    # only governs the TIED case: at some real tempos the alias margins win
+    # BOTH signals outright (no tie to break), so a genuine 3/4 clip can
+    # still come back decisively misclassified as 6/8 — see
+    # test_still_detects_3_4_across_tempos's excluded 100 bpm point.
     best_meter = min(DETECTABLE_METERS, key=lambda m: (combined_rank[m], DETECTABLE_METERS.index(m)))
 
     total_margin = sum(max(m, 0.0) for m in mean_margins.values())
