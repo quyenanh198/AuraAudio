@@ -1058,26 +1058,115 @@ it is future work, not done here.
    for the full two-part story (the `tensorflow-io-gcs-filesystem` wheel
    gap AND the separate `tensorflow-intel` stub gap it uncovered) and run
    **32276566356** for the genuinely-green confirming result.
-3. **Editing v2 / meter expansion** — direction to be chosen by the user
-   (structure ops, multi-select, drag editing, MIDI-in / more meters).
+3. **Editing v2 / meter expansion — DONE (meter expansion half; the rest of
+   "editing v2" — structure ops, multi-select, drag editing, MIDI-in —
+   remains unchosen/future work).** 10 manually-settable meters, 4
+   auto-detected, one source of truth. Full story below.
 
-### Meter expansion (roadmap item 3, in progress — this stub will be expanded by that sub-project's final task)
+### Meter expansion (roadmap item 3 — DONE)
 
-Structure-stage auto-detection now scores `score_schema.meters.DETECTABLE_METERS`
-(4/4, 3/4, 6/8, 2/4) instead of just {4/4, 3/4}. 4/4 and 2/4 detect reliably
-across a range of tempi. **6/8 vs. 3/4 miscategorization is bidirectional, not
-one-way**: it's a subharmonic-alias case (a 3/4 clip's period-3 accent pattern
-aliases into the period-6 comb 6/8 needs) that the two scoring signals
-`_detect_meter` blends genuinely disagree on at most tempi. A genuine 6/8 clip
-may come back tagged 3/4 outside the narrow validated tempo set (see
-`test_detects_6_8_across_validated_tempos`); separately, a genuine 3/4 clip at
-certain tempos (measured: bpm 100/110 on the legacy `write_metronome_pulse_wav`
-fixture) can come back tagged 6/8 *decisively*, not just via the conservative
-tie-break — the alias margins outright win both scoring signals there. Either
-direction silently misdirects downstream score structure (measure grouping,
-beaming). Until this is hardened further, treat detected 6/8 or 3/4 as a hint
-and correct via the inspector's `set_part_fact` meter picker when wrong — the
-same path already used for any other detected meter.
+Spec: `docs/superpowers/specs/2026-08-19-meter-expansion-design.md`. Plan:
+`docs/superpowers/plans/2026-08-19-meter-expansion.md` (7 tasks, all
+committed and reviewed on `claude/multi-ai-skills-caveman-7tx5l0`).
+
+**What shipped.** The pipeline went from two hardcoded meters (4/4, 3/4,
+duplicated across four files) to a single source of truth:
+`score_schema.meters` (new module) owns `SUPPORTED_METERS` — the 10
+meters a user can set manually via edit/validate/export: `2/4, 3/4, 4/4,
+5/4, 2/2, 3/8, 6/8, 7/8, 9/8, 12/8` — and `DETECTABLE_METERS` — the 4 the
+structure stage auto-detects: `4/4, 3/4, 6/8, 2/4` (a subset, asserted by
+a test). It also owns the meter-math helpers (`beats_per_measure`,
+`is_compound`, `notated_beats`) that used to be duplicated or hardcoded
+inline. `validate.py`'s part `meter` enum, `edits.py`'s `set_part_fact`
+guard, and the worker's `structure.py`/`quantize.py` all import from this
+one module now; nothing else defines a meter list. `STAGE_VERSION` bumped
+in both worker stages whose output semantics changed: `structure.py`
+1→2 (new detection candidates), `quantize.py` 3→4 (meter-generic measure
+bucketing replaces a `METER_CANDIDATES`-keyed lookup, which is deleted
+entirely — Fraction-based `beats_per_measure` handles all 10 meters,
+including the non-integral ones like 7/8). MusicXML export needed no code
+change — `_measure_length_ql` was already generic — just round-trip test
+coverage for all 10 meters × guitar/piano. The frontend
+(`apps/desktop/web/src/lib/noteEdit.ts`) mirrors `SUPPORTED_METERS` as
+`METER_OPTIONS`, pinned by a Vitest test on both sides so a drift on
+either side fails that side's suite — the repo's established
+mirror-constant pattern (same as the existing noteEdit ↔ edits.py
+mirror). `Sidebar.svelte`'s meter `<select>` now offers all 10; no new
+UI, no API shape change, no schema version bump (the widened enum still
+accepts old 4/4-or-3/4 scores unchanged).
+
+**6/8 detection: honest and narrow, not general.** Distinguishing 6/8
+from 3/4 by beat-accent scoring is a subharmonic-alias problem — a
+genuine 3/4 clip's period-3 accent pattern aliases into the period-6 comb
+6/8's detector needs, so the two scoring signals `_detect_meter` blends
+(peak margin, mean margin) can genuinely disagree with each other on most
+tempi, not just with the ground truth. After a fix-round adjudication
+that tried several alternative discriminators (tie-break by mean_margin
+magnitude, a modified peak_margin, ratio thresholds, scaled compound
+margins) and found none of them separate "real 6/8" from "3/4 aliased
+into 6/8" without breaking the other case, the shipped detector keeps the
+simple `DETECTABLE_METERS`-declared-order tie-break (4/4 first) rather
+than pretending a cleverer rule generalizes, and the test suite asserts
+only what was actually measured: a tempo sweep over `range(40, 141, 2)`
+bpm found just **{50, 62, 100, 124} bpm** win 6/8 decisively (not by
+tie-break) — a narrow, non-contiguous, but real and reproducible set
+(`test_detects_6_8_across_validated_tempos`). 4/4 and 2/4 detect reliably
+across a wide tempo range; 6/8 does not, and that's documented rather
+than glossed over.
+
+**The bidirectional-risk caveat (unchanged from the fix-round that wrote
+it — preserved here verbatim):** 6/8 vs. 3/4 miscategorization is
+bidirectional, not one-way: it's a subharmonic-alias case (a 3/4 clip's
+period-3 accent pattern aliases into the period-6 comb 6/8 needs) that
+the two scoring signals `_detect_meter` blends genuinely disagree on at
+most tempi. A genuine 6/8 clip may come back tagged 3/4 outside the
+narrow validated tempo set (see `test_detects_6_8_across_validated_tempos`);
+separately, a genuine 3/4 clip at certain tempos (measured: bpm 100/110
+on the legacy `write_metronome_pulse_wav` fixture) can come back tagged
+6/8 *decisively*, not just via the conservative tie-break — the alias
+margins outright win both scoring signals there. Either direction
+silently misdirects downstream score structure (measure grouping,
+beaming). Until this is hardened further, treat detected 6/8 or 3/4 as a
+hint and correct via the inspector's `set_part_fact` meter picker when
+wrong — the same path already used for any other detected meter.
+
+**Verification (Task 7, full workspace sweep).** All five Python suites
+green: `score_schema` 173, `test_fixtures` 16, `musicxml` 47, `aura-worker`
+91, `aura-api` (`apps/api/tests` + `apps/desktop/tests`, run as two
+separate invocations per this repo's own `Makefile` — see gotcha below)
+48 + 10; frontend Vitest 141. The repo's `test_e2e_pipeline.py` (full
+upload→transcribe→structure→quantize→assign→export pipeline, which calls
+`assign.py`'s real `validate_score()` — the same widened
+`SUPPORTED_METERS` enum) passed both its idempotency and piano-grand-staff
+cases, confirming a full pipeline run produces a valid score under the
+widened enum. Two deferred minors from earlier task reviews were cleaned
+up as sanctioned small fixes: the musicxml guitar export test now asserts
+the full `TimeSignature` set (mirroring the piano test) instead of only
+`ts[0]`; and `test_fixtures.generate.generate_metered_clicks`'s compound
+secondary-accent index generalized from `grid_size // 2` (which landed
+mid-group for 9/8, index 4) to every dotted-quarter group start
+(`range(3, grid_size, 3)` — 3 for 6/8, {3, 6} for 9/8, {3, 6, 9} for
+12/8), with 6/8's behavior kept byte-identical.
+
+**Gotcha found during verification, NOT meter-expansion fallout:**
+running `apps/api/tests` and `apps/desktop/tests` in a single combined
+`pytest` invocation (as the plan's Task 7 Step 1 literally suggests)
+produces ~20-29 spurious failures/errors from cross-file test pollution —
+`apps/desktop/tests/test_cors_scope.py` sets `AURA_DATA_DIR` /
+`DATABASE_URL` unconditionally at *module import time* (by design, see
+its own docstring — a deliberate anti-`setdefault` choice, not a bug in
+isolation), and when both test directories are collected into the same
+pytest session this clobbers `apps/api/tests/conftest.py`'s own env
+setup for tests collected afterward. Reproduced on a clean pre-meter-
+expansion checkout (commit `c88f193`, before any of this sub-project's
+work) via a throwaway `git worktree` — confirms this is pre-existing and
+unrelated to the meter work. This repo's own `Makefile` already runs
+these two directories as two separate `pytest` invocations (never
+combined), which is what this verification pass used, and both pass
+cleanly that way (48 and 10 respectively). Left unfixed as out of scope
+for this sub-project; worth a small follow-up (e.g. an `autouse` fixture
+resetting the env vars, or simply keeping the two suites permanently
+separate in any future combined-sweep tooling).
 
 ## Quick start for a fresh session
 
