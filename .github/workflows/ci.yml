@@ -25,7 +25,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install python dependencies
-        run: uv sync --all-packages
+        run: uv sync --all-packages --all-extras
 
       # Mirrors the Makefile's `test` target exactly, suite by suite.
       - name: score_schema tests
@@ -138,7 +138,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install python dependencies
-        run: uv sync --all-packages
+        run: uv sync --all-packages --all-extras
 
       - uses: actions/setup-node@v7
         with:
