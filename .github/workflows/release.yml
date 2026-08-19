@@ -133,6 +133,25 @@ jobs:
       - name: Install python dependencies
         run: uv sync --all-packages --all-extras
 
+      # Guards against a real, previously-shipped silent failure: a
+      # platform can have `tensorflow==2.14.0` fully "installed" per uv/pip
+      # while carrying zero working inference backend (the Windows stub
+      # wheel case -- see workers/transcription/pyproject.toml's
+      # tensorflow-intel comment for the full story). basic-pitch itself
+      # only WARNS and continues when no backend is importable, so a build
+      # can go fully green with a transcription feature that is dead at
+      # runtime unless something here actively fails on that warning path.
+      # This must run on every platform, not just Windows, so a future
+      # regression on Linux/macOS is caught the same way.
+      - name: Smoke-test ML inference backend
+        shell: bash
+        run: |
+          uv run --package aura-worker python -c "
+          import tensorflow as tf
+          import basic_pitch.inference
+          print('tf', tf.__version__)
+          "
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -277,6 +296,20 @@ jobs:
         timeout-minutes: 20
         run: uv sync --all-packages --all-extras
 
+      # See the `build` job's identical step for why this exists: a
+      # platform can have `tensorflow==2.14.0` "installed" with zero
+      # working inference backend, and basic-pitch only warns (doesn't
+      # fail) when that happens. Runs here too so a macOS-specific
+      # regression of this class is caught the same way.
+      - name: Smoke-test ML inference backend
+        shell: bash
+        run: |
+          uv run --package aura-worker python -c "
+          import tensorflow as tf
+          import basic_pitch.inference
+          print('tf', tf.__version__)
+          "
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -392,9 +425,46 @@ jobs:
       # PyPI wheel-listing evidence. Revisit if/when this package regains
       # Windows wheel support upstream, or if this project ever moves off
       # the tensorflow==2.14.0 pin for an unrelated reason.
+      #
+      # SECOND, separate Windows-only gap, found only after the first fix
+      # above produced a job that was GREEN but silently non-functional:
+      # PyPI's `tensorflow==2.14.0` wheel for `win_amd64` is a metadata-only
+      # STUB with zero Python code -- its real implementation is a
+      # differently-named package, `tensorflow-intel`, pulled in via a
+      # marker in the STUB's own METADATA (`Requires-Dist: tensorflow-intel
+      # (==2.14.0) ; platform_system == "Windows"`). uv's resolver does not
+      # expand that marker transitively through basic-pitch's `tf` extra
+      # (which only names bare `tensorflow`/`tensorflow-macos`), so without
+      # an explicit entry `tensorflow-intel` never lands in `uv.lock` at
+      # all. `uv sync` and PyInstaller both completed successfully with the
+      # stub in place -- the only symptom was a buried
+      # `WARNING:root:Tensorflow is not installed` line in the PyInstaller
+      # analysis log, easy to miss, which is exactly what happened in this
+      # job's own history: a fully green run shipped a `.msi` with no
+      # working ML inference backend at all. Fixed by adding
+      # `tensorflow-intel==2.14.0 ; sys_platform == 'win32'` as an explicit
+      # dependency in `workers/transcription/pyproject.toml` (see that
+      # file's comment for the full evidence); the "Smoke-test ML inference
+      # backend" step below now actively fails the build if this ever
+      # regresses, rather than relying on someone reading warnings in a
+      # multi-thousand-line log.
       - name: Install python dependencies
         timeout-minutes: 20
         run: uv sync --all-packages --all-extras
+
+      # See the `build` job's identical step for the general rationale.
+      # This is the platform where the gap this step exists to catch was
+      # actually found (see the long comment on "Install python
+      # dependencies" above) -- this step is what makes that class of bug
+      # impossible to ship silently again.
+      - name: Smoke-test ML inference backend
+        shell: bash
+        run: |
+          uv run --package aura-worker python -c "
+          import tensorflow as tf
+          import basic_pitch.inference
+          print('tf', tf.__version__)
+          "
 
       - uses: actions/setup-node@v7
         with:
