@@ -653,9 +653,21 @@ the quantization grid — see `_insert_notated_events`'s own docstring and
 `test_score_json_to_musicxml_clamps_intra_measure_overlap` /
 `test_score_json_to_musicxml_clamps_bar_crossing_duration` tests.
 
-One genuinely remaining fidelity limit, pre-existing and NOT touched by
-this fix (it lives in `quantize.py`, not `export.py`, and is out of this
-fix wave's scope): `quantize.py`'s `measures` dict only ever gets an entry
+**RESOLVED (silent-measure fidelity fix, 2026-08-19)**: the limit
+described in this paragraph (kept below for history) is fixed.
+`quantize.py` now emits an explicit empty-events entry for every measure
+number in `[1, max(occupied measure number)]` (`STAGE_VERSION` bumped for
+cache invalidation), `_insert_notated_events` in `export.py` already
+rendered a zero-event measure as one whole-measure rest per staff (pinned
+with new tests, no code change needed there), and `_rebucket` in
+`score_schema/edits.py` got the matching fix so a meter change no longer
+drops a measure that has gone silent (e.g. via `delete_note` removing its
+only event). See `packages/musicxml/tests/test_export.py`,
+`workers/transcription/tests/test_quantize.py`, and
+`packages/score_schema/tests/test_edits.py` for the pinning/regression
+tests. Original description, for context:
+
+`quantize.py`'s `measures` dict only ever gets an entry
 for a measure number that has at least one note event in it — a measure
 spanning pure silence (an inter-phrase rest with no onsets at all) never
 appears in the score JSON's `measures` array, not even as an empty-events
@@ -681,7 +693,8 @@ main. The next piece of work has no spec yet — start with
 follow-ups are recorded in the sub-project sections above: an
 an automated
 Playwright edit-journey regression test, silent-measure fidelity in
-quantize, and re-transcription head-pointer invalidation).
+quantize (RESOLVED 2026-08-19, see above), and re-transcription
+head-pointer invalidation).
 
 ## Working process (established this session, keep using it)
 
