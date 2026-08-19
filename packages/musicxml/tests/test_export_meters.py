@@ -91,10 +91,10 @@ def test_time_signature_round_trips_guitar(meter, guitar_score_builder, tmp_path
     parsed = converter.parse(str(out_path))
     numerator, denominator = (int(part) for part in meter.split("/"))
 
-    time_signatures = parsed.recurse().getElementsByClass("TimeSignature")
-    assert len(time_signatures) >= 1
-    ts = time_signatures[0]
-    assert (ts.numerator, ts.denominator) == (numerator, denominator)
+    signatures = {
+        (ts.numerator, ts.denominator) for ts in parsed.recurse().getElementsByClass("TimeSignature")
+    }
+    assert signatures == {(numerator, denominator)}
 
     measures = parsed.recurse().getElementsByClass("Measure")
     assert len(measures) >= 1
