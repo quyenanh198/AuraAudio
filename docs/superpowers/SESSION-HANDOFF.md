@@ -839,6 +839,25 @@ correct — check it.
 
 ## Release
 
+**v1.0.0 IS LIVE** (published 2026-08-19T22:35Z, run 32308624180 on
+main@4ee7a25): https://github.com/quyenanh198/AuraAudio/releases/tag/v1.0.0
+with three assets — `AuraAudio_1.0.0_amd64.deb` (716,942,612 B),
+`AuraAudio_1.0.0_aarch64.dmg` (482,575,130 B),
+`AuraAudio_1.0.0_x64_en-US.msi` (439,629,661 B). Attempt 1 (run
+32303852041) lost only the Linux job to the recurring apt/ffmpeg mirror
+flake; attempt 2 went green end-to-end. App version bumped 0.1.0→1.0.0
+in `tauri.conf.json` + `src-tauri/Cargo.toml`/`Cargo.lock` (dc01a7e),
+and scaffold Cargo metadata ("A Tauri App"/"you") replaced since it
+lands in installer package metadata.
+
+**Tag-push gotcha:** this session's git credentials can push branches
+but NOT tag refs (stable HTTP 403 on `refs/tags/*`). The workflow
+therefore accepts a `release_tag` input on `workflow_dispatch` (4ee7a25):
+when set (e.g. `v1.0.0`), the tag-gated `release` job runs and
+`softprops/action-gh-release` creates the tag at the run's commit if it
+doesn't exist. Tag-push triggering still works for humans with normal
+credentials.
+
 Cutting a release: bump the version in
 `apps/desktop/src-tauri/tauri.conf.json` (`productName`/`identifier`
 already fixed as "AuraAudio" / `com.auraaudio.desktop` — only `version`
