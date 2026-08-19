@@ -92,10 +92,9 @@ AURA_BACKEND_PORT = 8317
 # actually run from, never `["*"]`.
 #
 # Origins in `WEBVIEW_ORIGINS`, each independently verified:
-#   - "tauri://localhost" — the PRODUCTION origin on Linux/WebKitGTK (this
-#     app's only shipping target platform per `tauri.conf.json`'s
-#     `bundle.android`/no iOS/macOS config and this task's own dev
-#     environment). Confirmed by reading the installed tauri crate source
+#   - "tauri://localhost" — the PRODUCTION origin on Linux/WebKitGTK and
+#     macOS/WKWebView (the platforms this app ships on: Linux .deb and
+#     macOS .dmg). Confirmed by reading the installed tauri crate source
 #     directly (not assumed): `tauri-2.11.5/src/manager/mod.rs:339-346`,
 #     `Manager::tauri_protocol_url` — `if cfg!(windows) ||
 #     cfg!(target_os = "android") { http(s)://tauri.localhost } else {

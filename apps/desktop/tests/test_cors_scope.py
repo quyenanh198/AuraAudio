@@ -41,7 +41,7 @@ from starlette.testclient import TestClient  # noqa: E402
 
 CROSS_ORIGIN = "http://example.com"
 
-# Task 4: exact-origin CORS allowlist for `/v1/*`. These three origins mirror
+# Task 4: exact-origin CORS allowlist for `/v1/*`. These origins mirror
 # `run_backend.WEBVIEW_ORIGINS` — see that module's inline comment for how
 # each one was verified (tauri crate source for the production origin,
 # a live `cargo tauri dev` trace for the dev origin).
