@@ -844,26 +844,26 @@ Cutting a release: bump the version in
 already fixed as "AuraAudio" / `com.auraaudio.desktop` — only `version`
 changes per release), commit it on `main`, then push a `vX.Y.Z` tag
 matching that version. `.github/workflows/release.yml` builds the real
-PyInstaller backend, `cargo tauri build`s both the Linux `.deb` and the
-macOS `.dmg`, and attaches both to a GitHub Release for that tag. The
-same workflow also runs on `workflow_dispatch` (no tag) for build-only
-testing — it uploads both as workflow artifacts but does not cut a
-Release in that mode. **There is no Windows `.msi` job** — verified
-CI-infeasible under this project's current pins, not merely unattempted;
-see item 2 below and the long comment in `release.yml` (where the
-`windows-msi` job used to be) for the full evidence.
+PyInstaller backend, `cargo tauri build`s the Linux `.deb`, macOS `.dmg`,
+and Windows `.msi`, and attaches all three to a GitHub Release for that
+tag. The same workflow also runs on `workflow_dispatch` (no tag) for
+build-only testing — it uploads all three as workflow artifacts but does
+not cut a Release in that mode. **The Windows `.msi` job is back** — see
+item 2 below for the win32-scoped dependency fix that unblocked it.
 
-**Runtime note, both new platforms (not a regression from this work,
-pre-existing on Linux too):** neither the macOS `.dmg` nor a
-hypothetical Windows `.msi` bundles `ffmpeg` — the backend
+**Runtime note, all three platforms (not a regression from this work,
+pre-existing on Linux too):** none of the `.deb`, `.dmg`, or `.msi`
+bundles `ffmpeg` — the backend
 (`aura_worker/stages/probe.py`/`normalize.py`/`ffmpeg_utils.py`) shells
 out to a system `ffmpeg`/`ffprobe` binary at transcription-request time,
 and PyInstaller's `--onedir` bundle never collects it (only
 `--collect-data basic_pitch` is passed). The Linux `.deb`'s own metadata
 declares no dependency on ffmpeg either (`tauri.conf.json` sets no
 `bundle.linux.deb.depends`), so this isn't a new gap introduced here —
-just now also true for macOS. Users on any platform need ffmpeg on PATH
-themselves; documenting/bundling it is future work, not done here.
+just now also true for macOS and Windows. Users on any platform need
+ffmpeg on PATH themselves (on Windows, that means a real ffmpeg.exe on
+`PATH`, e.g. via winget/choco or a manual download); documenting/bundling
+it is future work, not done here.
 
 **Current ship-readiness roadmap** (user-approved order, in progress):
 1. **Branding + release workflow — DONE.** Real app icon (amber
@@ -880,25 +880,69 @@ themselves; documenting/bundling it is future work, not done here.
    AppImage tooling). NOTE: `tauri.conf.json` `bundle.targets` is still
    "all" — a LOCAL `cargo tauri build` without `--bundles deb` can hit
    the same AppImage hang; scope it or pass the flag.
-2. **Windows `.msi` + macOS `.dmg` jobs — DONE (macOS shipped; Windows
-   genuinely CI-infeasible under current pins — reported, not hacked
-   around). Reviewed and merged to main.** Final confirming run
-   **32241058793** (head `189f422`): Linux `.deb` 680.9M + macOS `.dmg`
-   456.3M both green, tag-gated `release` correctly skipped on the
-   non-tag ref. Independent code review verified the run and artifact
-   sizes via the GitHub API, the `uv.lock` diff (zero version changes;
-   only basic-pitch's `tf` extra activation), the CORS invariants
-   (`aura_api.main` untouched, `/v1/*` exact-origin only), and
-   `release.yml` internal consistency — verdict: ready to merge, no
-   functional issues.
+2. **Windows `.msi` + macOS `.dmg` jobs — DONE, all three platforms
+   green.** Windows was previously reported CI-infeasible (see below for
+   the original blocker); it's now fixed via a deliberate, user-approved
+   win32-scoped dependency pin. Final confirming run **32273747500** (head
+   `c6bb60a`): Linux `.deb` 684M (716,960,744 bytes) + macOS `.dmg` 464M
+   (482,581,698 bytes) + Windows `.msi` 160M (167,308,116 bytes) all
+   green, tag-gated `release` correctly skipped on the non-tag ref. A
+   prior dispatch on the same commit, run **32269927423**, had already
+   proven `windows-msi` green on its first attempt (identical 167,308,116
+   byte `.msi`, byte-for-byte reproducible across both runs) while `build`
+   (Linux) hit a transient `apt-get install ffmpeg` mirror stall unrelated
+   to this change (the same known flaky-mirror class already handled by
+   that step's own retry/timeout logic elsewhere in this doc) — re-dispatching
+   produced the fully green confirming run above without further code
+   changes.
+
+   **Windows (`windows-msi`, windows-latest): DONE, real green run, fixed
+   via a user-approved win32-scoped constraint.** The original blocker
+   (below) — `uv sync` failing to resolve a Windows wheel for
+   `tensorflow-io-gcs-filesystem` — is fixed by adding
+   `tool.uv.constraint-dependencies = ["tensorflow-io-gcs-filesystem<=0.31.0 ;
+   sys_platform == 'win32'"]` to the workspace root `pyproject.toml`. This
+   pins the resolution back to the last version that shipped a `win_amd64`
+   wheel (0.31.0, Apr 2023), scoped ONLY to `sys_platform == 'win32'` via a
+   PEP 508 marker — `git diff uv.lock` confirms the win32 resolution forks
+   to 0.31.0 while every other platform (Linux, macOS/darwin) stays on
+   0.37.1, byte-identical to before. This is a real, deliberate, ~1.5-year
+   downgrade of an ML-adjacent transitive dependency — accepted because
+   AuraAudio is 100% offline and never performs the Google Cloud Storage
+   I/O this package exists to provide; there is no runtime behavior
+   difference for this app between 0.31.0 and 0.37.1. Verified before
+   pushing: `uv sync --all-packages --all-extras` and the full
+   `apps/desktop` (10/10) and `workers/transcription` (69/69) test suites
+   all pass unchanged on Linux.
+
+   The `.msi`'s size (160M) is notably smaller than the `.deb` (684M) and
+   `.dmg` (464M) built from the same commit. Investigated, not just
+   accepted: the job's "Install python dependencies" step logs show
+   `tensorflow==2.14.0` and `tensorflow-io-gcs-filesystem==0.31.0` were
+   genuinely installed (not skipped), and PyInstaller's analysis log shows
+   it actively processing `hook-tensorflow.py` and bundling the real
+   package. WiX's `light.exe` linker ran for ~71s compressing the staged
+   backend into the final `.msi`, consistent with real compression work
+   over a multi-hundred-MB payload, not a trivial/empty bundle. The
+   leading explanation is that PyPI's `win_amd64` wheel for `tensorflow`
+   2.14.0 is itself substantially smaller than its Linux `manylinux`
+   counterpart (Windows builds exclude some of the larger XLA/TensorRT-
+   adjacent binary content Linux wheels ship), compounded by WiX's LZMA
+   cabinet compression. The `.msi` size was also byte-identical
+   (167,308,116 bytes) across two independent runs, which argues against a
+   flaky/partial build. **Flagged here for a future reviewer to double-check
+   by actually installing the `.msi` and running the app** — this session
+   did not have a Windows machine available to smoke-test the installed
+   result end-to-end, only to confirm the CI build succeeds and produces a
+   plausible, reproducible artifact.
+
    `http://tauri.localhost` (the Windows/Android WebView2 production
    origin, per `tauri-2.11.5/src/manager/mod.rs`'s `cfg!(windows)`
    branch) is now in `WEBVIEW_ORIGINS` in `apps/desktop/run_backend.py`,
    with a matching `test_v1_allows_windows_webview_origin` test in
-   `apps/desktop/tests/test_cors_scope.py` — the previously-recorded
-   ruling is closed regardless of whether Windows CI works, since a real
-   future Windows build (developer machine, or CI once the blocker below
-   clears) needs it. `apps/desktop/src-tauri/src/backend.rs`'s
+   `apps/desktop/tests/test_cors_scope.py` — this ruling now matters for
+   real: the Windows CI build below is green and produces an installable
+   `.msi`. `apps/desktop/src-tauri/src/backend.rs`'s
    `resolve_backend_executable` also now resolves `aura-backend.exe` on
    Windows vs `aura-backend` elsewhere (`BACKEND_EXE_NAME`, `cfg(windows)`)
    — a real correctness bug (PyInstaller names the Windows executable
@@ -926,11 +970,10 @@ themselves; documenting/bundling it is future work, not done here.
    in the same run; the tag-gated `release` job correctly skipped on the
    non-tag ref.
 
-   **Windows (`windows-msi`, windows-latest): genuinely CI-infeasible
-   under this project's current pins — reported, not worked around, per
-   this roadmap item's own operating rule.** Real run **32239242311**'s
-   `windows-msi` job failed `uv sync --all-packages --all-extras` in 2
-   seconds, before touching Rust/Tauri/PyInstaller at all:
+   **Windows original blocker, and why it's now fixed:** run
+   **32239242311**'s `windows-msi` job failed `uv sync --all-packages
+   --all-extras` in 2 seconds, before touching Rust/Tauri/PyInstaller at
+   all:
    ```
    error: Distribution `tensorflow-io-gcs-filesystem==0.37.1` can't be
    installed because it doesn't have a source distribution or wheel for
@@ -949,24 +992,29 @@ themselves; documenting/bundling it is future work, not done here.
    since. `tensorflow==2.14.0` itself has a real `win_amd64` cp311 wheel
    (confirmed in `uv.lock`) and only requires
    `tensorflow-io-gcs-filesystem>=0.23.1` (no upper bound), so uv
-   correctly resolves the latest release — which has no Windows wheel.
-   The only way to make this resolve on Windows is forcing
-   `tensorflow-io-gcs-filesystem` back to `<=0.31.0` (uv's own error hint
-   suggests exactly this, via `tool.uv.required-environments`) — a real
-   downgrade of an ML-adjacent transitive dependency, by over a year, to
-   route around a missing wheel. That is exactly the class of hack this
-   roadmap item's own instructions ruled out ("do NOT change pinned ML
-   deps or fake green"), so it was not attempted. The `windows-msi` job
-   definition was removed from `release.yml` after this one confirming
-   run (its full step-by-step definition, for reference, is in git
-   history at commit `1c8c073`) rather than left permanently red, since a
-   failing `needs:` dependency would have permanently blocked the
-   tag-gated `release` job from ever cutting a release. The blocker and
-   evidence are preserved inline as a comment in `release.yml` where the
-   job used to be. **Revisit if/when `tensorflow-io-gcs-filesystem`
-   regains Windows wheel support upstream, or if this project ever moves
-   off the `tensorflow==2.14.0` pin for an unrelated reason — neither
-   decided here.**
+   correctly resolved the latest release — which has no Windows wheel.
+
+   At the time (this same session, earlier), forcing
+   `tensorflow-io-gcs-filesystem` back to `<=0.31.0` globally was correctly
+   identified as a real downgrade of an ML-adjacent transitive dependency
+   by over a year, and NOT attempted — global was the wrong scope, since
+   0.31.0 lacks a macosx arm64 wheel and would have broken the (then newly
+   green) `macos-dmg` job. The `windows-msi` job was removed from
+   `release.yml` rather than left permanently red (a failing `needs:`
+   dependency would have permanently blocked the tag-gated `release` job),
+   with the blocker preserved inline as a comment where the job used to be
+   and full step-by-step definition kept in git history at commit
+   `1c8c073`.
+
+   **This is now resolved**, per the explicit user decision recorded at the
+   top of this roadmap item: scope the same downgrade to
+   `sys_platform == 'win32'` only, via a `tool.uv.constraint-dependencies`
+   marker in the workspace root `pyproject.toml`, verified via `git diff
+   uv.lock` to leave every other platform's resolution untouched. The
+   `windows-msi` job was restored from its `1c8c073` definition (comment
+   rewritten to match) and re-added to the tag-gated `release` job's
+   `needs:` list and artifact glob. See the confirming run above
+   (**32273747500**) for the green result.
 3. **Editing v2 / meter expansion** — direction to be chosen by the user
    (structure ops, multi-select, drag editing, MIDI-in / more meters).
 
