@@ -4,6 +4,7 @@
   import { api } from "../lib/api";
   import { editor } from "../lib/editor";
   import {
+    METER_OPTIONS,
     NOTE_NAME_OPTIONS,
     clampPitch,
     findEvent,
@@ -205,13 +206,6 @@
   }
 
   // --- Editable facts -------------------------------------------------------
-
-  // The score_schema backend whitelist (packages/score_schema/src/
-  // score_schema/edits.py::_ALLOWED_METERS) only accepts "4/4" and "3/4" —
-  // deliberately narrower than an earlier draft of this UI that also
-  // offered "6/8" (that value would 422 on every attempt), so only the two
-  // backend-accepted meters are offered here.
-  const METER_OPTIONS = ["4/4", "3/4"];
 
   const KEY_TONICS = ["A", "A#", "B", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#"];
   const KEY_MODES = ["major", "minor"];

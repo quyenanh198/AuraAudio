@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  METER_OPTIONS,
   clampPitch,
   findEvent,
   firstEventId,
@@ -183,5 +184,32 @@ describe("firstEventId", () => {
   it("returns null for an empty score", () => {
     expect(firstEventId(score([]))).toBeNull();
     expect(firstEventId(null)).toBeNull();
+  });
+});
+
+describe("METER_OPTIONS", () => {
+  it("mirrors score_schema.meters.SUPPORTED_METERS exactly", () => {
+    expect(METER_OPTIONS).toEqual([
+      "2/4", "3/4", "4/4", "5/4", "2/2", "3/8", "6/8", "7/8", "9/8", "12/8",
+    ]);
+  });
+});
+
+describe("stepOnset with 6/8 and 7/8", () => {
+  it("wraps within a 6/8 measure boundary (measureLength 3/4 = 12/16)", () => {
+    // 6/8 measure = 6/8 = 3/4 whole notes; last valid onset is 11/16
+    const atMax = stepOnset("11/16", 1, "6/8");
+    expect(atMax).toBe("11/16"); // clamps at max
+  });
+
+  it("clamps at 7/8 measure end (measureLength 7/8 = 14/16, max onset 13/16)", () => {
+    // 7/8 measure = 7/8 whole notes; last valid onset is 13/16
+    const atMax = stepOnset("13/16", 1, "7/8");
+    expect(atMax).toBe("13/16"); // clamps at max
+  });
+
+  it("clamps at 0 for 6/8 when stepping back from start", () => {
+    const stepped = stepOnset("0/1", -1, "6/8");
+    expect(stepped).toBe("0/1");
   });
 });

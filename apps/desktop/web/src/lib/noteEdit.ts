@@ -15,6 +15,14 @@ import type { ScoreEvent, ScoreJson } from "./types";
  * grid step is a 16th = '1/16'" exactly. */
 export const GRID_STEP = "1/16";
 
+/**
+ * Mirror of score_schema/meters.py::SUPPORTED_METERS — same values, same
+ * order. Both sides pin this list with tests; change them together.
+ */
+export const METER_OPTIONS = [
+  "2/4", "3/4", "4/4", "5/4", "2/2", "3/8", "6/8", "7/8", "9/8", "12/8",
+] as const;
+
 interface Fraction {
   n: number;
   d: number;
