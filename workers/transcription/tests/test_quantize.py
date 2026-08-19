@@ -1,3 +1,6 @@
+import pytest
+
+from score_schema.meters import SUPPORTED_METERS, beats_per_measure
 from score_schema.models import NoteEvent
 from score_schema.validate import validate_score
 
@@ -22,6 +25,28 @@ def _structure_120_four_four() -> StructureResult:
         tempo_bpm=120.0, meter="4/4", key="C major",
         tempo_confidence=0.9, meter_confidence=0.8, key_confidence=0.7,
     )
+
+
+@pytest.fixture
+def quantize_harness(db_session, sample_job, workdir):
+    """Runs quantize.run() for a given meter/tempo with notes placed at the
+    given onset times (seconds); mirrors the ctx/storage wiring the
+    hand-written tests above already use."""
+
+    def _run(meter: str, tempo_bpm: float, notes_at_seconds: list[float]) -> dict:
+        structure = StructureResult(
+            tempo_bpm=tempo_bpm, meter=meter, key="C major",
+            tempo_confidence=0.9, meter_confidence=0.8, key_confidence=0.7,
+        )
+        notes = [
+            NoteEvent(pitch=60, onset_s=onset_s, offset_s=onset_s + 0.1, velocity=80, confidence=0.7)
+            for onset_s in notes_at_seconds
+        ]
+        storage = FakeStorage()
+        ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+        return quantize.run(ctx, notes, structure)
+
+    return _run
 
 
 def test_quantize_snaps_notes_to_sixteenth_grid_and_produces_valid_v4_score(db_session, sample_job, workdir):
@@ -165,3 +190,29 @@ def test_quantize_emits_empty_measures_for_interior_gap(db_session, sample_job, 
     assert measures[1]["events"] == []
     assert measures[2]["events"] == []
     assert len(measures[3]["events"]) == 1
+
+
+@pytest.mark.parametrize("meter", SUPPORTED_METERS)
+def test_bucketing_matches_meter_length(meter, quantize_harness):
+    # one note exactly at the start of what must be measure 2
+    bpm = beats_per_measure(meter)
+    onset_s = float(bpm) * 0.5  # tempo 120 -> quarter = 0.5s -> measure = bpm*0.5 s
+    result = quantize_harness(meter=meter, tempo_bpm=120.0, notes_at_seconds=[onset_s])
+    part = result["parts"][0]
+    numbers = [m["number"] for m in part["measures"] if m["events"]]
+    assert numbers == [2]
+    event = next(m for m in part["measures"] if m["events"])["events"][0]
+    assert event["notatedOnset"] == "0/1"
+
+
+def test_silent_measures_emitted_for_6_8(quantize_harness):
+    # note in measure 3 -> measures 1..3 all present, 1-2 empty
+    onset_s = float(beats_per_measure("6/8")) * 0.5 * 2
+    result = quantize_harness(meter="6/8", tempo_bpm=120.0, notes_at_seconds=[onset_s])
+    part = result["parts"][0]
+    assert [m["number"] for m in part["measures"]] == [1, 2, 3]
+    assert part["measures"][0]["events"] == [] and part["measures"][1]["events"] == []
+
+
+def test_stage_version_bumped():
+    assert quantize.STAGE_VERSION == 4

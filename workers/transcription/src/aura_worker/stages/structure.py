@@ -16,11 +16,6 @@ STAGE_VERSION = 2
 ACCENT_HALF_WINDOW_S = 0.05
 SECONDARY_ACCENT_WEIGHT = 0.5
 
-# Deprecation alias: workers/transcription/src/aura_worker/stages/quantize.py
-# still imports this name. Task 4 (quantize meter-generic measure math)
-# removes it; do not add new usages.
-METER_CANDIDATES = {m: int(notated_beats(m)) for m in ("4/4", "3/4")}
-
 
 @dataclass
 class StructureResult:

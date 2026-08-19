@@ -8,11 +8,12 @@ from fractions import Fraction
 from sqlalchemy.orm.attributes import flag_modified
 
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
-from aura_worker.stages.structure import METER_CANDIDATES, StructureResult
+from aura_worker.stages.structure import StructureResult
+from score_schema.meters import beats_per_measure as meter_beats
 from score_schema.models import NoteEvent, build_score
 from score_schema.validate import validate_score
 
-STAGE_VERSION = 3
+STAGE_VERSION = 4
 GRID_BEATS = Fraction(1, 4)  # snap to 16th notes (1/4 of a beat, since a beat = quarter note)
 
 
@@ -33,7 +34,7 @@ def run(ctx: StageContext, notes: list[NoteEvent], structure: StructureResult) -
         return json.loads(ctx.storage.get_bytes(cached.object_key))
 
     seconds_per_beat = 60.0 / structure.tempo_bpm
-    beats_per_measure = METER_CANDIDATES[structure.meter]
+    beats_per_measure = meter_beats(structure.meter)
 
     measures: dict[int, list[dict]] = {}
 
