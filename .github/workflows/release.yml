@@ -6,20 +6,46 @@ on:
       - "v*"
   workflow_dispatch:
 
+# Default to read; the `release` job below elevates to write for itself
+# only, since a plain workflow_dispatch (build-only) run never needs it.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  linux-deb:
-    name: linux-deb
+  build:
+    name: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Sum of this job's own step timeouts (10 apt + 25 PyInstaller + 20
+    # tauri build = 55) already exceeds a tighter job budget once
+    # checkout/uv-sync/npm-ci/verify/upload are added on top, and the
+    # tensorflow-backend + release-profile tauri bundle combo has never
+    # run end-to-end anywhere yet — a cold cache run could plausibly
+    # blow past 55 partway through `cargo tauri build`. 90 minutes gives
+    # real headroom instead of a timeout that's arithmetically too tight
+    # before the job has even started.
+    timeout-minutes: 90
+    outputs:
+      deb_path: ${{ steps.deb.outputs.path }}
     steps:
       - uses: actions/checkout@v7
+
+      # Diagnostic only, not a fix: ubuntu-latest's disk is finite and
+      # this job stacks rust release artifacts + webkit2gtk-dev +
+      # tensorflow + the PyInstaller bundle + the tauri bundle on top of
+      # it. Reclaim space known-safe to remove (pre-installed Android
+      # SDK / GHC toolchains this workflow never touches) before the
+      # heavy steps, and log free space before/after the heaviest one
+      # (PyInstaller) so a future disk-exhaustion failure is diagnosable
+      # from the log instead of a bare "no space left on device".
+      - name: Reclaim known-unused runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc || true
+          df -h /
 
       # The pipeline's probe/normalize steps shell out to ffmpeg/ffprobe.
       - name: Install ffmpeg
@@ -74,6 +100,9 @@ jobs:
         working-directory: apps/desktop/web
         run: npm ci
 
+      - name: Disk space before PyInstaller build
+        run: df -h /
+
       # Heavy step: PyInstaller bundles tensorflow + basic-pitch's model
       # weights into a --onedir backend (see apps/desktop/build-backend.sh)
       # and stages it at src-tauri/resources/aura-backend/, which
@@ -81,6 +110,9 @@ jobs:
       - name: Build PyInstaller backend bundle
         timeout-minutes: 25
         run: bash apps/desktop/build-backend.sh
+
+      - name: Disk space after PyInstaller build
+        run: df -h /
 
       - name: npm run build
         working-directory: apps/desktop/web
@@ -121,12 +153,27 @@ jobs:
           path: apps/desktop/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: warn
 
-      # Only cut a Release when this run was triggered by a version tag.
-      # A plain workflow_dispatch run (no tag) stops after the artifact
-      # upload above, so the workflow is testable without tagging.
+  # Only cut a Release when this run was triggered by a version tag. A
+  # plain workflow_dispatch run (no tag) stops after `build`'s artifact
+  # upload, so the workflow is testable without tagging — and never
+  # needs `contents: write` to do so.
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: auraaudio-linux-deb
+          path: dist
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.deb.outputs.path }}
+          files: dist/*.deb
           fail_on_unmatched_files: true
