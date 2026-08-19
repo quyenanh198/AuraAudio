@@ -849,7 +849,12 @@ and Windows `.msi`, and attaches all three to a GitHub Release for that
 tag. The same workflow also runs on `workflow_dispatch` (no tag) for
 build-only testing — it uploads all three as workflow artifacts but does
 not cut a Release in that mode. **The Windows `.msi` job is back** — see
-item 2 below for the win32-scoped dependency fix that unblocked it.
+item 2 below for the full two-part fix: a win32-scoped dependency-version
+fix that unblocked `uv sync`, plus a second fix (found in code review,
+after the first produced a green-but-broken build) that adds the real
+`tensorflow-intel` backend package so the app's transcription feature
+actually works on Windows, backed by a smoke-test CI step on all three
+platforms so this class of gap can't ship silently again.
 
 **Runtime note, all three platforms (not a regression from this work,
 pre-existing on Linux too):** none of the `.deb`, `.dmg`, or `.msi`
@@ -881,60 +886,94 @@ it is future work, not done here.
    "all" — a LOCAL `cargo tauri build` without `--bundles deb` can hit
    the same AppImage hang; scope it or pass the flag.
 2. **Windows `.msi` + macOS `.dmg` jobs — DONE, all three platforms
-   green.** Windows was previously reported CI-infeasible (see below for
-   the original blocker); it's now fixed via a deliberate, user-approved
-   win32-scoped dependency pin. Final confirming run **32273747500** (head
-   `c6bb60a`): Linux `.deb` 684M (716,960,744 bytes) + macOS `.dmg` 464M
-   (482,581,698 bytes) + Windows `.msi` 160M (167,308,116 bytes) all
-   green, tag-gated `release` correctly skipped on the non-tag ref. A
-   prior dispatch on the same commit, run **32269927423**, had already
-   proven `windows-msi` green on its first attempt (identical 167,308,116
-   byte `.msi`, byte-for-byte reproducible across both runs) while `build`
-   (Linux) hit a transient `apt-get install ffmpeg` mirror stall unrelated
-   to this change (the same known flaky-mirror class already handled by
-   that step's own retry/timeout logic elsewhere in this doc) — re-dispatching
-   produced the fully green confirming run above without further code
-   changes.
+   genuinely green (including a real ML inference backend on Windows).**
+   Windows was previously reported CI-infeasible (see below for the
+   original blocker). Getting it working took **two** separate fixes, not
+   one — the first produced a run that was green in CI but shipped a
+   `.msi` with a dead transcription feature, caught in code review before
+   merge, not after. Recorded honestly below because the first fix's own
+   write-up in this doc was wrong and needs correcting, not just
+   superseding.
 
-   **Windows (`windows-msi`, windows-latest): DONE, real green run, fixed
-   via a user-approved win32-scoped constraint.** The original blocker
-   (below) — `uv sync` failing to resolve a Windows wheel for
-   `tensorflow-io-gcs-filesystem` — is fixed by adding
+   **Fix round 1 (produced a false green):** `uv sync` was failing to
+   resolve a Windows wheel for `tensorflow-io-gcs-filesystem` (full
+   original-blocker evidence below). Fixed by adding
    `tool.uv.constraint-dependencies = ["tensorflow-io-gcs-filesystem<=0.31.0 ;
-   sys_platform == 'win32'"]` to the workspace root `pyproject.toml`. This
-   pins the resolution back to the last version that shipped a `win_amd64`
-   wheel (0.31.0, Apr 2023), scoped ONLY to `sys_platform == 'win32'` via a
-   PEP 508 marker — `git diff uv.lock` confirms the win32 resolution forks
-   to 0.31.0 while every other platform (Linux, macOS/darwin) stays on
-   0.37.1, byte-identical to before. This is a real, deliberate, ~1.5-year
-   downgrade of an ML-adjacent transitive dependency — accepted because
-   AuraAudio is 100% offline and never performs the Google Cloud Storage
-   I/O this package exists to provide; there is no runtime behavior
-   difference for this app between 0.31.0 and 0.37.1. Verified before
-   pushing: `uv sync --all-packages --all-extras` and the full
-   `apps/desktop` (10/10) and `workers/transcription` (69/69) test suites
-   all pass unchanged on Linux.
+   sys_platform == 'win32'"]` to the workspace root `pyproject.toml`,
+   scoped via a PEP 508 marker so only the win32 resolution changed
+   (`git diff uv.lock` confirmed Linux/darwin byte-identical). This alone
+   made `windows-msi` pass — run **32273747500** produced a `.msi`, all
+   three jobs green, `release` correctly skipped on the non-tag ref. It
+   was reported here as fully DONE, with the resulting `.msi`'s
+   suspiciously small size (160M vs the `.deb`'s 684M and `.dmg`'s 464M)
+   explained as "smaller Windows tensorflow wheel + LZMA compression."
+   **That explanation was wrong**, and the investigation behind it was not
+   thorough enough to have caught it: it looked at whether `tensorflow`
+   was "installed" and whether PyInstaller was "bundling" it, but never
+   actually ran the resulting code path.
 
-   The `.msi`'s size (160M) is notably smaller than the `.deb` (684M) and
-   `.dmg` (464M) built from the same commit. Investigated, not just
-   accepted: the job's "Install python dependencies" step logs show
-   `tensorflow==2.14.0` and `tensorflow-io-gcs-filesystem==0.31.0` were
-   genuinely installed (not skipped), and PyInstaller's analysis log shows
-   it actively processing `hook-tensorflow.py` and bundling the real
-   package. WiX's `light.exe` linker ran for ~71s compressing the staged
-   backend into the final `.msi`, consistent with real compression work
-   over a multi-hundred-MB payload, not a trivial/empty bundle. The
-   leading explanation is that PyPI's `win_amd64` wheel for `tensorflow`
-   2.14.0 is itself substantially smaller than its Linux `manylinux`
-   counterpart (Windows builds exclude some of the larger XLA/TensorRT-
-   adjacent binary content Linux wheels ship), compounded by WiX's LZMA
-   cabinet compression. The `.msi` size was also byte-identical
-   (167,308,116 bytes) across two independent runs, which argues against a
-   flaky/partial build. **Flagged here for a future reviewer to double-check
-   by actually installing the `.msi` and running the app** — this session
-   did not have a Windows machine available to smoke-test the installed
-   result end-to-end, only to confirm the CI build succeeds and produces a
-   plausible, reproducible artifact.
+   **What was actually wrong, found in code review:** on Windows, PyPI's
+   `tensorflow==2.14.0` wheel is a **metadata-only stub with zero Python
+   code**. Its real implementation is a separately-named package,
+   `tensorflow-intel`, pulled in only via a marker inside the STUB's own
+   METADATA (`Requires-Dist: tensorflow-intel (==2.14.0) ;
+   platform_system == "Windows"`) — a marker uv's resolver does not expand
+   transitively through basic-pitch's `tf` extra, since that extra only
+   names bare `tensorflow`/`tensorflow-macos`. Result: `tensorflow`
+   "installed" successfully, `uv sync` and PyInstaller both completed
+   without error, and the only symptom anywhere in the CI logs was one
+   easy-to-miss line in the PyInstaller analysis output:
+   `WARNING:root:Tensorflow is not installed. If you plan to use a TF
+   Saved Model, reinstall basic-pitch with 'basic-pitch[tf]'` — present in
+   run 32273747500's `windows-msi` log the whole time, never checked for.
+   basic-pitch only warns and continues when no inference backend is
+   importable, so this shipped a fully green `.msi` whose transcription
+   feature would fail on every real request.
+
+   **Fix round 2 (the real fix):** added
+   `tensorflow-intel==2.14.0 ; sys_platform == 'win32'` as an explicit
+   dependency in `workers/transcription/pyproject.toml` — a package uv's
+   resolver cannot add on its own from a constraint, only a real
+   dependency entry does that. `uv lock` pulled in the genuine ~271MB
+   win_amd64 wheel; a package-identity diff of old vs new `uv.lock` (name,
+   version, wheel hashes, ignoring purely-structural marker-string
+   rewrites) confirmed `tensorflow-intel==2.14.0` is the ONLY added entry
+   — every other package's version and wheel hashes stayed byte-identical.
+   Also added a **"Smoke-test ML inference backend" step to all three**
+   build jobs (`build`, `macos-dmg`, `windows-msi`), right after "Install
+   python dependencies": `uv run --package aura-worker python -c "import
+   tensorflow as tf; import basic_pitch.inference; print('tf',
+   tf.__version__)"`. This actively fails the job (rather than just
+   warning) if any platform ever again ends up with a stub/non-functional
+   backend — the class of bug that let the first false green through.
+
+   **Confirming, now-genuinely-green run: 32276566356** (head `609ab41`).
+   All three jobs green including the new smoke-test steps; `release`
+   correctly skipped on the non-tag ref:
+   - `build` (Linux): `.deb` 684M (716,967,690 bytes); smoke test printed
+     `tf 2.14.0`.
+   - `macos-dmg`: `.dmg` 464M (482,580,836 bytes); smoke test printed
+     `tf 2.14.0`.
+   - `windows-msi`: **`.msi` 420M (439,625,565 bytes)** — up from the
+     false green's 160M, now the expected order of magnitude once the
+     real ~271MB `tensorflow-intel` wheel is actually bundled. Smoke test
+     printed `tf 2.14.0`. The full PyInstaller analysis log for this run
+     was checked line by line for backend warnings: **zero**
+     `Tensorflow is not installed` lines anywhere (the only remaining
+     warnings are for `coremltools`/`tflite-runtime`/`onnxruntime`, which
+     are genuinely not installed and not needed since the real TF backend
+     is present).
+
+   Verified locally before pushing fix round 2: `uv sync --all-packages
+   --all-extras` and the full `apps/desktop` (10/10) and
+   `workers/transcription` (69/69) test suites pass unchanged on Linux.
+
+   **Lesson for future work in this doc:** "the build is green" and "the
+   feature works" are different claims, and the gap between them can hide
+   in a warning line in a multi-thousand-line log rather than an error.
+   The smoke-test steps now make this class of gap fail loudly instead of
+   silently; don't remove them as a build-time optimization without
+   replacing what they check for.
 
    `http://tauri.localhost` (the Windows/Android WebView2 production
    origin, per `tauri-2.11.5/src/manager/mod.rs`'s `cfg!(windows)`
@@ -947,7 +986,13 @@ it is future work, not done here.
    Windows vs `aura-backend` elsewhere (`BACKEND_EXE_NAME`, `cfg(windows)`)
    — a real correctness bug (PyInstaller names the Windows executable
    with `.exe`; the old code hardcoded the extensionless name) fixed
-   ahead of when it'll actually matter.
+   ahead of when it'll actually matter. Note: this session still had no
+   Windows machine to install the `.msi` and smoke-test the running app
+   end-to-end — only to confirm the CI build succeeds and the bundled
+   backend genuinely imports `tensorflow`/`basic_pitch.inference`. A
+   future reviewer with Windows access installing the `.msi` and running a
+   real transcription is the remaining gap between "CI proves the backend
+   imports" and "a user can transcribe a file."
 
    **macOS (`macos-dmg`, macos-latest/arm64): DONE, real green run.**
    Mirrors the Linux job (uv/Python 3.11, npm build, `bash
@@ -955,7 +1000,7 @@ it is future work, not done here.
    real fix first: basic-pitch 0.4.0's PyPI metadata has a marker bug —
    its bare `tensorflow-macos` dependency only activates for
    `python_version > "3.11"`, so macOS + this project's Python 3.11 pin
-   (forced by tensorflow's cp311-only wheels) resolved NEITHER tensorflow
+   (forced by tensorflow's own cp311-only wheels) resolved NEITHER tensorflow
    package at all, even though a matching
    `tensorflow_macos-2.14.0-cp311-cp311-macosx_12_0_arm64.whl` exists on
    PyPI. Fixed by opting `workers/transcription/pyproject.toml`'s
@@ -968,7 +1013,10 @@ it is future work, not done here.
    at commit `c9dd524`) — `macos-dmg` produced a `.dmg` artifact
    (`auraaudio-macos-dmg`, ~456M) alongside Linux's `.deb` staying green
    in the same run; the tag-gated `release` job correctly skipped on the
-   non-tag ref.
+   non-tag ref. (This platform did NOT have the stub-wheel problem:
+   `tensorflow-macos`'s PyPI wheel is a real implementation, not a
+   metadata stub — confirmed by the smoke-test step passing here on the
+   very first fix round, with no second round needed.)
 
    **Windows original blocker, and why it's now fixed:** run
    **32239242311**'s `windows-msi` job failed `uv sync --all-packages
@@ -1006,15 +1054,10 @@ it is future work, not done here.
    and full step-by-step definition kept in git history at commit
    `1c8c073`.
 
-   **This is now resolved**, per the explicit user decision recorded at the
-   top of this roadmap item: scope the same downgrade to
-   `sys_platform == 'win32'` only, via a `tool.uv.constraint-dependencies`
-   marker in the workspace root `pyproject.toml`, verified via `git diff
-   uv.lock` to leave every other platform's resolution untouched. The
-   `windows-msi` job was restored from its `1c8c073` definition (comment
-   rewritten to match) and re-added to the tag-gated `release` job's
-   `needs:` list and artifact glob. See the confirming run above
-   (**32273747500**) for the green result.
+   **This is now resolved** — see "Fix round 1" and "Fix round 2" above
+   for the full two-part story (the `tensorflow-io-gcs-filesystem` wheel
+   gap AND the separate `tensorflow-intel` stub gap it uncovered) and run
+   **32276566356** for the genuinely-green confirming result.
 3. **Editing v2 / meter expansion** — direction to be chosen by the user
    (structure ops, multi-select, drag editing, MIDI-in / more meters).
 
