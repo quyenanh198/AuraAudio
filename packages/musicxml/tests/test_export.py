@@ -445,6 +445,94 @@ def test_score_json_to_musicxml_clamps_intra_measure_overlap(tmp_path: Path):
     assert measure.duration.quarterLength == 4.0  # exactly one 4/4 bar, not over-full
 
 
+# --- Silent-measure fidelity: a zero-event measure renders as one
+# whole-measure rest on every staff -----------------------------------------
+
+
+def test_score_json_to_musicxml_guitar_empty_measure_is_whole_bar_rest_four_four(tmp_path: Path):
+    # Middle measure (2) is a silent measure (quantize.py's silent-measure
+    # fidelity fix emits it as {"number": 2, "events": []}) between two
+    # measures that do have notes. Both notation and TAB staves must render
+    # it as exactly one whole-measure rest, not shrink/omit the bar.
+    score = _sample_score()
+    score["parts"][0]["measures"] = [
+        {"number": 1, "events": score["parts"][0]["measures"][0]["events"]},
+        {"number": 2, "events": []},
+        {
+            "number": 3,
+            "events": [
+                {
+                    "id": "note_02", "pitch": 62, "onsetSeconds": 2.0, "offsetSeconds": 2.5,
+                    "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+                    "confidence": 0.9, "locked": False,
+                },
+            ],
+        },
+    ]
+    out_path = tmp_path / "guitar_silent_measure_44.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    for suffix in ("Staff1", "Staff2"):  # notation and TAB
+        part = next(p for p in reopened.parts if p.id.endswith(suffix))
+        measures = part.recurse().getElementsByClass(music21.stream.Measure)
+        assert len(measures) == 3
+        silent_measure = measures[1]
+        assert silent_measure.number == 2
+        assert silent_measure.duration.quarterLength == 4.0  # exactly one 4/4 bar
+        notes_in_silent_measure = list(silent_measure.recurse().notes)
+        assert notes_in_silent_measure == []
+        rests_in_silent_measure = list(silent_measure.recurse().getElementsByClass(music21.note.Rest))
+        assert len(rests_in_silent_measure) == 1
+        assert rests_in_silent_measure[0].duration.quarterLength == 4.0
+
+
+def test_score_json_to_musicxml_guitar_empty_measure_is_whole_bar_rest_three_four(tmp_path: Path):
+    # Same as above, but in 3/4 — the whole-bar rest must be 3.0
+    # quarterLengths, not the 4/4 default.
+    score = _sample_score(meter="3/4")
+    score["parts"][0]["measures"] = [
+        {"number": 1, "events": []},
+        {"number": 2, "events": score["parts"][0]["measures"][0]["events"]},
+    ]
+    out_path = tmp_path / "guitar_silent_measure_34.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    measures = notation_part.recurse().getElementsByClass(music21.stream.Measure)
+    silent_measure = measures[0]
+    assert silent_measure.number == 1
+    assert silent_measure.duration.quarterLength == 3.0  # exactly one 3/4 bar
+    rests_in_silent_measure = list(silent_measure.recurse().getElementsByClass(music21.note.Rest))
+    assert len(rests_in_silent_measure) == 1
+    assert rests_in_silent_measure[0].duration.quarterLength == 3.0
+
+
+def test_score_json_to_musicxml_piano_empty_measure_is_whole_bar_rest_on_both_hands(tmp_path: Path):
+    # A silent measure on a piano part must render a whole-bar rest on
+    # BOTH the right (treble) and left (bass) staves.
+    score = _piano_score([
+        [_piano_event("note_00", 60, "right", "0/1")],
+        [],
+    ])
+    out_path = tmp_path / "piano_silent_measure.musicxml"
+    score_json_to_musicxml(score, out_path)
+
+    reopened = music21.converter.parse(str(out_path))
+    for suffix in ("Staff1", "Staff2"):  # right/treble, left/bass
+        part = next(p for p in reopened.parts if p.id.endswith(suffix))
+        measures = part.recurse().getElementsByClass(music21.stream.Measure)
+        assert len(measures) == 2
+        silent_measure = measures[1]
+        assert silent_measure.number == 2
+        assert silent_measure.duration.quarterLength == 4.0
+        assert list(silent_measure.recurse().notes) == []
+        rests = list(silent_measure.recurse().getElementsByClass(music21.note.Rest))
+        assert len(rests) == 1
+        assert rests[0].duration.quarterLength == 4.0
+
+
 def test_score_json_to_musicxml_clamps_bar_crossing_duration(tmp_path: Path):
     # A note at beat 3 with a notated duration of 2 beats would run past the
     # 4/4 measure's end (beat 4) into the next measure. It must be clamped
