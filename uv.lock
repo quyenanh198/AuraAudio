@@ -230,7 +230,7 @@ version = "0.1.0"
 source = { editable = "workers/transcription" }
 dependencies = [
     { name = "aura-api" },
-    { name = "basic-pitch" },
+    { name = "basic-pitch", extra = ["tf"] },
     { name = "librosa" },
     { name = "mido" },
     { name = "music21" },
@@ -250,7 +250,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aura-api", editable = "apps/api" },
-    { name = "basic-pitch", specifier = ">=0.4" },
+    { name = "basic-pitch", extras = ["tf"], specifier = ">=0.4" },
     { name = "librosa", specifier = ">=0.10" },
     { name = "mido", specifier = ">=1.3" },
     { name = "music21", specifier = ">=9.1" },
@@ -284,6 +284,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d3/68/384dcaa2493497581ef7a0f18c76ce35afa26ea8a8d703f4761bdae632e6/basic_pitch-0.4.0.tar.gz", hash = "sha256:6f48ac4b909c990fd59460622137a03b857c829bb1f3e65c71708da576ab68e5", size = 3715128, upload-time = "2024-08-16T17:17:10.232Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/0e/3a36d22562daeb0ae3c78ac78da3f8dba96543c5576ed57d4acb8ddbab5b/basic_pitch-0.4.0-py2.py3-none-any.whl", hash = "sha256:738adb503aae7fdfc7d1e1511aa0ce35052315f260a19531ef4c356708425db0", size = 758279, upload-time = "2024-08-16T17:17:08.41Z" },
+]
+
+[package.optional-dependencies]
+tf = [
+    { name = "tensorflow", marker = "sys_platform != 'darwin'" },
+    { name = "tensorflow-macos", marker = "sys_platform == 'darwin'" },
 ]
 
 [[package]]
@@ -2948,28 +2954,28 @@ name = "tensorflow-macos"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "absl-py", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "astunparse", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "flatbuffers", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "gast", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "google-pasta", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "grpcio", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "h5py", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "keras", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "libclang", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "ml-dtypes", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "numpy", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "opt-einsum", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "packaging", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "protobuf", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "setuptools", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "six", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "tensorboard", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "tensorflow-estimator", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "tensorflow-io-gcs-filesystem", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "termcolor", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "typing-extensions", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
-    { name = "wrapt", marker = "python_full_version >= '3.12' and sys_platform == 'darwin'" },
+    { name = "absl-py", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "astunparse", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "flatbuffers", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "gast", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "google-pasta", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "grpcio", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "h5py", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "keras", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "libclang", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "ml-dtypes", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "opt-einsum", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "packaging", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "protobuf", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "six", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "tensorboard", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "tensorflow-estimator", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "tensorflow-io-gcs-filesystem", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "termcolor", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
+    { name = "wrapt", marker = "python_full_version < '3.12' or sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/4b/ae9037ea22ba94eb2cf267e991384c3444f3e6142fa49923352b4ab73e14/tensorflow_macos-2.14.0-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:064e98b67d7a89e72c37c90254c0a322a0b8d0ce9b68f23286816210e3ef6685", size = 199710290, upload-time = "2023-09-27T13:38:19.679Z" },

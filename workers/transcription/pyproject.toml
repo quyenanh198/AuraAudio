@@ -4,7 +4,19 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "sqlalchemy>=2.0",
-    "basic-pitch>=0.4",
+    # basic-pitch 0.4.0's own PyPI metadata has a marker bug in its bare
+    # (non-extra) install_requires: it requires tensorflow-macos only for
+    # `python_version > "3.11"` (i.e. 3.12+), while the plain `tensorflow`
+    # clause only covers `platform_system != "Darwin"` -- so on macOS +
+    # Python 3.11 (this project's pin, forced by tensorflow's own cp311-only
+    # wheels) NEITHER tensorflow package is installed at all, even though a
+    # matching tensorflow-macos cp311-macosx_12_0_arm64 wheel exists on
+    # PyPI. Verified directly against PyPI's requires_dist for basic-pitch
+    # 0.4.0: the `tf` extra carries a *different*, correct marker
+    # (`python_version > "3.7"`), so opting into it is the fix basic-pitch
+    # itself ships for this — not a version-pin change, not a manual
+    # workaround.
+    "basic-pitch[tf]>=0.4",
     "mido>=1.3",
     "numpy>=1.26,<2",  # tensorflow 2.14 (via basic-pitch) is ABI-incompatible with numpy 2.x
     "librosa>=0.10",
