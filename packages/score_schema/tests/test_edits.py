@@ -1,7 +1,9 @@
+from fractions import Fraction
+
 import pytest
 
 from score_schema.edits import EditError, apply_edit
-from score_schema.meters import SUPPORTED_METERS
+from score_schema.meters import SUPPORTED_METERS, beats_per_measure
 
 
 def _score(events=None, meter="4/4", tempo=120.0):
@@ -18,6 +20,46 @@ def _score(events=None, meter="4/4", tempo=120.0):
             "instrument": "guitar", "tempoBpm": tempo, "meter": meter, "key": "E minor",
             "confidence": {"tempo": 0.9, "meter": 0.8, "key": 0.7},
             "measures": [{"number": 1, "events": events or default_events}],
+        }],
+    }
+
+
+def _dense_score(meter="4/4", tempo=120.0):
+    """A denser base score than `_score()`'s single event at notatedOnset
+    "0/1" in one measure: that trivial case maps to the exact same
+    measure/onset under every meter (onset 0 of measure 1 is always onset 0
+    of measure 1), so a round-trip or accepts-every-meter test built on it
+    would pass even if `_rebucket`'s Fraction math were broken. This one
+    spans 2 measures of 4/4 with 8 events at nonzero 16th-grid onsets, so a
+    real bucketing bug actually shows up in the assertions."""
+    bpm = beats_per_measure(meter)
+    spb = 60.0 / tempo
+    onsets = ("1/16", "1/4", "3/8", "11/16")
+    duration_beats = Fraction(1, 16) * 4
+    measures = []
+    idx = 0
+    for number in (1, 2):
+        events = []
+        for onset in onsets:
+            num, den = onset.split("/")
+            onset_beats = Fraction(int(num), int(den)) * 4
+            absolute = (number - 1) * bpm + onset_beats
+            events.append({
+                "id": f"note_{idx:02d}", "pitch": 52 + idx,
+                "onsetSeconds": float(absolute) * spb,
+                "offsetSeconds": float(absolute + duration_beats) * spb,
+                "notatedOnset": onset, "notatedDuration": "1/16", "voice": 1,
+                "confidence": 0.9, "locked": False, "string": 5, "fret": 2, "hand": None,
+            })
+            idx += 1
+        measures.append({"number": number, "events": events})
+    return {
+        "schemaVersion": 4,
+        "timeMap": [{"beat": 0, "seconds": 0.0}, {"beat": 1, "seconds": spb}],
+        "parts": [{
+            "instrument": "guitar", "tempoBpm": tempo, "meter": meter, "key": "E minor",
+            "confidence": {"tempo": 0.9, "meter": 0.8, "key": 0.7},
+            "measures": measures,
         }],
     }
 
@@ -146,8 +188,33 @@ def test_rebucket_preserves_interior_and_trailing_silent_measures():
 
 @pytest.mark.parametrize("meter", SUPPORTED_METERS)
 def test_set_part_fact_accepts_every_supported_meter(meter):
-    result = apply_edit(_score(), {"type": "set_part_fact", "field": "meter", "value": meter})
-    assert result["parts"][0]["meter"] == meter
+    base = _dense_score()
+    old_bpm = beats_per_measure(base["parts"][0]["meter"])
+    expected_absolute = {}
+    for measure in base["parts"][0]["measures"]:
+        for event in measure["events"]:
+            num, den = event["notatedOnset"].split("/")
+            onset_beats = Fraction(int(num), int(den)) * 4
+            expected_absolute[event["id"]] = (measure["number"] - 1) * old_bpm + onset_beats
+
+    result = apply_edit(base, {"type": "set_part_fact", "field": "meter", "value": meter})
+    part = result["parts"][0]
+    assert part["meter"] == meter
+
+    new_bpm = beats_per_measure(meter)
+    seen_ids = set()
+    for measure in part["measures"]:
+        for event in measure["events"]:
+            seen_ids.add(event["id"])
+            num, den = event["notatedOnset"].split("/")
+            onset_beats = Fraction(int(num), int(den)) * 4
+            # notatedOnset stays strictly inside the new measure length.
+            assert onset_beats < new_bpm
+            # absolute beat position ((measure-1)*bpm + onset*4) survives
+            # the rebucket exactly, regardless of which meter it lands in.
+            absolute = (measure["number"] - 1) * new_bpm + onset_beats
+            assert absolute == expected_absolute[event["id"]]
+    assert seen_ids == set(expected_absolute)
 
 
 def test_set_part_fact_rejects_unsupported_meter():
@@ -156,7 +223,7 @@ def test_set_part_fact_rejects_unsupported_meter():
 
 
 def test_meter_rebucket_round_trip_4_4_to_6_8_and_back():
-    base_score = _score()
+    base_score = _dense_score()
     to_68 = apply_edit(base_score, {"type": "set_part_fact", "field": "meter", "value": "6/8"})
     back = apply_edit(to_68, {"type": "set_part_fact", "field": "meter", "value": "4/4"})
     orig_events = [

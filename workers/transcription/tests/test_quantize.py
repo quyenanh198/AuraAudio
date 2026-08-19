@@ -214,5 +214,15 @@ def test_silent_measures_emitted_for_6_8(quantize_harness):
     assert part["measures"][0]["events"] == [] and part["measures"][1]["events"] == []
 
 
+def test_silent_measures_emitted_for_5_4(quantize_harness):
+    # spec §7 names 5/4 explicitly. note in measure 3 -> measures 1..3 all
+    # present, 1-2 empty.
+    onset_s = float(beats_per_measure("5/4")) * 0.5 * 2
+    result = quantize_harness(meter="5/4", tempo_bpm=120.0, notes_at_seconds=[onset_s])
+    part = result["parts"][0]
+    assert [m["number"] for m in part["measures"]] == [1, 2, 3]
+    assert part["measures"][0]["events"] == [] and part["measures"][1]["events"] == []
+
+
 def test_stage_version_bumped():
     assert quantize.STAGE_VERSION == 4

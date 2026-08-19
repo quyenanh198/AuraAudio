@@ -188,11 +188,16 @@ def test_detects_2_4(tmp_path):
 
 def test_detects_2_4_across_tempos(tmp_path):
     # Cheap regression sweep (no new diagnosis needed): 2/4 detects
-    # correctly at 110-130 bpm. 90/100 bpm are excluded here — at those
-    # tempi this same fixture/pipeline combination lands on 4/4 or 6/8
-    # instead, a pre-existing characteristic of introducing 6/8 and 2/4 as
-    # candidates (not something this fix-round's tie-break change touches),
-    # left out honestly rather than asserted and cherry-picked around.
+    # correctly at 110-130 bpm. A wider throwaway sweep of this same
+    # fixture/pipeline over 70-140 bpm in 10 bpm steps found 2/4 detection
+    # is NOT reliable overall: only 70/110/120/130 bpm land on 2/4, while
+    # 80 bpm lands on 3/4, 90 bpm lands on 4/4, 100 bpm lands on 6/8, and
+    # 140 bpm lands on 6/8 — 4 wrong out of 8, a pre-existing characteristic
+    # of introducing 6/8 and 2/4 as candidates (not something this
+    # fix-round's tie-break change touches). The three tempi below are
+    # asserted here as a cheap regression guard, not a claim of general
+    # reliability — see docs/superpowers/SESSION-HANDOFF.md, which now
+    # documents 2/4 the same way as 6/8: a hint, not a fact.
     for tempo in (110.0, 120.0, 130.0):
         detected, _ = _detect_on_fixture(tmp_path, "2/4", tempo=tempo)
         assert detected == "2/4", f"expected 2/4 at {tempo} bpm, got {detected}"
