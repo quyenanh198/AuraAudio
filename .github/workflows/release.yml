@@ -335,44 +335,136 @@ jobs:
           path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: warn
 
-  # windows-msi is NOT defined here — verified CI-infeasible under this
-  # project's current pins, not merely unattempted. Real run 32239242311's
-  # windows-msi job (removed after this run; see git history for its full
-  # definition) failed at `uv sync --all-packages --all-extras` in 2s,
-  # before touching Rust/Tauri/PyInstaller at all:
-  #
-  #   error: Distribution `tensorflow-io-gcs-filesystem==0.37.1` can't be
-  #   installed because it doesn't have a source distribution or wheel for
-  #   the current platform
-  #   hint: You're on Windows (`win_amd64`), but `tensorflow-io-gcs-
-  #   filesystem` (v0.37.1) only has wheels for: manylinux_2_17_aarch64,
-  #   manylinux2014_aarch64, manylinux_2_17_x86_64, manylinux2014_x86_64,
-  #   macosx_10_14_x86_64, macosx_12_0_arm64
-  #
-  # This is NOT the same shape as the macOS tensorflow-macos gap fixed
-  # elsewhere in this workflow's history (that one was a basic-pitch
-  # metadata *marker bug* excluding a wheel that genuinely exists; opting
-  # into basic-pitch's own `tf` extra fixed it with no version change).
-  # Here the wheel itself does not exist for ANY version an unmodified
-  # tensorflow==2.14.0 dependency chain can resolve to: verified directly
-  # against PyPI that tensorflow-io-gcs-filesystem shipped its LAST win_amd64
-  # wheel at 0.31.0 (April 2023) and has shipped zero Windows wheels of any
-  # kind at every version since (0.34.0, 0.35.0, 0.36.0, 0.37.0, 0.37.1 all
-  # checked directly against PyPI's file listing) — tensorflow 2.14.0 itself
-  # requires only `tensorflow-io-gcs-filesystem>=0.23.1` (no upper bound), so
-  # uv correctly resolves the latest, Windows-wheel-less release.
-  #
-  # The only way to make this resolve on Windows is forcing
-  # tensorflow-io-gcs-filesystem back to <=0.31.0 (uv's own error hint
-  # suggests exactly this, via `tool.uv.required-environments`) — a real
-  # downgrade of an ML-adjacent transitive dependency to route around a
-  # missing wheel, which is the class of hack this workflow's own operating
-  # rule explicitly rules out (don't change pinned ML deps or fake green to
-  # force a platform green). Reported as a blocker, not worked around — see
-  # SESSION-HANDOFF.md's Release section for the full evidence and what
-  # would need to change (an upstream tensorflow-io-gcs-filesystem Windows
-  # wheel returning, or this project moving off the tensorflow 2.14.0 pin,
-  # neither decided here) before revisiting.
+  windows-msi:
+    name: windows-msi
+    runs-on: windows-latest
+    # Same first-time-platform budget reasoning as macos-dmg above, plus
+    # slack for the WiX Toolset download noted below.
+    timeout-minutes: 90
+    outputs:
+      msi_path: ${{ steps.msi.outputs.path }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # No system-dependency step here either: windows-latest ships MSVC
+      # build tools and WebView2 preinstalled (Tauri v2's Windows
+      # prerequisites), and rustup (below) installs the matching
+      # x86_64-pc-windows-msvc host toolchain.
+      #
+      # ffmpeg is deliberately NOT installed here, for the same reason as
+      # macos-dmg above: it's a backend runtime dependency shelled out to
+      # at request time, never bundled by PyInstaller and never invoked by
+      # this build-only job. Windows users will need ffmpeg on PATH too —
+      # see SESSION-HANDOFF.md.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          # tensorflow==2.14.0 ships a cp311 win_amd64 wheel (verified
+          # against uv.lock), same cp311 pin as the Linux/macOS jobs.
+          python-version: "3.11"
+
+      # This job previously failed `uv sync` in ~2s: tensorflow==2.14.0
+      # (pulled in by basic-pitch) requires `tensorflow-io-gcs-filesystem
+      # >=0.23.1` with no upper bound, and that package shipped its LAST
+      # win_amd64 wheel at 0.31.0 (April 2023) -- every version since has
+      # zero Windows wheels, so an unconstrained resolve on Windows always
+      # picked a wheel-less release. Fixed via a `sys_platform == 'win32'`
+      # -scoped `tool.uv.constraint-dependencies` entry in the workspace
+      # root `pyproject.toml`, pinning ONLY the Windows resolution back to
+      # <=0.31.0 -- confirmed via `git diff uv.lock` that Linux and darwin
+      # resolutions are byte-identical to before (0.31.0 lacks a macosx
+      # arm64 wheel, so a global downgrade would have broken the macOS
+      # `.dmg` job above).
+      #
+      # This is a deliberate, user-approved downgrade of an ML-adjacent
+      # transitive dependency by ~1.5 years, accepted specifically because
+      # AuraAudio is 100% offline and never performs the Google Cloud
+      # Storage I/O this package exists to provide -- there is no runtime
+      # behavior difference between 0.31.0 and 0.37.1 for this app. See
+      # the constraint's comment in the root `pyproject.toml` for the full
+      # PyPI wheel-listing evidence. Revisit if/when this package regains
+      # Windows wheel support upstream, or if this project ever moves off
+      # the tensorflow==2.14.0 pin for an unrelated reason.
+      - name: Install python dependencies
+        timeout-minutes: 20
+        run: uv sync --all-packages --all-extras
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/web/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/desktop/web
+        run: npm ci
+
+      # `build-backend.sh` is a bash script; windows-latest ships Git for
+      # Windows (Git Bash), which GitHub Actions' `shell: bash` targets
+      # directly — no PowerShell port needed.
+      - name: Build PyInstaller backend bundle
+        shell: bash
+        timeout-minutes: 25
+        run: bash apps/desktop/build-backend.sh
+
+      - name: npm run build
+        working-directory: apps/desktop/web
+        run: npm run build
+
+      # --bundles msi: same scoping reasoning as Linux/macOS above —
+      # tauri.conf.json's bundle.targets "all" would also build an nsis
+      # installer on Windows; msi is the one this workflow ships.
+      #
+      # `../web/node_modules/.bin/tauri` is a POSIX shell shim (npm always
+      # writes one alongside the Windows `.cmd`/`.ps1` shims), so this only
+      # runs under `shell: bash`, not the runner's PowerShell default.
+      #
+      # WiX Toolset (the msi bundler's actual builder) is not preinstalled;
+      # tauri-bundler downloads it over the network on first use. That's an
+      # accepted, allowed network fetch here (Tauri's own documented
+      # behavior for `--bundles msi`), not the same class of *silent stall*
+      # already fixed for apt in the Linux job — if it regresses the same
+      # way, the fix is the same per-connection-timeout diagnosis approach.
+      - name: cargo tauri build
+        shell: bash
+        timeout-minutes: 40
+        working-directory: apps/desktop/src-tauri
+        run: ../web/node_modules/.bin/tauri build --bundles msi
+
+      - name: Verify .msi and report size
+        id: msi
+        shell: bash
+        run: |
+          MSI_PATH=$(find apps/desktop/src-tauri/target/release/bundle/msi -name '*.msi' -print -quit)
+          if [ -z "$MSI_PATH" ]; then
+            echo "::error::No .msi found under target/release/bundle/msi" >&2
+            exit 1
+          fi
+          SIZE_BYTES=$(wc -c < "$MSI_PATH" | tr -d '[:space:]')
+          SIZE_HUMAN=$(du -h "$MSI_PATH" | awk '{print $1}')
+          echo "path=$MSI_PATH" >> "$GITHUB_OUTPUT"
+          echo "size_human=$SIZE_HUMAN" >> "$GITHUB_OUTPUT"
+          echo "Built $MSI_PATH ($SIZE_HUMAN, $SIZE_BYTES bytes)"
+          {
+            echo "### AuraAudio .msi"
+            echo "- path: \`$MSI_PATH\`"
+            echo "- size: $SIZE_HUMAN ($SIZE_BYTES bytes)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload .msi artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: auraaudio-windows-msi
+          path: apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
 
   # Only cut a Release when this run was triggered by a version tag. A
   # plain workflow_dispatch run (no tag) stops after `build`'s artifact
@@ -380,7 +472,7 @@ jobs:
   # needs `contents: write` to do so.
   release:
     name: release
-    needs: [build, macos-dmg]
+    needs: [build, macos-dmg, windows-msi]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -399,10 +491,17 @@ jobs:
           name: auraaudio-macos-dmg
           path: dist
 
+      - name: Download .msi artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: auraaudio-windows-msi
+          path: dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.deb
             dist/*.dmg
+            dist/*.msi
           fail_on_unmatched_files: true
