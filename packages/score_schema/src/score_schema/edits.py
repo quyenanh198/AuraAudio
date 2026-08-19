@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import re
 import uuid
 from fractions import Fraction
@@ -78,9 +79,19 @@ def _retime(score: dict, part: dict, measure: dict, event: dict) -> None:
 
 
 def _rebucket(part: dict, old_meter: str, new_meter: str) -> None:
-    """Reassign events to measures for a new meter, preserving absolute beats."""
+    """Reassign events to measures for a new meter, preserving absolute beats.
+
+    Emits every measure number 1..max, not just numbers that ended up with
+    an event — matching quantize.py's silent-measure fidelity fix. Without
+    this, a measure that is (or becomes, e.g. via delete_note removing its
+    only event) pure silence would vanish from the rebucketed score instead
+    of surviving as an empty-events entry, and the musical duration
+    represented by the old measure range would silently shrink.
+    """
     old_bpm = beats_per_measure(old_meter)
     new_bpm = beats_per_measure(new_meter)
+    old_max_number = max((measure["number"] for measure in part["measures"]), default=0)
+
     flat: list[tuple[Fraction, dict]] = []
     for measure in part["measures"]:
         for event in measure["events"]:
@@ -94,9 +105,19 @@ def _rebucket(part: dict, old_meter: str, new_meter: str) -> None:
         whole = within / 4
         event["notatedOnset"] = f"{whole.numerator}/{whole.denominator}"
         buckets.setdefault(number, []).append(event)
+
+    # The old measure range's full musical duration must still be covered
+    # even where nothing landed: the end of the old last measure, converted
+    # into the new meter's beat count and rounded up (a partial new measure
+    # at the boundary still counts as a whole one).
+    preserved_max_number = 0
+    if old_max_number > 0:
+        preserved_max_number = math.ceil(old_max_number * old_bpm / new_bpm)
+    max_number = max(max(buckets.keys(), default=0), preserved_max_number)
+
     part["measures"] = [
-        {"number": number, "events": events}
-        for number, events in sorted(buckets.items())
+        {"number": number, "events": buckets.get(number, [])}
+        for number in range(1, max_number + 1)
     ]
 
 

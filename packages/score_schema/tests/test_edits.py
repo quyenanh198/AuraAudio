@@ -64,6 +64,23 @@ def test_add_note_generates_id_and_seconds_and_requires_existing_measure():
                               "pitch": 64, "voice": 1})
 
 
+def test_add_note_into_empty_measure_succeeds():
+    """Known editing gap this closes: add_note into a measure that exists
+    but currently has zero events (a silent measure, now emitted by
+    quantize.py's silent-measure fidelity fix) must succeed, not 422."""
+    score = _score()
+    score["parts"][0]["measures"] = [
+        {"number": 1, "events": score["parts"][0]["measures"][0]["events"]},
+        {"number": 2, "events": []},
+    ]
+    out = apply_edit(score, {"type": "add_note", "measureNumber": 2,
+                              "notatedOnset": "0/1", "notatedDuration": "1/4",
+                              "pitch": 67, "voice": 1})
+    events = out["parts"][0]["measures"][1]["events"]
+    assert len(events) == 1
+    assert events[0]["pitch"] == 67 and events[0]["locked"] is True
+
+
 def test_set_fingering_and_hand_validate_instrument():
     out = apply_edit(_score(), {"type": "set_fingering", "eventId": "note_00",
                                 "string": 4, "fret": 7})
@@ -94,6 +111,51 @@ def test_set_part_fact_meter_rebuckets_measures():
     assert [m["number"] for m in measures] == [1, 2]
     assert len(measures[0]["events"]) == 3 and len(measures[1]["events"]) == 1
     assert measures[1]["events"][0]["notatedOnset"] == "0/1"  # beat 3 -> measure 2 beat 0
+
+
+def test_rebucket_preserves_interior_and_trailing_silent_measures():
+    """Measure 2 is already silent (post-quantize fidelity fix) and the
+    span of old measure 3 partially overflows into a new measure 4 once
+    rebucketed to a shorter meter — both must survive as empty-events
+    entries, not be dropped."""
+    events = [
+        {"id": "note_00", "pitch": 52, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+         "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+         "confidence": 0.9, "locked": False, "string": 5, "fret": 2, "hand": None},
+    ]
+    events2 = [
+        {"id": "note_01", "pitch": 55, "onsetSeconds": 4.0, "offsetSeconds": 4.5,
+         "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+         "confidence": 0.9, "locked": False, "string": 5, "fret": 2, "hand": None},
+    ]
+    score = _score(events=events)
+    score["parts"][0]["measures"] = [
+        {"number": 1, "events": events},
+        {"number": 2, "events": []},
+        {"number": 3, "events": events2},
+    ]
+    out = apply_edit(score, {"type": "set_part_fact", "field": "meter", "value": "3/4"})
+    measures = out["parts"][0]["measures"]
+    assert [m["number"] for m in measures] == [1, 2, 3, 4]
+    assert len(measures[0]["events"]) == 1  # abs beat 0 -> measure 1
+    assert measures[1]["events"] == []  # interior gap preserved
+    assert len(measures[2]["events"]) == 1  # abs beat 8 -> measure 3
+    assert measures[3]["events"] == []  # trailing span of old measure 3 overflow
+
+
+def test_rebucket_does_not_drop_measure_after_delete_all_notes_then_meter_change():
+    """Known deferred gap (last review): delete_note emptying a measure's
+    only event, followed by a meter change, used to drop the measure
+    entirely because _rebucket only rebuilt measures from surviving
+    events. It must now still exist as an empty-events entry."""
+    out = apply_edit(_score(), {"type": "delete_note", "eventId": "note_00"})
+    assert out["parts"][0]["measures"] == [{"number": 1, "events": []}]
+
+    out2 = apply_edit(out, {"type": "set_part_fact", "field": "meter", "value": "3/4"})
+    measures = out2["parts"][0]["measures"]
+    # Old measure 1 (4/4, 4 beats) spans new measures 1-2 (3/4, 3 beats each).
+    assert [m["number"] for m in measures] == [1, 2]
+    assert measures[0]["events"] == [] and measures[1]["events"] == []
 
 
 def test_invalid_op_type_and_pitch_bounds_rejected():
