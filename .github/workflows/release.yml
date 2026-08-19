@@ -133,8 +133,17 @@ jobs:
       # @tauri-apps/cli is a pinned devDependency of apps/desktop/web
       # (installed above via npm ci) so this resolves to a prebuilt binary
       # download instead of a from-source `cargo install tauri-cli` build.
+      #
+      # 20 minutes was too tight: run 32226451850 hit that timeout almost
+      # exactly (07:17:49 -> 07:38:02, ~20m13s) and was killed mid-build.
+      # Swatinem/rust-cache had nothing to restore on that run (its own
+      # step completed in ~1s), so this was a genuinely cold
+      # release-profile compile of Tauri/webkit2gtk plus bundling the
+      # ~1.6GB PyInstaller backend — slower than the earlier estimate.
+      # The job has ample headroom for a bigger number: only ~9.5 of its
+      # 90 minutes were spent reaching this step.
       - name: cargo tauri build
-        timeout-minutes: 20
+        timeout-minutes: 60
         working-directory: apps/desktop/src-tauri
         run: ../web/node_modules/.bin/tauri build
 
