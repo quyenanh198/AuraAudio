@@ -37,6 +37,11 @@
     "resources": {
       "resources/aura-backend/": "aura-backend/"
     },
+    "linux": {
+      "deb": {
+        "depends": ["ffmpeg"]
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
