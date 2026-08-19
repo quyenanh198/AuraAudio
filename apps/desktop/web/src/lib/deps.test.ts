@@ -68,16 +68,36 @@ describe("deps store", () => {
     expect(state.detail?.ffprobe.found).toBe(true);
   });
 
-  it("treats a network/API failure as missing rather than throwing", async () => {
+  it("treats a network/API failure as a distinct error state, not missing", async () => {
+    // A failed CHECK (network error, backend not up yet) is not proof
+    // ffmpeg is absent -- it must be distinguishable from a successful
+    // check that reports allFound: false, so the UI can render "couldn't
+    // check" instead of misleadingly claiming ffmpeg isn't installed.
     getSystemDepsMock.mockRejectedValueOnce(new Error("boom"));
 
     const { deps } = await import("./deps");
     await deps.check();
 
     const state = get(deps);
-    expect(state.status).toBe("missing");
+    expect(state.status).toBe("error");
+    expect(state.status).not.toBe("missing");
     expect(state.detail).toBeNull();
     expect(state.error).toBe("boom");
+  });
+
+  it("recheck() can recover from the error state to ok", async () => {
+    getSystemDepsMock.mockRejectedValueOnce(new Error("boom"));
+
+    const { deps } = await import("./deps");
+    await deps.check();
+    expect(get(deps).status).toBe("error");
+
+    getSystemDepsMock.mockResolvedValueOnce(depsResponse());
+    await deps.recheck();
+
+    const state = get(deps);
+    expect(state.status).toBe("ok");
+    expect(state.error).toBeNull();
   });
 
   it("recheck() re-runs the same check and can flip missing back to ok", async () => {

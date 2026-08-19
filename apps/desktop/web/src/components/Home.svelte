@@ -182,7 +182,10 @@
 
   async function chooseInstrument(instrument: "guitar" | "piano"): Promise<void> {
     const file = pendingFile;
-    if (!file || creating) return;
+    // Defense-in-depth: the Guitar/Piano buttons are already `disabled` while
+    // $deps.status === "missing" (see the template), but guard here too in
+    // case this is ever invoked another way.
+    if (!file || creating || $deps.status === "missing") return;
     creating = true;
     creationError = null;
     try {
@@ -293,6 +296,13 @@
         <div class="instrument-choice">
           <p class="filename">{pendingFile.name}</p>
           <p class="prompt">Which instrument is this?</p>
+          <!-- Deliberate: only gate on status === "missing" (a confirmed-absent
+               binary), never on "checking" or "error". A failed *check* isn't
+               proof ffmpeg is missing -- most commonly it means the backend
+               hasn't finished starting yet, and false-blocking transcription
+               on that would be worse than letting the real
+               startTranscription() call surface its own failure if ffmpeg
+               genuinely isn't there. -->
           <div class="choice-buttons">
             <button
               type="button"
@@ -348,6 +358,18 @@
         >
           {$deps.status === "checking" ? "Checking…" : "Check again"}
         </button>
+      </div>
+    {:else if $deps.status === "error"}
+      <!-- Distinct from the "missing" banner above: this fires when the
+           /v1/system/deps CHECK itself failed (network error, backend not up
+           yet, etc.) — the real dependency state is unknown, not confirmed
+           absent. Mirrors the sibling $projects.error pattern below
+           (message + a single retry action), rather than reusing the
+           install-guidance copy, which would be actively misleading during
+           the normal backend-startup race. -->
+      <div class="error-panel">
+        Couldn't check dependencies: {$deps.error}
+        <button type="button" class="retry-link" onclick={() => deps.recheck()}>Check again</button>
       </div>
     {/if}
 

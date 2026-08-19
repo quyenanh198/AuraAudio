@@ -3,7 +3,12 @@ import { writable } from "svelte/store";
 import { api } from "./api";
 import type { SystemDepsResponse } from "./types";
 
-export type DepsStatus = "checking" | "ok" | "missing";
+// "missing" means the check succeeded and reported at least one binary
+// absent — the install-guidance banner applies. "error" means the check
+// itself failed (network error, backend not up yet, non-2xx, etc.) — the
+// real dependency state is unknown, so a distinct "couldn't check" banner
+// applies instead of misleadingly telling the user ffmpeg isn't installed.
+export type DepsStatus = "checking" | "ok" | "missing" | "error";
 
 export interface DepsState {
   status: DepsStatus;
@@ -53,7 +58,7 @@ function createDepsStore() {
       set({ status: detail.allFound ? "ok" : "missing", detail, error: null });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      update((state) => ({ ...state, status: "missing", error: message }));
+      update((state) => ({ ...state, status: "error", error: message }));
     }
   }
 
