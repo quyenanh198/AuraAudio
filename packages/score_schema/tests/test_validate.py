@@ -74,7 +74,7 @@ def test_part_missing_confidence_is_rejected():
 
 def test_meter_outside_candidate_set_is_rejected():
     score = _valid_score()
-    score["parts"][0]["meter"] = "6/8"
+    score["parts"][0]["meter"] = "13/16"
     with pytest.raises(ScoreValidationError):
         validate_score(score)
 

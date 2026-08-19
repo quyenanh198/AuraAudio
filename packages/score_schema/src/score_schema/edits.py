@@ -6,11 +6,8 @@ import re
 import uuid
 from fractions import Fraction
 
+from score_schema.meters import SUPPORTED_METERS, beats_per_measure
 from score_schema.validate import ScoreValidationError, validate_score
-
-# Mirrors aura_worker.stages.structure.METER_CANDIDATES keys (copied so this
-# package stays standalone); verify against that file and keep in sync.
-_ALLOWED_METERS = ("4/4", "3/4")
 
 # Mirrors the key pattern from score_schema.validate._SCORE_SCHEMA
 _KEY_PATTERN = re.compile(r"^[A-G](#|-)? (major|minor)$")
@@ -20,11 +17,6 @@ class EditError(ValueError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
-
-
-def beats_per_measure(meter: str) -> Fraction:
-    num, den = meter.split("/")
-    return Fraction(int(num)) * Fraction(4, int(den))
 
 
 def seconds_per_beat(time_map: list[dict]) -> float:
@@ -237,8 +229,8 @@ def apply_edit(score: dict, op: dict) -> dict:
                 for event in measure["events"]:
                     _retime(out, part, measure, event)
         elif field == "meter":
-            if value not in _ALLOWED_METERS:
-                raise EditError(f"meter must be one of {_ALLOWED_METERS}")
+            if value not in SUPPORTED_METERS:
+                raise EditError(f"meter must be one of {SUPPORTED_METERS}")
             old_meter = part["meter"]
             part["meter"] = value
             _rebucket(part, old_meter, value)

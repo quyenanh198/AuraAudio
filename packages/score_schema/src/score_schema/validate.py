@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import jsonschema
 
+from score_schema.meters import SUPPORTED_METERS
+
 _EVENT_SCHEMA = {
     "type": "object",
     "required": [
@@ -61,7 +63,7 @@ _SCORE_SCHEMA = {
                 "properties": {
                     "instrument": {"enum": ["guitar", "piano"]},
                     "tempoBpm": {"type": "number", "exclusiveMinimum": 0},
-                    "meter": {"enum": ["4/4", "3/4"]},
+                    "meter": {"enum": list(SUPPORTED_METERS)},
                     "key": {"type": "string", "pattern": "^[A-G](#|-)? (major|minor)$"},
                     "confidence": _CONFIDENCE_SCHEMA,
                     "measures": {

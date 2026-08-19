@@ -1,6 +1,7 @@
 import pytest
 
 from score_schema.edits import EditError, apply_edit
+from score_schema.meters import SUPPORTED_METERS
 
 
 def _score(events=None, meter="4/4", tempo=120.0):
@@ -141,6 +142,32 @@ def test_rebucket_preserves_interior_and_trailing_silent_measures():
     assert measures[1]["events"] == []  # interior gap preserved
     assert len(measures[2]["events"]) == 1  # abs beat 8 -> measure 3
     assert measures[3]["events"] == []  # trailing span of old measure 3 overflow
+
+
+@pytest.mark.parametrize("meter", SUPPORTED_METERS)
+def test_set_part_fact_accepts_every_supported_meter(meter):
+    result = apply_edit(_score(), {"type": "set_part_fact", "field": "meter", "value": meter})
+    assert result["parts"][0]["meter"] == meter
+
+
+def test_set_part_fact_rejects_unsupported_meter():
+    with pytest.raises(EditError):
+        apply_edit(_score(), {"type": "set_part_fact", "field": "meter", "value": "13/16"})
+
+
+def test_meter_rebucket_round_trip_4_4_to_6_8_and_back():
+    base_score = _score()
+    to_68 = apply_edit(base_score, {"type": "set_part_fact", "field": "meter", "value": "6/8"})
+    back = apply_edit(to_68, {"type": "set_part_fact", "field": "meter", "value": "4/4"})
+    orig_events = [
+        (e["id"], e["notatedOnset"], e["notatedDuration"])
+        for m in base_score["parts"][0]["measures"] for e in m["events"]
+    ]
+    back_events = [
+        (e["id"], e["notatedOnset"], e["notatedDuration"])
+        for m in back["parts"][0]["measures"] for e in m["events"]
+    ]
+    assert back_events == orig_events
 
 
 def test_rebucket_does_not_drop_measure_after_delete_all_notes_then_meter_change():
