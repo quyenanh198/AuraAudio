@@ -899,6 +899,19 @@ correct — check it.
 
 ## Release
 
+**v1.1.0 IS LIVE** (published 2026-08-20T01:21Z, run 32320010770 on
+main@dfe5aa0, green on the first attempt):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.1.0 —
+`AuraAudio_1.1.0_amd64.deb` (716,965,860 B),
+`AuraAudio_1.1.0_aarch64.dmg` (482,564,744 B),
+`AuraAudio_1.1.0_x64_en-US.msi` (439,654,237 B). New since v1.0.0:
+dependency checking (deb Depends: ffmpeg; guided-install banner +
+transcribe gating on macOS/Windows; GET /v1/system/deps) and YouTube
+import via optional yt-dlp-on-PATH (the app's first network feature).
+The Linux apt/ffmpeg mirror flake did NOT recur this time (it has hit 4
+release runs to date; if it hits again, harden the ffmpeg install step —
+e.g. a cached static binary — rather than re-dispatching a 5th time).
+
 **v1.0.0 IS LIVE** (published 2026-08-19T22:35Z, run 32308624180 on
 main@4ee7a25): https://github.com/quyenanh198/AuraAudio/releases/tag/v1.0.0
 with three assets — `AuraAudio_1.0.0_amd64.deb` (716,942,612 B),
