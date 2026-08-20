@@ -1,5 +1,16 @@
 # AuraAudio architecture and implementation plan
 
+> **Historical document.** This is the original planning document for a
+> browser + cloud version of AuraAudio, written before the project
+> pivoted to a fully offline desktop app. It is kept for context on why
+> the score model, staged worker, and edit semantics look the way they
+> do — those survived the pivot — but the deployment story here
+> (browser client, cloud API, PostgreSQL, GPU workers, signed URLs,
+> SSE) does **not** describe the shipped product. For the current
+> system, see [README.md](README.md), the flow diagrams in
+> [`docs/flow-map.html`](docs/flow-map.html), and the per-sub-project
+> specs in [`docs/superpowers/specs/`](docs/superpowers/specs/).
+
 ## 1. Product definition
 
 AuraAudio converts an uploaded audio or video file into an editable score containing standard notation and either guitar tablature or a piano grand staff. The first release should be an **assisted transcription tool**, not a promise of perfect automatic notation: polyphonic transcription, instrument separation, guitar fingering, and musical spelling are ambiguous, and a playable editor is the practical way to resolve those ambiguities.
