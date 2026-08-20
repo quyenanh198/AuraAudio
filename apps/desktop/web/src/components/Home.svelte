@@ -2,17 +2,27 @@
   import { onDestroy, onMount } from "svelte";
 
   import { api } from "../lib/api";
-  import { deps, detectPlatform, installCommandFor } from "../lib/deps";
+  import { deps, detectPlatform, installCommandFor, isYtDlpMissing } from "../lib/deps";
   import { projects } from "../lib/projects";
   import type { ProjectListItem } from "../lib/types";
+  import { defaultYoutubeTitle, isYoutubeUrl } from "../lib/youtube";
 
   const ACCEPTED_EXTENSIONS = [".wav", ".mp3", ".m4a"];
 
   type RowStatus = "succeeded" | "failed" | "running" | "none";
 
+  /** A chosen-but-not-yet-transcribed audio source, either a locally picked
+   * file (still needs POST /v1/uploads) or an already-imported YouTube
+   * download (already has an object_key from POST /v1/imports/youtube) --
+   * `chooseInstrument` below branches on `kind` to skip the redundant
+   * upload step for the latter. */
+  type PendingSource =
+    | { kind: "file"; file: File }
+    | { kind: "youtube"; objectKey: string; title: string };
+
   let fileInput: HTMLInputElement | undefined = $state();
   let isDragOver = $state(false);
-  let pendingFile: File | null = $state(null);
+  let pending: PendingSource | null = $state(null);
   let creating = $state(false);
   let creationError: string | null = $state(null);
   let retryingId: string | null = $state(null);
@@ -24,7 +34,15 @@
   let errorDetails: Record<string, string> = $state({});
   let depsCopyFeedback = $state(false);
 
+  let youtubeUrl = $state("");
+  let youtubeImporting = $state(false);
+  let youtubeError: string | null = $state(null);
+  let ytDlpCopyFeedback = $state(false);
+
   const installCommand = installCommandFor(detectPlatform());
+  const ytDlpInstallCommand = installCommandFor(detectPlatform(), "ytDlp");
+
+  const ytDlpMissing = $derived(isYtDlpMissing($deps));
 
   onMount(() => {
     void projects.refresh();
@@ -51,6 +69,19 @@
     } catch {
       // Clipboard access can be denied by the platform; the command is
       // already visible in the banner for the user to copy by hand.
+    }
+  }
+
+  async function copyYtDlpInstallCommand(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(ytDlpInstallCommand);
+      ytDlpCopyFeedback = true;
+      setTimeout(() => {
+        ytDlpCopyFeedback = false;
+      }, 2000);
+    } catch {
+      // Clipboard access can be denied by the platform; the command is
+      // already visible in the hint for the user to copy by hand.
     }
   }
 
@@ -142,7 +173,7 @@
       return;
     }
     creationError = null;
-    pendingFile = file;
+    pending = { kind: "file", file };
   }
 
   function onFileInputChange(event: Event): void {
@@ -153,7 +184,7 @@
   }
 
   function onDragOver(event: DragEvent): void {
-    if (pendingFile || creating) return;
+    if (pending || creating) return;
     event.preventDefault();
     isDragOver = true;
   }
@@ -165,13 +196,13 @@
   function onDrop(event: DragEvent): void {
     event.preventDefault();
     isDragOver = false;
-    if (pendingFile || creating) return;
+    if (pending || creating) return;
     const file = event.dataTransfer?.files?.[0];
     if (file) handleFile(file);
   }
 
   function cancelPending(): void {
-    pendingFile = null;
+    pending = null;
     creationError = null;
   }
 
@@ -181,23 +212,48 @@
   }
 
   async function chooseInstrument(instrument: "guitar" | "piano"): Promise<void> {
-    const file = pendingFile;
+    const source = pending;
     // Defense-in-depth: the Guitar/Piano buttons are already `disabled` while
     // $deps.status === "missing" (see the template), but guard here too in
     // case this is ever invoked another way.
-    if (!file || creating || $deps.status === "missing") return;
+    if (!source || creating || $deps.status === "missing") return;
     creating = true;
     creationError = null;
     try {
-      const uploaded = await api.upload(file);
-      const project = await api.createProject(titleFromFilename(file.name), instrument, uploaded.object_key);
+      // A YouTube import already has an object_key (from POST
+      // /v1/imports/youtube, which registers it through the same storage
+      // path as POST /v1/uploads) -- only a locally picked file still
+      // needs uploading here.
+      const objectKey = source.kind === "file" ? (await api.upload(source.file)).object_key : source.objectKey;
+      const title = source.kind === "file" ? titleFromFilename(source.file.name) : source.title;
+      const project = await api.createProject(title, instrument, objectKey);
       await api.startTranscription(project.id);
-      pendingFile = null;
+      pending = null;
       await projects.refresh();
     } catch (err: unknown) {
       creationError = err instanceof Error ? err.message : String(err);
     } finally {
       creating = false;
+    }
+  }
+
+  async function submitYoutubeImport(): Promise<void> {
+    const url = youtubeUrl.trim();
+    if (!isYoutubeUrl(url) || youtubeImporting || pending || ytDlpMissing) return;
+    youtubeImporting = true;
+    youtubeError = null;
+    try {
+      const imported = await api.importYoutube(url);
+      pending = {
+        kind: "youtube",
+        objectKey: imported.object_key,
+        title: imported.title ?? defaultYoutubeTitle(url),
+      };
+      youtubeUrl = "";
+    } catch (err: unknown) {
+      youtubeError = err instanceof Error ? err.message : String(err);
+    } finally {
+      youtubeImporting = false;
     }
   }
 
@@ -292,9 +348,9 @@
       ondragleave={onDragLeave}
       ondrop={onDrop}
     >
-      {#if pendingFile}
+      {#if pending}
         <div class="instrument-choice">
-          <p class="filename">{pendingFile.name}</p>
+          <p class="filename">{pending.kind === "file" ? pending.file.name : pending.title}</p>
           <p class="prompt">Which instrument is this?</p>
           <!-- Deliberate: only gate on status === "missing" (a confirmed-absent
                binary), never on "checking" or "error". A failed *check* isn't
@@ -337,6 +393,62 @@
         </button>
       {/if}
     </div>
+
+    {#if !pending}
+      <div class="youtube-import">
+        <label class="youtube-label" for="youtube-url">Or import from a YouTube link</label>
+        <div class="youtube-row">
+          <input
+            id="youtube-url"
+            type="url"
+            class="youtube-input"
+            placeholder="https://www.youtube.com/watch?v=…"
+            bind:value={youtubeUrl}
+            disabled={youtubeImporting || ytDlpMissing}
+          />
+          <button
+            type="button"
+            class="youtube-submit"
+            onclick={() => void submitYoutubeImport()}
+            disabled={youtubeImporting || ytDlpMissing || !isYoutubeUrl(youtubeUrl.trim())}
+            title={ytDlpMissing
+              ? `yt-dlp is required for YouTube import — install it below, then "Check again".`
+              : undefined}
+          >
+            {youtubeImporting ? "Importing audio…" : "Import"}
+          </button>
+        </div>
+
+        {#if ytDlpMissing}
+          <!-- Same "confirmed missing, not just checking/error" gating rule
+               as the ffmpeg banner above -- ytDlpMissing only turns true
+               once a real check has reported yt-dlp absent. -->
+          <div class="deps-banner youtube-deps-hint" role="alert">
+            <p class="deps-message">
+              <strong>yt-dlp</strong> not found on your system. It's optional and only needed for YouTube import.
+            </p>
+            <div class="deps-command-row">
+              <code class="deps-command">{ytDlpInstallCommand}</code>
+              <button type="button" class="deps-copy" onclick={copyYtDlpInstallCommand}>
+                {ytDlpCopyFeedback ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <button
+              type="button"
+              class="deps-recheck"
+              disabled={$deps.status === "checking"}
+              onclick={() => deps.recheck()}
+            >
+              {$deps.status === "checking" ? "Checking…" : "Check again"}
+            </button>
+          </div>
+        {/if}
+
+        {#if youtubeError}
+          <div class="error-panel">{youtubeError}</div>
+        {/if}
+      </div>
+    {/if}
 
     {#if $deps.status === "missing" || ($deps.status === "checking" && $deps.detail !== null && !$deps.detail.allFound)}
       <div class="deps-banner" role="alert">
@@ -625,6 +737,74 @@
     cursor: pointer;
     text-decoration: underline;
     padding: 0;
+  }
+
+  .youtube-import {
+    margin: 0 0 32px;
+    padding: 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .youtube-label {
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  .youtube-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .youtube-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .youtube-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .youtube-input:disabled {
+    opacity: 0.6;
+  }
+
+  .youtube-submit {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .youtube-submit:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--border);
+  }
+
+  .youtube-submit:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .youtube-deps-hint {
+    margin-bottom: 0;
   }
 
   .deps-banner {

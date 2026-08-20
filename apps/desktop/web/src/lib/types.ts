@@ -181,5 +181,17 @@ export interface DependencyStatus {
 export interface SystemDepsResponse {
   ffmpeg: DependencyStatus;
   ffprobe: DependencyStatus;
+  // Optional dependency (guided-install, non-blocking) -- deliberately
+  // excluded from `allFound`, which stays scoped to ffmpeg+ffprobe.
+  ytDlp: DependencyStatus;
   allFound: boolean;
+}
+
+// POST /v1/imports/youtube -- mirrors apps/api/src/aura_api/schemas.py's
+// ImportYoutubeResponse verbatim. Shape-compatible with the upload
+// endpoint's `{ object_key }` response so the frontend can feed either one
+// into the same create-project flow.
+export interface ImportYoutubeResponse {
+  object_key: string;
+  title: string | null;
 }

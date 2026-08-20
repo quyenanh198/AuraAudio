@@ -20,11 +20,24 @@ const initialState: DepsState = { status: "checking", detail: null, error: null 
 
 export type Platform = "windows" | "macos" | "linux";
 
-/** Per-OS one-line command to install ffmpeg (which also provides ffprobe). */
-const INSTALL_COMMANDS: Record<Platform, string> = {
-  windows: "winget install Gyan.FFmpeg",
-  macos: "brew install ffmpeg",
-  linux: "sudo apt install ffmpeg",
+/** The PATH dependencies this app has guided-install banners for. Extend
+ * this (and `INSTALL_COMMANDS` below) rather than adding a new parallel
+ * per-OS command map when a future dependency needs the same treatment. */
+export type DepName = "ffmpeg" | "ytDlp";
+
+/** Per-OS one-line install command, per dependency. ffmpeg also provides
+ * ffprobe, so one command covers both required binaries. */
+const INSTALL_COMMANDS: Record<DepName, Record<Platform, string>> = {
+  ffmpeg: {
+    windows: "winget install Gyan.FFmpeg",
+    macos: "brew install ffmpeg",
+    linux: "sudo apt install ffmpeg",
+  },
+  ytDlp: {
+    windows: "winget install yt-dlp",
+    macos: "brew install yt-dlp",
+    linux: "sudo apt install yt-dlp",
+  },
 };
 
 /** Minimal shape this needs from the real `Navigator`, so tests can pass a
@@ -41,8 +54,18 @@ export function detectPlatform(nav: PlatformHints = navigator): Platform {
   return "linux";
 }
 
-export function installCommandFor(platformName: Platform): string {
-  return INSTALL_COMMANDS[platformName];
+export function installCommandFor(platformName: Platform, dep: DepName = "ffmpeg"): string {
+  return INSTALL_COMMANDS[dep][platformName];
+}
+
+/** True only once a check has actually completed and reported yt-dlp
+ * absent -- mirrors the ffmpeg banner's "only gate on a CONFIRMED missing
+ * binary" rule in Home.svelte (never gate on `detail === null`, i.e. still
+ * checking or the check itself failed; that's not proof yt-dlp is
+ * missing). yt-dlp is optional, so this is intentionally independent of
+ * `state.status`, which only reflects the required ffmpeg/ffprobe deps. */
+export function isYtDlpMissing(state: Pick<DepsState, "detail">): boolean {
+  return state.detail !== null && !state.detail.ytDlp.found;
 }
 
 function createDepsStore() {

@@ -10,7 +10,7 @@ def create_app() -> FastAPI:
     def healthz():
         return {"status": "ok"}
 
-    from aura_api.routers import edits, exports, jobs, projects, scores, system, uploads
+    from aura_api.routers import edits, exports, imports, jobs, projects, scores, system, uploads
 
     app.include_router(uploads.router, prefix="/v1")
     app.include_router(projects.router, prefix="/v1")
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
     app.include_router(edits.router, prefix="/v1")
     app.include_router(exports.router, prefix="/v1")
     app.include_router(system.router, prefix="/v1")
+    app.include_router(imports.router, prefix="/v1")
 
     return app
 

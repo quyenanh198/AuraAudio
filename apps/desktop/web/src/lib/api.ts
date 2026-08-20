@@ -1,4 +1,4 @@
-import type { EditOp, EditResponse, ProjectListItem, SystemDepsResponse } from "./types";
+import type { EditOp, EditResponse, ImportYoutubeResponse, ProjectListItem, SystemDepsResponse } from "./types";
 
 // Fixed dev/desktop backend port — apps/desktop/run_backend.py:43
 // (`AURA_BACKEND_PORT = 8317`), bound to 127.0.0.1 only.
@@ -51,6 +51,58 @@ async function editJson<T>(resp: Response): Promise<T> {
       // Not JSON — fall through to the generic message below.
     }
     throw new EditApiError(resp.status, detail ?? `${resp.status}: ${text}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
+/** Thrown by POST /v1/imports/youtube instead of a plain `Error`, so
+ * callers can branch on `code` (e.g. `"yt_dlp_not_found"` for the 409 --
+ * apps/api/src/aura_api/routers/imports.py raises that with a
+ * `{"code": ..., "message": ...}` detail specifically so the frontend
+ * doesn't have to string-match) without re-parsing the response body. */
+export class ImportApiError extends Error {
+  readonly status: number;
+
+  readonly code: string | null;
+
+  constructor(status: number, message: string, code: string | null = null) {
+    super(message);
+    this.name = "ImportApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function hasDetail(body: unknown): body is { detail: unknown } {
+  return typeof body === "object" && body !== null && "detail" in body;
+}
+
+/** Like `json<T>`, but on failure raises `ImportApiError`. The imports
+ * endpoint's `detail` is either a plain string (422 validation, 502
+ * yt-dlp failures) or a `{code, message}` object (409 yt-dlp-missing) --
+ * this normalizes both into a human-readable `message` plus an optional
+ * machine-readable `code`. */
+async function importJson<T>(resp: Response): Promise<T> {
+  if (!resp.ok) {
+    const text = await resp.text();
+    let message = `${resp.status}: ${text}`;
+    let code: string | null = null;
+    try {
+      const body: unknown = JSON.parse(text);
+      if (hasDetail(body)) {
+        const detail = body.detail;
+        if (typeof detail === "string") {
+          message = detail;
+        } else if (typeof detail === "object" && detail !== null) {
+          const d = detail as { message?: unknown; code?: unknown };
+          if (typeof d.message === "string") message = d.message;
+          if (typeof d.code === "string") code = d.code;
+        }
+      }
+    } catch {
+      // Not JSON -- fall through to the generic message below.
+    }
+    throw new ImportApiError(resp.status, message, code);
   }
   return resp.json() as Promise<T>;
 }
@@ -131,4 +183,10 @@ export const api = {
   // so a cached 200 must never mask that.
   getSystemDeps: () =>
     fetch(`${BASE}/v1/system/deps`, { cache: "no-store" }).then((r) => json<SystemDepsResponse>(r)),
+  importYoutube: (url: string) =>
+    fetch(`${BASE}/v1/imports/youtube`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).then((r) => importJson<ImportYoutubeResponse>(r)),
 };

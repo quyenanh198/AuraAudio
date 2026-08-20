@@ -15,6 +15,7 @@ function depsResponse(overrides: Partial<SystemDepsResponse> = {}): SystemDepsRe
   return {
     ffmpeg: { found: true, version: "6.1.1" },
     ffprobe: { found: true, version: "6.1.1" },
+    ytDlp: { found: true, version: "2024.08.06" },
     allFound: true,
     ...overrides,
   };
@@ -178,5 +179,50 @@ describe("installCommandFor", () => {
   it("maps linux to the apt command", async () => {
     const { installCommandFor } = await import("./deps");
     expect(installCommandFor("linux")).toBe("sudo apt install ffmpeg");
+  });
+
+  it("defaults to the ffmpeg command when no dependency is named", async () => {
+    const { installCommandFor } = await import("./deps");
+    expect(installCommandFor("linux")).toBe(installCommandFor("linux", "ffmpeg"));
+  });
+
+  it("maps windows + ytDlp to the winget yt-dlp command", async () => {
+    const { installCommandFor } = await import("./deps");
+    expect(installCommandFor("windows", "ytDlp")).toBe("winget install yt-dlp");
+  });
+
+  it("maps macos + ytDlp to the brew yt-dlp command", async () => {
+    const { installCommandFor } = await import("./deps");
+    expect(installCommandFor("macos", "ytDlp")).toBe("brew install yt-dlp");
+  });
+
+  it("maps linux + ytDlp to the apt yt-dlp command", async () => {
+    const { installCommandFor } = await import("./deps");
+    expect(installCommandFor("linux", "ytDlp")).toBe("sudo apt install yt-dlp");
+  });
+});
+
+describe("isYtDlpMissing", () => {
+  it("is false while detail is null (still checking, or the check itself failed)", async () => {
+    const { isYtDlpMissing } = await import("./deps");
+    expect(isYtDlpMissing({ detail: null })).toBe(false);
+  });
+
+  it("is false once a check confirms yt-dlp is present", async () => {
+    const { isYtDlpMissing } = await import("./deps");
+    expect(isYtDlpMissing({ detail: depsResponse() })).toBe(false);
+  });
+
+  it("is true once a check confirms yt-dlp is absent", async () => {
+    const { isYtDlpMissing } = await import("./deps");
+    expect(
+      isYtDlpMissing({ detail: depsResponse({ ytDlp: { found: false, version: null } }) }),
+    ).toBe(true);
+  });
+
+  it("is independent of ffmpeg/ffprobe -- yt-dlp missing alone doesn't need allFound to be false", async () => {
+    const { isYtDlpMissing } = await import("./deps");
+    const detail = depsResponse({ ytDlp: { found: false, version: null }, allFound: true });
+    expect(isYtDlpMissing({ detail })).toBe(true);
   });
 });

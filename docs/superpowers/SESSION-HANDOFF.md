@@ -686,6 +686,66 @@ Playwright edit-journey regression test, silent-measure fidelity in
 quantize (RESOLVED 2026-08-19, see above), and re-transcription
 head-pointer invalidation (RESOLVED 2026-08-19, see gotcha 8 above)).
 
+## YouTube import (network exception to the offline principle)
+
+Added: `POST /v1/imports/youtube` (`apps/api/src/aura_api/routers/imports.py`)
+downloads a YouTube video's audio via `yt-dlp` and registers it through the
+same `LocalStorageClient` path `POST /v1/uploads` uses, so the response is
+shape-compatible (`object_key`, plus an optional best-effort `title`) and
+Home's existing create-project flow (`chooseInstrument` in `Home.svelte`)
+consumes either source uninformed of which one produced it. `GET
+/v1/system/deps` gained a third `ytDlp: {found, version}` entry alongside
+`ffmpeg`/`ffprobe`.
+
+**This is the app's FIRST network-using feature.** Every other capability
+(transcription, editing, export) is deliberately fully offline — sub-project
+1 above ("Offline backend adaptation") exists specifically to guarantee
+that. YouTube import is a scoped, user-approved exception to that
+principle, not a reversal of it: it's the one optional path a user can
+choose to take onto the network, and only when they explicitly paste a URL.
+
+Design points worth knowing if extending this:
+
+- **yt-dlp is optional-on-PATH, not bundled.** Same guided-install pattern
+  as ffmpeg (`deps.ts`'s `INSTALL_COMMANDS`, now keyed by dependency name
+  instead of assuming ffmpeg is the only one) — checked via `shutil.which`,
+  with a per-OS one-line install command shown in the frontend when
+  missing. Unlike ffmpeg it is **non-blocking**: `SystemDepsResponse.allFound`
+  stays scoped to `ffmpeg`/`ffprobe` only, and yt-dlp missing never trips
+  Home's existing transcription-blocking banner — only the YouTube-import
+  affordance itself gates on it (`isYtDlpMissing` in `deps.ts`). yt-dlp is
+  also deliberately **not** added to the desktop app's deb `Depends`
+  (`apps/desktop/src-tauri/tauri.conf.json` still lists only `["ffmpeg"]`).
+- **Why not bundled: yt-dlp churns.** YouTube changes its player/delivery
+  internals often enough that yt-dlp ships frequent releases just to keep
+  working. A bundled, pinned copy would go stale between app releases in a
+  way ffmpeg (a stable, slow-moving dependency) doesn't. Relying on the
+  user's system package manager (`winget`/`brew`/`apt`) means yt-dlp stays
+  current automatically instead of the app needing its own update channel
+  for it.
+- **ToS note.** Downloading audio from YouTube may violate YouTube's Terms
+  of Service depending on jurisdiction and use. This is the user's
+  responsibility, not something the app enforces or adjudicates — the
+  feature is intended for content the user owns or is licensed to use
+  (e.g. their own uploads, content they have rights to transcribe). No
+  consent dialog or disclaimer was added; if that changes, it belongs in
+  the YouTube-import panel on Home, not buried in a settings screen.
+- **mp3, not the source codec.** The download always transcodes to mp3
+  (`-x --audio-format mp3`) because the transcription worker's probe step
+  only accepts `{"pcm_s16le", "mp3", "aac", "h264"}`
+  (`workers/transcription/src/aura_worker/ffmpeg_utils.py`'s
+  `_ALLOWED_CODECS`) — YouTube's native delivery codecs (webm/opus) would
+  fail probe otherwise.
+- **argv list, 300s timeout, 200m cap, temp dir cleaned up.** yt-dlp always
+  runs as a list (`subprocess.run([...], ...)`, never `shell=True` or
+  string interpolation) into a temp dir under `AURA_DATA_DIR/imports_tmp`,
+  deleted in a `finally` block regardless of outcome.
+- **URL validation checks the PARSED hostname**, not a substring of the raw
+  URL, on both sides (`_ALLOWED_HOSTS` in `imports.py`, mirrored in
+  `lib/youtube.ts`'s `isYoutubeUrl`) — specifically to reject the userinfo
+  trick `https://youtube.com@evil.com/...`, whose real (parsed) hostname is
+  `evil.com`.
+
 ## Working process (established this session, keep using it)
 
 This project uses the `superpowers` skill pack's workflow for every
