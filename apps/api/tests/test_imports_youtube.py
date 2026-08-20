@@ -12,6 +12,9 @@ VALID_URLS = [
     "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
     "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
     "https://youtu.be/dQw4w9WgXcQ",
+    # uppercase host -- urlsplit().hostname lowercases it, so this must be
+    # accepted the same as the lowercase form, not rejected.
+    "https://YOUTUBE.COM/watch?v=dQw4w9WgXcQ",
 ]
 
 INVALID_URLS = [
@@ -30,6 +33,9 @@ INVALID_URLS = [
     "",
     # not a URL at all
     "not a url",
+    # IPv6 literal host -- never in the allowlist, rejected like any other
+    # non-YouTube host.
+    "https://[::1]/watch?v=x",
 ]
 
 
@@ -65,6 +71,36 @@ def test_invalid_youtube_urls_rejected_with_422(url, client):
     resp = client.post("/v1/imports/youtube", json={"url": url})
     assert resp.status_code == 422, f"{url!r} should be rejected, got {resp.status_code}: {resp.text}"
     assert "detail" in resp.json()
+
+
+def test_nul_byte_in_url_returns_422_not_500(client, monkeypatch):
+    # `urlsplit(...).hostname` doesn't reject an embedded NUL byte living in
+    # the path/query (the hostname component itself is clean, so hostname
+    # validation passes it through) -- it's the OS-exec boundary,
+    # `subprocess.run`, that raises `ValueError: embedded null byte` when
+    # handed it as an argv element. Deliberately does NOT mock
+    # subprocess.run: this is the real call that must be guarded, and a
+    # nonexistent yt-dlp path is fine because Python validates argv strings
+    # (and raises) before it ever gets to exec/FileNotFoundError.
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    resp = client.post(
+        "/v1/imports/youtube",
+        json={"url": "https://youtube.com/watch?v=x\x00y"},
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail == "invalid URL"
+    # Must not leak the raw exception internals (path, "null byte", etc.)
+    assert "null byte" not in detail
+    assert "yt-dlp" not in detail
+
+
+def test_url_over_max_length_returns_422(client):
+    long_url = "https://youtube.com/watch?v=" + ("a" * 2048)
+    resp = client.post("/v1/imports/youtube", json={"url": long_url})
+    assert resp.status_code == 422
 
 
 def test_yt_dlp_missing_returns_409_with_machine_readable_detail(client, monkeypatch):

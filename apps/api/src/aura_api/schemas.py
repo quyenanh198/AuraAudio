@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 _ALLOWED_CONTENT_TYPES = {
     "audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4",
@@ -99,7 +99,11 @@ class SystemDepsResponse(BaseModel):
 
 
 class ImportYoutubeRequest(BaseModel):
-    url: str
+    # 2048 is a generous, conventional URL-length ceiling (well past any
+    # real YouTube watch/share URL) -- just a sanity bound against
+    # pathological input reaching the yt-dlp subprocess, not a functional
+    # requirement.
+    url: str = Field(max_length=2048)
 
 
 class ImportYoutubeResponse(BaseModel):

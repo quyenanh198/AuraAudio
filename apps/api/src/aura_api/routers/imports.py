@@ -118,6 +118,12 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
             f"{_TITLE_MARKER}%(title)s",
             "-o",
             f"{tmp_dir}/%(id)s.%(ext)s",
+            # `--` marks the end of options: defense-in-depth so a future
+            # loosening of `_validate_youtube_url` can't turn a
+            # dash-prefixed "url" into an extra yt-dlp flag. Unexploitable
+            # today (the hostname check already rejects anything that
+            # wouldn't parse as a real http(s) YouTube URL), but cheap.
+            "--",
             url,
         ]
         try:
@@ -133,6 +139,16 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
                 status_code=502,
                 detail=f"yt-dlp timed out after {_YT_DLP_TIMEOUT_SECONDS}s: {_stderr_tail(exc.stderr)}",
             ) from exc
+        except (OSError, ValueError) as exc:
+            # `urlsplit`/`.hostname` accept strings that later fail at the
+            # OS-exec boundary -- e.g. an embedded NUL byte in the path or
+            # query survives hostname validation (the hostname component
+            # itself is clean) but `subprocess.run` raises `ValueError:
+            # embedded null byte` when handed it as an argv element.
+            # Treated as a client-input problem (422), not a server error
+            # (502) or an internal-details leak (exc's message is
+            # deliberately not included).
+            raise HTTPException(status_code=422, detail="invalid URL") from exc
 
         if proc.returncode != 0:
             raise HTTPException(status_code=502, detail=f"yt-dlp failed: {_stderr_tail(proc.stderr)}")
