@@ -43,6 +43,38 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Windows runners execute this script under Git Bash (MINGW), which reports
+# host paths in POSIX form (/d/a/...). PyInstaller itself is a native Windows
+# Python process: it does not translate that form, so a path like /d/a/...
+# is read literally as a drive-less backslash path (\d\a\...) and fails to
+# resolve. --add-data's field separator is also os.pathsep, which is ';' on
+# Windows and ':' on POSIX -- the ':' used below only works on Linux/macOS.
+# CI run 32503305604 (v1.2.0 windows-msi job) hit exactly this: the fetch
+# step logged "verified and saved:
+# D:\a\AuraAudio\AuraAudio\workers\transcription\weights\piano\piano_transcription_crnn.pth"
+# and then PyInstaller failed with "ERROR: Unable to find
+# '\d\a\AuraAudio\AuraAudio\workers\transcription\weights\piano\piano_transcription_crnn.pth'
+# when adding binary and data files." for a file that had just been fetched
+# successfully. On Windows, convert each --add-data host path to native
+# Windows form with `cygpath -w` and join src:dest with ';' instead of ':'.
+# POSIX (Linux/macOS) paths and the ':' separator are unchanged from before.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    ADD_DATA_SEP=';'
+    PIANO_WEIGHTS_PATH="$(cygpath -w "${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth")"
+    THIRD_PARTY_NOTICES_PATH="$(cygpath -w "${REPO_ROOT}/THIRD_PARTY_NOTICES.md")"
+    DEMUCS_WEIGHTS_PATH="$(cygpath -w "${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th")"
+    DEMUCS_YAML_PATH="$(cygpath -w "${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml")"
+    ;;
+  *)
+    ADD_DATA_SEP=':'
+    PIANO_WEIGHTS_PATH="${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth"
+    THIRD_PARTY_NOTICES_PATH="${REPO_ROOT}/THIRD_PARTY_NOTICES.md"
+    DEMUCS_WEIGHTS_PATH="${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th"
+    DEMUCS_YAML_PATH="${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml"
+    ;;
+esac
+
 uv run --package aura-worker python workers/transcription/scripts/fetch_piano_weights.py
 uv run --package aura-worker python workers/transcription/scripts/fetch_demucs_weights.py
 
@@ -53,11 +85,11 @@ uv run --package aura-api pyinstaller \
   --workpath apps/desktop/build \
   --specpath apps/desktop \
   --collect-data basic_pitch \
-  --add-data "${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth:piano_weights" \
-  --add-data "${REPO_ROOT}/THIRD_PARTY_NOTICES.md:piano_weights" \
-  --add-data "${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th:demucs_weights" \
-  --add-data "${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml:demucs_weights" \
-  --add-data "${REPO_ROOT}/THIRD_PARTY_NOTICES.md:demucs_weights" \
+  --add-data "${PIANO_WEIGHTS_PATH}${ADD_DATA_SEP}piano_weights" \
+  --add-data "${THIRD_PARTY_NOTICES_PATH}${ADD_DATA_SEP}piano_weights" \
+  --add-data "${DEMUCS_WEIGHTS_PATH}${ADD_DATA_SEP}demucs_weights" \
+  --add-data "${DEMUCS_YAML_PATH}${ADD_DATA_SEP}demucs_weights" \
+  --add-data "${THIRD_PARTY_NOTICES_PATH}${ADD_DATA_SEP}demucs_weights" \
   --noconfirm \
   apps/desktop/run_backend.py
 
