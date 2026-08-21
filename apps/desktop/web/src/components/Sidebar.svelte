@@ -14,7 +14,7 @@
     stepOnset,
     validateMeasureNumber,
   } from "../lib/noteEdit";
-  import { isTauri, saveExport } from "../lib/saveExport";
+  import { isTauri, saveExport, savePdfBytes } from "../lib/saveExport";
   import type { EditOp, ProjectExportSummary, ScoreEvent, ScorePart } from "../lib/types";
 
   interface Props {
@@ -308,6 +308,16 @@
   let exportErrorByFormat = $state<Record<string, string | null>>({});
   const exportSavedTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** "pdf" isn't in EXPORT_FORMATS/exportItems (it has no server-side
+   * Export row — it's generated client-side on click, see
+   * handleExportPdfClick below), so its busy/error/saved state can't
+   * reuse `exportFor()`. `pdfExporting` gates the button specifically
+   * (a multi-page render can take a second or two — the brief calls this
+   * out explicitly) since exportErrorByFormat/exportSavedFormat's "pdf"
+   * key already covers error/saved feedback the same way the other two
+   * formats do. */
+  let pdfExporting = $state(false);
+
   function showExportSaved(format: string): void {
     exportSavedFormat = { ...exportSavedFormat, [format]: true };
     const pending = exportSavedTimeouts.get(format);
@@ -349,6 +359,61 @@
         ...exportErrorByFormat,
         [format]: err instanceof Error ? err.message : "Export failed.",
       };
+    }
+  }
+
+  /** Export PDF: unlike the two `<a download>`-backed exports above, there
+   * is no server-side Export row to link to — the PDF is generated
+   * entirely client-side (offscreen OSMD render -> jsPDF/svg2pdf.js, see
+   * lib/exportPdf.ts) from the SAME MusicXML export the notation view
+   * itself loads. Reuses that export's id + the identical
+   * `cache: "no-store"` fetch ScoreView.svelte's loadScore()/
+   * refreshAfterEdit() use (SESSION-HANDOFF.md's OSMD gotcha #2: the
+   * MusicXML download URL is stable across a rederive, only its BYTES
+   * change, so the browser's heuristic HTTP cache must be bypassed or a
+   * PDF exported right after an edit could render the pre-edit score).
+   *
+   * `savePdfBytes` handles both the Tauri native-Save-dialog path and the
+   * plain-browser Blob-download fallback itself (there's no `<a href>`
+   * for the click handler to fall back to here) — both "saved" and
+   * "fallback" mean a real download happened, so both show the same
+   * transient confirmation; only "cancelled" (the user dismissed the
+   * native dialog) is a no-op, matching the other two exports' contract.
+   */
+  async function handleExportPdfClick(): Promise<void> {
+    if (pdfExporting) return;
+    const musicxmlExport = exportFor("musicxml");
+    if (!musicxmlExport) return;
+
+    pdfExporting = true;
+    exportErrorByFormat = { ...exportErrorByFormat, pdf: null };
+    try {
+      const xmlResp = await fetch(api.exportDownloadUrl(musicxmlExport.id), { cache: "no-store" });
+      if (!xmlResp.ok) throw new Error(`${xmlResp.status}: ${await xmlResp.text()}`);
+      const xmlText = await xmlResp.text();
+
+      // Dynamic import: jsPDF + svg2pdf.js (and their small deps --
+      // cssesc, font-family-papandreou, svgpath, specificity) are a
+      // non-trivial chunk of bytes that only this one click path ever
+      // needs. A static top-level import would inline them into the
+      // app's main bundle for every user on every load; deferring the
+      // import to here keeps them out of it entirely until someone
+      // actually clicks "Export PDF" (per rules/web/performance.md:
+      // "Dynamically import heavy libraries").
+      const { exportScoreToPdf } = await import("../lib/exportPdf");
+      const bytes = await exportScoreToPdf(xmlText);
+      const result = await savePdfBytes(bytes, sanitizedFilename("pdf"));
+      if (result === "saved" || result === "fallback") {
+        showExportSaved("pdf");
+      }
+      // "cancelled": the user dismissed the native dialog — no-op by design.
+    } catch (err) {
+      exportErrorByFormat = {
+        ...exportErrorByFormat,
+        pdf: err instanceof Error ? err.message : "PDF export failed.",
+      };
+    } finally {
+      pdfExporting = false;
     }
   }
 
@@ -694,6 +759,23 @@
               {/if}
             </div>
           {/each}
+          <div class="export-row">
+            <button
+              type="button"
+              class="export-button"
+              class:disabled={!exportFor("musicxml") || pdfExporting}
+              disabled={!exportFor("musicxml") || pdfExporting}
+              onclick={handleExportPdfClick}
+            >
+              {pdfExporting ? "Generating PDF…" : "Export PDF"}
+            </button>
+            {#if exportSavedFormat.pdf}
+              <span class="export-status">Saved</span>
+            {/if}
+            {#if exportErrorByFormat.pdf}
+              <p class="field-error">{exportErrorByFormat.pdf}</p>
+            {/if}
+          </div>
         </div>
       </section>
     </div>

@@ -13,8 +13,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "@tauri-apps/cli": "^2.11.4",
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tauri-apps/cli": "^2.11.4",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.3",
     "playwright": "^1.62.1",
@@ -27,7 +27,9 @@
   "dependencies": {
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "jspdf": "^4.2.1",
     "opensheetmusicdisplay": "^2.1.2",
-    "smplr": "^1.0.0"
+    "smplr": "^1.0.0",
+    "svg2pdf.js": "^2.7.0"
   }
 }
