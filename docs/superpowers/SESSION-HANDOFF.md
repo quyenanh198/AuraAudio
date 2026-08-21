@@ -1352,6 +1352,25 @@ next; 3 and 4 proceed only if 0-2 land OK:
 
 ## Release
 
+**v1.2.0 IS LIVE** (published 2026-08-21T18:01Z, tag at main@d533831):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.2.0 —
+`AuraAudio_1.2.0_amd64.deb` (1,123,919,168 B),
+`AuraAudio_1.2.0_aarch64.dmg` (809,987,253 B),
+`AuraAudio_1.2.0_x64_en-US.msi` (760,038,940 B). Installers now bundle
+the piano CRNN checkpoint (172MB) and demucs htdemucs_6s weights (55MB)
+— hence ~230-440MB heavier than v1.1.0. New since v1.1.0: the full
+detection-quality program (benchmark harness; ghost-note filtering +
+per-instrument thresholds, onset F1 0.540→0.971 on the original suite;
+dedicated piano transcription model, real-piano F1 0.629→0.980; opt-in
+demucs source separation, guitar-only, deterministic shifts=0), PDF
+export, and the Windows PyInstaller path fix below. Attempt 1 (run
+32503305604) failed ONLY on windows-msi: build-backend.sh under Git
+Bash passed POSIX-style /d/a/... paths into PyInstaller --add-data,
+which Windows read as drive-less paths; fixed in d533831 (cygpath -w +
+';' separator on MINGW/MSYS, POSIX unchanged); attempt 2 (run
+32509409553) green end-to-end. Demucs weights-license risk: accepted by
+the product owner 2026-08-22 for personal-use context.
+
 **v1.1.0 IS LIVE** (published 2026-08-20T01:21Z, run 32320010770 on
 main@dfe5aa0, green on the first attempt):
 https://github.com/quyenanh198/AuraAudio/releases/tag/v1.1.0 —
