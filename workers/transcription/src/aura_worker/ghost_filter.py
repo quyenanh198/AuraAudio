@@ -27,6 +27,49 @@ half) -- that pattern's confidence and duration overlap real notes' too
 much to filter safely without a per-note "is this the same performed note
 continuing" heuristic, which is out of this item's scope; see the DQ-1
 report's diagnosis section for the measured residual.
+
+RE-DERIVATION (post-review, docs/benchmarks/2026-08-21-dq1b.md): code
+review flagged that MIN_DURATION_S was derived from a suite whose fastest
+case was eighth notes @130bpm (0.196s notes) and could plausibly delete a
+genuine fast note (e.g. 16th notes: 0.125s @120bpm, 0.083s @180bpm) that
+never got a chance to prove otherwise. Two 16th-note-run fixtures
+(`guitar_sixteenth_run_c_major_140`, `piano_sixteenth_run_c_major_140` --
+nominal note length ~0.091s, well under MIN_DURATION_S) were added to
+`test_fixtures.benchmark_suite` specifically to stress this. Re-measuring
+against basic-pitch's REAL raw output (at the tuned per-instrument
+thresholds -- see instrument_thresholds.py) on the enlarged 12-fixture
+suite found the true positive/ghost separation holds with the existing
+value, and additionally explains WHY: basic-pitch's own onset/frame
+detection (not this filter) is the actual bottleneck on very fast
+passages -- at the current thresholds it never emits a raw note anywhere
+near the ~0.09s nominal length for these fixtures; consecutive close
+onsets get merged into fewer, longer detected notes instead (observed raw
+durations 0.15-0.4s on the 16th-note fixtures, same range as normal-tempo
+notes). Measured on the enlarged suite:
+  - smallest TRUE POSITIVE raw duration: 0.1858s (from
+    guitar_sixteenth_run_c_major_140 -- still comfortably above
+    MIN_DURATION_S, i.e. the floor is not what limits fast-passage
+    recall).
+  - largest GHOST raw duration below the floor: 0.1393s (from the
+    enlarged suite generally, well separated from the true-positive
+    floor above).
+0.15 sits cleanly between those two measured values with margin on both
+sides (+0.011s above the ghost ceiling, -0.036s below the true-positive
+floor), so MIN_DURATION_S is unchanged -- the enlarged suite CONFIRMS this
+value rather than requiring a new one. The fast-passage recall loss that
+does occur (guitar_sixteenth_run: onset F1 0.857; piano_sixteenth_run:
+onset F1 0.476 -- see docs/benchmarks/2026-08-21-dq1b.md) is basic-pitch's
+own onset-merging behavior at very fast tempi, not this module's doing;
+out of this item's scope to fix (would need basic-pitch's own
+`minimum_note_length` parameter tuned per instrument too, or a genuinely
+different onset-detection approach).
+
+METHODOLOGY CAVEAT: every constant in this module (and in
+instrument_thresholds.py) is tuned and gated on the same synthetic
+benchmark suite it is measured against -- there is no held-out fixture set,
+and no real-recording manifest run has validated these values yet (see
+docs/superpowers/SESSION-HANDOFF.md's item 1 entry). Treat "removes zero
+true positives" as "on this suite", not as a universal guarantee.
 """
 from __future__ import annotations
 
@@ -39,11 +82,16 @@ from score_schema.models import NoteEvent
 # notes (harmonic/overtone artifacts, typically 0.28-0.41 confidence).
 MIN_CONFIDENCE = 0.35
 
-# Every true positive across the same suite had duration >= 0.186s. 0.15s is
-# the largest round threshold below that measured floor. basic-pitch's own
+# Re-derived against the enlarged 12-fixture suite (see this module's
+# docstring "RE-DERIVATION" paragraph): the smallest true-positive raw
+# duration measured is 0.1858s (from a genuine 16th-note run fixture added
+# specifically to stress this), and the largest ghost duration below that
+# is 0.1393s. 0.15s sits cleanly between the two with margin on both
+# sides, so it is kept rather than moved. basic-pitch's own
 # `minimum_note_length` default (127.7ms) already filters shorter notes
-# before they reach this stage; this floor is a second, independent line of
-# defense that also documents the assumption in one place.
+# before they reach this stage; this floor is a second, independent line
+# of defense that also documents the assumption in one place. NOT a
+# tempo-independent guarantee -- see the docstring's methodology caveat.
 MIN_DURATION_S = 0.15
 
 # A note an octave (12 semitones -- MIDI pitches are already rounded to
@@ -66,6 +114,22 @@ OCTAVE_SIMULTANEITY_S = 0.05
 # both notes) survives. 0.75 was chosen so the diagnosis's real octave-
 # shadow example (0.392 vs. a simultaneous 0.715) is caught with margin,
 # while two independently-confident notes a genuine octave apart are not.
+#
+# KNOWN RISK (unmitigated): this ratio was tuned against exactly one
+# observed example, not a distribution, and basic-pitch's `confidence`
+# (mean frame activation) has no principled way to distinguish "a harmonic
+# overtone mis-detected as its own note" from "a real note played much
+# more softly an octave away from a louder one" -- both look identical to
+# this heuristic (low confidence, exact octave, simultaneous onset). A
+# genuinely soft octave-doubled note WILL be deleted by this filter today.
+# Mitigation: deleted notes are not permanently lost -- they are
+# recoverable through the desktop app's editor (add-note flow, Task 7 of
+# the semantic-editing sub-project), so the failure mode is "extra manual
+# correction", not silent, unrecoverable data loss. No suite fixture
+# currently exercises a genuine soft octave-doubled note, so this risk is
+# not benchmark-covered; a real-recording manifest run (see the module
+# docstring's methodology caveat) is the next opportunity to find out
+# whether it matters in practice.
 OCTAVE_CONFIDENCE_RATIO = 0.75
 
 

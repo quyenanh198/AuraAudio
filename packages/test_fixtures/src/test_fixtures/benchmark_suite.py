@@ -18,7 +18,7 @@ from __future__ import annotations
 from test_fixtures.generate import scale_pitches
 from test_fixtures.reference import NoteSpec, ReferenceClipSpec
 
-BENCHMARK_SUITE_VERSION = "2026-08-21-v1"
+BENCHMARK_SUITE_VERSION = "2026-08-21-v2"
 
 
 def _melody_notes(
@@ -191,6 +191,41 @@ def get_benchmark_suite() -> list[ReferenceClipSpec]:
             tempo_bpm=130.0,
             meter="4/4",
             key="E minor",
+            instrument="piano",
+        )
+    )
+
+    # --- Fast passage (16th notes), guitar + piano -----------------------
+    # Added post-review (docs/benchmarks/2026-08-21-dq1b.md): the original
+    # suite's fastest case was eighth notes @130bpm (0.196s notes), which
+    # never stressed aura_worker.ghost_filter.MIN_DURATION_S against a
+    # genuinely short real note. An ascending-then-descending one-octave
+    # 16th-note run @140bpm (~0.091s nominal note length, well under
+    # MIN_DURATION_S=0.15) closes that gap for both timbres.
+    c_major_run = scale_pitches("C major", tonic_midi_base=48)
+    c_major_run_up_and_down = c_major_run + list(reversed(c_major_run[:-1]))
+    specs.append(
+        ReferenceClipSpec(
+            name="guitar_sixteenth_run_c_major_140",
+            notes=_melody_notes(c_major_run_up_and_down, tempo_bpm=140.0, beats_per_note=0.25),
+            timbre="pluck",
+            tempo_bpm=140.0,
+            meter="4/4",
+            key="C major",
+            instrument="guitar",
+        )
+    )
+
+    piano_c_major_run = scale_pitches("C major", tonic_midi_base=60)
+    piano_c_major_run_up_and_down = piano_c_major_run + list(reversed(piano_c_major_run[:-1]))
+    specs.append(
+        ReferenceClipSpec(
+            name="piano_sixteenth_run_c_major_140",
+            notes=_melody_notes(piano_c_major_run_up_and_down, tempo_bpm=140.0, beats_per_note=0.25),
+            timbre="tone",
+            tempo_bpm=140.0,
+            meter="4/4",
+            key="C major",
             instrument="piano",
         )
     )

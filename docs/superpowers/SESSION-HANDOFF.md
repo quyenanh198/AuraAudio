@@ -935,6 +935,68 @@ next; 3 and 4 proceed only if 0-2 land OK:
    is also the natural place architecturally, since ghost notes are an
    inference-stage artifact and `quantize`/`structure` both already
    consume the filtered list downstream.
+
+   **Post-commit code review (`6f15b8e`) verdict: with fixes, now
+   addressed — see `docs/benchmarks/2026-08-21-dq1b.md`.** The
+   improvement itself was independently reproduced bit-for-bit (0.971) and
+   traced end-to-end. Three follow-ups, all closed same-session:
+   - **Fast-note deletion risk — CLOSED, not just documented.** The
+     reviewer's concern: `MIN_DURATION_S=0.15` could silently delete
+     genuine 16th notes (0.125s @120bpm, 0.083s @180bpm), untested because
+     the original suite's fastest case was eighth notes @130bpm (0.196s).
+     Fix: two 16th-note-run fixtures added to `test_fixtures.benchmark_suite`
+     (`BENCHMARK_SUITE_VERSION` → `2026-08-21-v2`, nominal note length
+     ~0.091s), then re-measured against basic-pitch's REAL raw output at
+     production thresholds. Result: the smallest true-positive raw
+     duration measured is 0.1858s and the largest ghost duration below the
+     floor is 0.1393s — `MIN_DURATION_S=0.15` sits cleanly between them
+     and is CONFIRMED, not moved. The actual fast-passage recall loss that
+     remains (guitar 0.857, piano 0.476 onset F1) is basic-pitch's own
+     onset-merging behavior, not this filter — proven directly by a new
+     regression test
+     (`test_fast_passage_regression.py::test_ghost_filter_duration_floor_is_not_the_bottleneck_on_a_fast_passage`,
+     asserts filtering never reduces onset F1 below the unfiltered value
+     on the fast fixture). A tempting further fix (lower piano's
+     `frame_threshold` from 0.1 to 0.2, which helps the fast fixture) was
+     evaluated and deliberately NOT taken — it would regress the original
+     4 piano fixtures beyond DQ-1's own 0.05-drop gate (e.g.
+     `piano_melody_c_major_100` 1.000 → ~0.94), so it's recorded as a
+     disclosed trade-off in `aura_worker.instrument_thresholds`'s
+     docstring instead of silently applied. The original 10 fixtures are
+     bit-for-bit unchanged by any of this (zero delta, see dq1b.md);
+     `test_benchmark_regression.py`'s 3-fixture subset and `FLOOR` (0.83)
+     are unaffected since none of those 3 fixtures were touched.
+   - **Grid-search evidence now committed and rerunnable.** The "confirmed
+     by a finer grid, not sweep noise" claim (piano `frame_threshold=0.1`)
+     previously cited a table that didn't exist in git. Fixed:
+     `workers/transcription/scripts/tune_instrument_thresholds.py` (a
+     real, rerunnable script) plus its last output,
+     `docs/benchmarks/2026-08-21-threshold-sweep.md`, are both committed —
+     every number in `aura_worker.instrument_thresholds`'s docstring now
+     traces to that file.
+   - **Methodology caveat and octave-dedupe risk, now stated explicitly**
+     (in both `aura_worker.ghost_filter`'s and
+     `aura_worker.instrument_thresholds`'s docstrings, not just here):
+     every constant in this item — confidence floor, duration floor,
+     octave-shadow ratio, both instruments' onset/frame thresholds — is
+     tuned AND gated on the same synthetic benchmark suite it's measured
+     against. There is no held-out fixture set, and no real-recording
+     manifest run (`--manifest`, see DQ-0's harness) has validated any of
+     it yet — these are honest, suite-relative optima, not a guarantee of
+     real-world behavior. Separately, the octave-shadow dedupe
+     (`OCTAVE_CONFIDENCE_RATIO=0.75`) has a real, unmitigated blind spot:
+     basic-pitch's `confidence` (mean frame activation) cannot in
+     principle distinguish "a harmonic overtone mis-detected as its own
+     note" from "a real note played much more softly an octave away from
+     a louder one" — both look identical to this heuristic, and the ratio
+     itself was tuned against exactly one observed example, not a
+     distribution. No suite fixture currently exercises a genuine soft
+     octave-doubled note, so this risk is real but not benchmark-covered.
+     Mitigation is real but partial: a wrongly-deleted note is
+     recoverable through the desktop app's editor (add-note flow, see
+     sub-project 4 above) rather than silently, permanently lost — but
+     that mitigation requires the user to notice and doesn't reduce the
+     odds of the deletion happening in the first place.
 2. **Piano-specific model.** Dedicated piano transcription model behind
    the existing engine adapter (piano projects only; guitar keeps
    basic-pitch). Weights must be bundled (offline rule) and licensed
