@@ -73,6 +73,31 @@ def test_separate_guitar_produces_valid_wav_from_real_weights(monkeypatch, workd
         assert actual_duration_s == pytest.approx(duration_s, abs=1.0)
 
 
+def test_separate_guitar_is_deterministic_across_calls(monkeypatch, workdir):
+    """Pins the fix for a real code-review finding: apply_model's own
+    `shifts` parameter defaults to 1 (a random time-shift augmentation,
+    not just floating-point noise), which made two back-to-back calls on
+    identical input produce meaningfully different output -- see
+    separate_guitar's DETERMINISM docstring paragraph and
+    docs/benchmarks/2026-08-21-dq3.md's "Determinism" section. Two
+    separate calls (not just two reads of one cached output) must produce
+    bit-for-bit identical bytes."""
+    monkeypatch.delenv("AURA_DEMUCS_WEIGHTS_DIR", raising=False)
+    monkeypatch.setattr(separation, "_model", None)
+
+    sample_rate = 22050
+    duration_s = 1.5
+    t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+    signal = (0.3 * np.sin(2 * np.pi * 220 * t) + 0.15 * np.sin(2 * np.pi * 440 * t)) * 32767
+    source_path = workdir / "tone.wav"
+    wavfile.write(str(source_path), sample_rate, signal.astype(np.int16))
+
+    out1 = separate_guitar(source_path, workdir / "sep1.wav")
+    out2 = separate_guitar(source_path, workdir / "sep2.wav")
+
+    assert out1.read_bytes() == out2.read_bytes()
+
+
 def test_separate_guitar_handles_silent_input_without_crashing(monkeypatch, workdir):
     """Degenerate all-zero input would divide by zero in the
     normalize-by-std step without the explicit guard -- exercises that

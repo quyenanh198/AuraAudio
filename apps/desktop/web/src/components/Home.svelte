@@ -4,6 +4,7 @@
   import { api } from "../lib/api";
   import { deps, detectPlatform, installCommandFor, isYtDlpMissing } from "../lib/deps";
   import { projects } from "../lib/projects";
+  import { separationNoopNote } from "../lib/separation";
   import type { ProjectListItem } from "../lib/types";
   import { defaultYoutubeTitle, isYoutubeUrl } from "../lib/youtube";
 
@@ -31,7 +32,10 @@
   // which instrument button the user ends up clicking (this panel doesn't
   // know which yet), but only has an effect for guitar; picking Piano with
   // it checked is a harmless no-op on the backend. Never defaults to true.
+  // separationPianoNote surfaces that no-op instead of leaving it silent --
+  // see lib/separation.ts (also the target of separation.test.ts).
   let separateSource = $state(false);
+  const separationPianoNote = $derived(separationNoopNote(separateSource, "piano"));
   let creating = $state(false);
   let creationError: string | null = $state(null);
   let retryingId: string | null = $state(null);
@@ -365,13 +369,16 @@
           <p class="prompt">Which instrument is this?</p>
           <label class="separate-toggle">
             <input type="checkbox" bind:checked={separateSource} disabled={creating} />
-            Isolate instrument from mix
+            Isolate instrument from mix (Guitar only)
           </label>
           <p class="separate-hint">
             For recordings with vocals or a full band (e.g. YouTube imports) — guitar only, and
             adds roughly 20 seconds to 2 minutes of extra processing depending on length. Leave
             unchecked for a clean solo recording; separation can slightly reduce accuracy there.
           </p>
+          {#if separationPianoNote}
+            <p class="separate-piano-note" role="status">{separationPianoNote}</p>
+          {/if}
           <!-- Deliberate: only gate on status === "missing" (a confirmed-absent
                binary), never on "checking" or "error". A failed *check* isn't
                proof ffmpeg is missing -- most commonly it means the backend
@@ -396,7 +403,7 @@
               disabled={creating || $deps.status === "missing"}
               title={$deps.status === "missing"
                 ? `ffmpeg is required for transcription — install it below, then "Check again".`
-                : undefined}
+                : separationPianoNote ?? undefined}
             >
               {@render pianoIcon()} Piano
             </button>
@@ -736,6 +743,15 @@
     margin: -4px 0 0;
     font-size: 11px;
     color: var(--dim);
+    max-width: 380px;
+    text-align: center;
+  }
+
+  .separate-piano-note {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
     max-width: 380px;
     text-align: center;
   }

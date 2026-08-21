@@ -118,6 +118,28 @@ def separate_guitar(source_path: Path, out_path: Path) -> Path:
     to `out_path` as a mono WAV at the model's native sample rate. Returns
     `out_path`.
 
+    DETERMINISM: `apply_model`'s own `shifts` parameter defaults to `1`,
+    not `0` -- undocumented in demucs's own docstring, found by direct
+    measurement, not upstream's docs. A `shifts=1` (or higher) call applies
+    a genuinely RANDOM time-shift test-time-augmentation trick each
+    invocation (shift the input, run the model, shift back), not just
+    floating-point non-associativity noise: two back-to-back calls on the
+    IDENTICAL decoded tensor differed by 0.24 in raw stem amplitude (14% of
+    the stem's own peak) with the default. This surfaced as unreproducible
+    benchmark deltas in a code review of the first version of this module
+    -- see docs/benchmarks/2026-08-21-dq3.md's "Determinism" section for
+    the full before/after. Fixed by passing `shifts=0` explicitly below,
+    which disables that augmentation entirely: verified via a real,
+    isolated test (identical decoded input tensor, `torch.equal` on the
+    raw output) that this gives bit-for-bit identical results run to run,
+    IN-PROCESS and ACROSS SEPARATE PROCESS INVOCATIONS, at the DEFAULT
+    thread count -- no thread-pinning needed, and thread-pinning alone
+    (without `shifts=0`) does NOT fix it, since the random shift is the
+    actual root cause, not a parallel-reduction ordering effect.
+    `torch.manual_seed` is not required either for the same reason (there
+    is no remaining randomness to seed once `shifts=0` removes the only
+    random operation in this code path).
+
     Deliberately downmixes to mono here (rather than preserving stereo):
     every downstream stage (normalize.py) downmixes to mono anyway, and
     demucs's own separation quality depends on the STEREO input it
@@ -142,7 +164,10 @@ def separate_guitar(source_path: Path, out_path: Path) -> Path:
     normalized = (wav - ref.mean()) / ref_std
 
     with torch.no_grad():
-        sources = apply_model(model, normalized[None], device="cpu", progress=False, split=True, overlap=0.25)[0]
+        sources = apply_model(
+            model, normalized[None], device="cpu", progress=False, split=True, overlap=0.25,
+            shifts=0,  # disables random shift augmentation -- see docstring's DETERMINISM paragraph
+        )[0]
     sources = sources * ref_std + ref.mean()
 
     stem = sum(sources[model.sources.index(name)].mean(0) for name in _TARGET_STEMS).numpy()
