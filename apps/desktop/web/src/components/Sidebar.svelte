@@ -389,7 +389,12 @@
     exportErrorByFormat = { ...exportErrorByFormat, pdf: null };
     try {
       const xmlResp = await fetch(api.exportDownloadUrl(musicxmlExport.id), { cache: "no-store" });
-      if (!xmlResp.ok) throw new Error(`${xmlResp.status}: ${await xmlResp.text()}`);
+      // Status + statusText only — matches saveExport.ts's own convention
+      // for this exact class of error, not the raw response body (which
+      // could be an arbitrarily large HTML/JSON error page from a proxy
+      // or the dev server, not something fit for a one-line inline
+      // field-error message).
+      if (!xmlResp.ok) throw new Error(`MusicXML fetch failed: ${xmlResp.status} ${xmlResp.statusText}`);
       const xmlText = await xmlResp.text();
 
       // Dynamic import: jsPDF + svg2pdf.js (and their small deps --

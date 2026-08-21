@@ -256,4 +256,55 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
 
     expect(normalizedDownloaded).toContain(expectedFragment);
   });
+
+  test("exports a real PDF rendered from the current score", async () => {
+    // The highest-risk path in lib/exportPdf.ts (real, offscreen OSMD
+    // render -> `svg[id^="osmdSvgPage"]` selector -> real jsPDF/svg2pdf.js
+    // bytes) has NO coverage anywhere else: apps/desktop/web/vitest.config.ts
+    // runs `environment: "node"` with no jsdom, so exportPdf.test.ts can
+    // only unit-test the pure jsPDF/svg2pdf orchestration seam with fake
+    // SVGElement stand-ins, never a real OSMD render. This is deliberately
+    // the ONE place that exercises the real thing, so an OSMD upgrade that
+    // changes its page-id scheme (or anything else along this path) fails
+    // loudly here instead of only at runtime for a real user.
+    //
+    // This spec drives a real (non-Tauri) browser via Playwright, so
+    // Sidebar.svelte's `savePdfBytes()` call takes the plain-browser
+    // fallback branch (see saveExport.ts's `downloadBlobInBrowser`): a
+    // `Blob` object URL through a temporary, DOM-attached `<a download>`
+    // that is `.click()`ed once — exactly the same browser download
+    // mechanism `page.waitForEvent("download")` already observes for the
+    // MusicXML export above (that one's `<a>` is static/server-backed;
+    // this one's is built and clicked from JS, but the resulting browser
+    // download event is indistinguishable to Playwright either way).
+    const downloadPromise = page.waitForEvent("download", { timeout: RENDER_TIMEOUT_MS });
+    await page.getByRole("button", { name: "Export PDF", exact: true }).click();
+    const download = await downloadPromise;
+
+    // Checked BEFORE the file save/read below (not after): the "Saved"
+    // confirmation (`.export-status`, shown for both "saved" and
+    // "fallback" results — see handleExportPdfClick's own comment) fades
+    // out and is removed from the DOM after EXPORT_STATUS_MS (2s,
+    // Sidebar.svelte) — asserting on it immediately, before any
+    // additional file I/O, avoids racing that fade-out.
+    const pdfRow = page
+      .locator(".export-row")
+      .filter({ has: page.getByRole("button", { name: "Export PDF", exact: true }) });
+    await expect(pdfRow.locator(".export-status")).toBeVisible();
+
+    const downloadedPath = path.join(workDir, "exported.pdf");
+    await download.saveAs(downloadedPath);
+    const bytes = fs.readFileSync(downloadedPath);
+
+    // "%PDF" is the standard PDF file signature (the first thing any real
+    // reader checks) -- confirms jsPDF actually produced a PDF document,
+    // not e.g. an empty file or a stringified error.
+    expect(bytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
+    // A real rendered page (fonts, engraving, at least one system) is
+    // comfortably more than a few KB -- jsPDF's own fixed per-document
+    // overhead alone is already a meaningful fraction of this. A value in
+    // the hundreds of bytes would mean an essentially-empty/blank page
+    // silently made it through instead of the real notation.
+    expect(bytes.length).toBeGreaterThan(5_000);
+  });
 });

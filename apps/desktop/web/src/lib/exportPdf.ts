@@ -107,7 +107,12 @@ export async function renderScorePagesToSvg(xmlText: string): Promise<SVGElement
     if (svgs.length === 0) throw new Error("OSMD produced no pages to export.");
     // Cloned so the returned elements survive this function's own
     // cleanup below -- removing `container` would otherwise detach them
-    // too.
+    // too. Safe for the detached clone to stay detached all the way to
+    // svg2pdf() in assemblePdfFromSvgPages(): svg2pdf does its own text
+    // measurement via a SEPARATE hidden `<svg><text>` node it appends to
+    // `document.body` itself (and removes when done, `cleanupTextMeasuring()`
+    // in the installed 2.7.0 bundle) -- it never relies on the passed-in
+    // element itself being attached/laid-out.
     return svgs.map((svg) => svg.cloneNode(true) as SVGElement);
   } finally {
     osmd.clear();
