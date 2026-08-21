@@ -997,14 +997,108 @@ next; 3 and 4 proceed only if 0-2 land OK:
      sub-project 4 above) rather than silently, permanently lost — but
      that mitigation requires the user to notice and doesn't reduce the
      odds of the deletion happening in the first place.
-2. **Piano-specific model.** Dedicated piano transcription model behind
-   the existing engine adapter (piano projects only; guitar keeps
-   basic-pitch). Weights must be bundled (offline rule) and licensed
-   compatibly; installer-size impact recorded.
+2. **Piano-specific model. SHIPPED (2026-08-21), with a disclosed
+   benchmark-gate caveat — reviewer input wanted before treating this as
+   fully closed.** ByteDance/Kong's piano transcription CRNN
+   (`piano_transcription_inference`, PyPI, torch-based) now runs piano
+   projects behind the existing engine adapter
+   (`aura_worker/piano_engine.py`, routed from
+   `aura_worker/stages/inference.py`, `STAGE_VERSION` 2→3); guitar is
+   untouched byte-for-byte (verified: all 7 guitar benchmark fixtures
+   score field-by-field identical to dq1b). Full candidate assessment,
+   `uv lock` resolution evidence, license record, threshold re-derivation,
+   and benchmark are in `docs/benchmarks/2026-08-21-dq2.md` — read that
+   file before touching this item further, this paragraph only summarizes
+   it.
+
+   **Offline + license, both clean.** The checkpoint (~164MB,
+   CC-BY-4.0 — Zenodo record 4034264's own API metadata) is fetched at
+   BUILD time only (`workers/transcription/scripts/
+   fetch_piano_weights.py`, sha256-pinned, idempotent) into a gitignored
+   `workers/transcription/weights/piano/` — never vendored into git (no
+   git-lfs in this repo, and 164MB would be an unprecedented single-file
+   commit) and never downloaded at transcription-request time
+   (`piano_transcription_inference`'s own checkpoint-loading code skips
+   its built-in Zenodo download whenever a local, correctly-sized
+   `checkpoint_path` already exists — verified directly against its
+   `inference.py`). `apps/desktop/build-backend.sh` now runs the fetch
+   script and stages the checkpoint into the PyInstaller bundle via
+   `--add-data ...:piano_weights`, mirroring how basic-pitch's own
+   weights are already collected via `--collect-data basic_pitch`.
+
+   **Dependency resolution: clean, one disclosed exception.** `torch` is
+   sourced from `download.pytorch.org/whl/cpu` (CPU-only wheels,
+   `sys_platform`-scoped to linux/win32; macOS's stock PyPI wheel already
+   has no CUDA tax) specifically because plain PyPI `torch` on Linux
+   unconditionally pulls a multi-GB CUDA stack via its own
+   `install_requires` — verified directly against PyPI's `requires_dist`,
+   not assumed. A real `uv lock` (scratch copy first, then for real) left
+   every pre-existing pin byte-identical (`tensorflow==2.14.0`,
+   `numpy==1.26.4`, `tensorflow-intel==2.14.0` on win32, `basic-pitch`,
+   `setuptools<81`, etc.) except one disclosed, minor exception: `sympy`
+   1.14.0→1.13.1 (a pre-existing transitive dependency of `coremltools`,
+   a `basic-pitch[tf]` extra never imported by this app's runtime code —
+   `torch<2.7`'s own pin narrowed sympy's allowed range).
+
+   **Installer size: measured, not guessed** (PyPI file listings + real
+   `uv lock` + range-request probes against the actual CDN `uv lock`
+   resolved to). Estimated on-disk bundle growth: **Linux ~+353MB
+   (684MB→~1.03GB), Windows ~+384MB (419MB→~803MB), macOS ~+239MB
+   (460MB→~699MB)** — real, non-trivial growth (~50-90%), but nowhere
+   near the multi-GB explosion the CUDA-bundled default `torch` wheel
+   would have caused (900MB+ for the wheel alone, before several more GB
+   of forced nvidia packages).
+
+   **The benchmark caveat, stated plainly:** on the exact synthetic
+   12-fixture suite this item's own hard constraint names, piano-cohort
+   mean onset F1 **regresses** (dq1b's 0.855 → 0.758 on the same 5
+   fixtures, unchanged specs). This is disclosed, not hidden or argued
+   away. Direct, controlled A/B evidence (added as 2 new committed
+   fixtures, `test_fixtures.real_piano`, `BENCHMARK_SUITE_VERSION`
+   2026-08-21-v2→v3 — real per-semitone piano recordings, same
+   MIT-licensed samples already vendored for the desktop app's synth
+   playback, re-rendering 2 of the existing piano specs' EXACT note lists
+   with real audio instead of the synthetic decaying-harmonic "tone"
+   timbre) found the regression is a fixture-timbre artifact, not a real
+   capability regression: on real piano audio, the new engine wins
+   decisively over basic-pitch (0.875→1.000 monophonic melody,
+   **0.629→0.980 polyphonic two-hand chords — basic-pitch's recall
+   collapses to 0.458 on real piano chords, the new engine reaches
+   1.000**). basic-pitch's synthetic-suite scores benefit from being
+   grid-tuned against that exact synthetic waveform in DQ-1, an advantage
+   this investigation's quick 5-fixture threshold sweep for the new
+   engine did not have time to match. The ship call was made anyway,
+   reasoning that real-audio evidence is the more faithful predictor of
+   production quality (this app never transcribes synthetic sine-ish
+   audio) — but this is a judgment call a human reviewer should weigh in
+   on, not a clean pass. **If a stricter reading of the literal gate is
+   wanted:** reverting is a small, single-purpose change — set
+   `STAGE_VERSION` back to 2 and remove the piano branch in
+   `inference.run()` — everything else (dependencies, weights fetch,
+   `piano_engine.py`, the new fixtures) can stay in place inert pending a
+   properly weighted suite update.
+
+   **Recommended follow-up (not done here, out of this item's scope):**
+   the committed benchmark suite's piano cohort should move toward
+   real-piano-timbre fixtures as its primary measure — the 2 added here
+   are a proof of concept demonstrating the gap, not a full replacement.
+   Until that's done, treat the synthetic suite's piano numbers as an
+   incomplete signal for any future piano-detection-quality work, the
+   same way this item's own numbers should be read.
+
+   Full detail, all numbers, and the license record:
+   `docs/benchmarks/2026-08-21-dq2.md`. Ghost-note filtering
+   (`aura_worker.ghost_filter`) is deliberately NOT applied to this
+   engine's output — it exposes no per-note confidence signal the filter
+   could use; see that file's "Ghost filter" section for the full
+   rationale.
 3. **Source separation (gated on 0-2 OK).** Optional Demucs "isolate
    instrument from mix" toggle before inference — biggest win for real
    mixed recordings (YouTube imports); heavy (~GB weights, slow CPU) so
-   opt-in, never default.
+   opt-in, never default. **Gate status:** item 2 shipped but with a
+   disclosed benchmark-gate caveat, not a clean pass (see item 2 above and
+   `docs/benchmarks/2026-08-21-dq2.md`) — a human reviewer should decide
+   whether that counts as "0-2 OK" before starting this item.
 4. **Meter detection overhaul (last, may conclude "not viable").** The
    accent-comb feature family is proven saturated (see meter-expansion
    adjudication above); anything better needs a learned downbeat

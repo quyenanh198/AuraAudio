@@ -12,10 +12,24 @@
 # flag the bundle boots and serves /healthz fine, but any real transcription
 # request fails at model-load time. See task-1-report.md for how this was
 # found (a real basic-pitch inference smoke test, not just healthz).
+#
+# --add-data ...weights/piano/...:piano_weights (DQ-2, detection-quality
+# roadmap item 2): the piano transcription model's checkpoint is NOT
+# PyPI package data like basic-pitch's weights are -- it's fetched at
+# build time by fetch_piano_weights.py (checksum-verified, see that
+# script's module docstring for why it isn't vendored into git) into
+# workers/transcription/weights/piano/. --add-data stages it into the
+# bundle at <bundle_root>/piano_weights/, matching
+# aura_worker.piano_engine._resolve_checkpoint_path's frozen-mode lookup
+# (sys._MEIPASS / "piano_weights" / ...). Fetched here (not assumed
+# already present) so a fresh clone's first build works unattended, same
+# as this script already does for every other dependency.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
+
+uv run --package aura-worker python workers/transcription/scripts/fetch_piano_weights.py
 
 uv run --package aura-api pyinstaller \
   --onedir \
@@ -24,6 +38,7 @@ uv run --package aura-api pyinstaller \
   --workpath apps/desktop/build \
   --specpath apps/desktop \
   --collect-data basic_pitch \
+  --add-data "${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth:piano_weights" \
   --noconfirm \
   apps/desktop/run_backend.py
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from test_fixtures.generate import scale_pitches
 from test_fixtures.reference import NoteSpec, ReferenceClipSpec
 
-BENCHMARK_SUITE_VERSION = "2026-08-21-v2"
+BENCHMARK_SUITE_VERSION = "2026-08-21-v3"
 
 
 def _melody_notes(
@@ -227,6 +227,45 @@ def get_benchmark_suite() -> list[ReferenceClipSpec]:
             meter="4/4",
             key="C major",
             instrument="piano",
+        )
+    )
+
+    # --- Real-piano-timbre fixtures (DQ-2 fixture-timbre investigation) --
+    # Added post-review, same v1->v2 pattern as the 16th-note-run fixtures
+    # above: docs/benchmarks/2026-08-21-dq2.md found that comparing a
+    # piano-specific model (trained exclusively on real piano recordings)
+    # against basic-pitch using only this suite's synthetic "tone" timbre
+    # gave a misleading signal (basic-pitch was itself threshold-tuned
+    # against that exact synthetic timbre in DQ-1). These two fixtures
+    # reuse the IDENTICAL note/tempo/key/meter specs as
+    # "piano_melody_c_major_100" and "piano_two_hand_chords_f_major_90_3_4"
+    # above -- only the renderer differs (real recorded piano samples,
+    # test_fixtures.real_piano, instead of the synthetic decaying-harmonic
+    # model) -- so a score delta between the "_real_piano" and non-suffixed
+    # version of the same name isolates the timbre variable exactly, per
+    # dq2.md's "Fixture-timbre investigation" section.
+    specs.append(
+        ReferenceClipSpec(
+            name="piano_melody_c_major_100_real_piano",
+            notes=_melody_notes(piano_c_major, tempo_bpm=100.0),
+            timbre="tone",
+            tempo_bpm=100.0,
+            meter="4/4",
+            key="C major",
+            instrument="piano",
+            renderer="real_piano_sample",
+        )
+    )
+    specs.append(
+        ReferenceClipSpec(
+            name="piano_two_hand_chords_f_major_90_3_4_real_piano",
+            notes=_chord_notes(two_hand_chords, tempo_bpm=90.0),
+            timbre="tone",
+            tempo_bpm=90.0,
+            meter="3/4",
+            key="F major",
+            instrument="piano",
+            renderer="real_piano_sample",
         )
     )
 

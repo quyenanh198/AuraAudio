@@ -71,10 +71,18 @@ def _git_commit() -> str:
 
 
 def _score_synthetic_fixture(spec, workdir: Path) -> FixtureResult:
+    from test_fixtures.real_piano import render_real_piano_clip
     from test_fixtures.reference import generate_reference_clip
 
     wav_path = workdir / f"{spec.name}.wav"
-    clip = generate_reference_clip(spec, wav_path)
+    # spec.renderer: "synthetic" (default) or "real_piano_sample" -- see
+    # test_fixtures.reference.ReferenceClipSpec's field docstring and
+    # test_fixtures.real_piano's module docstring (DQ-2 fixture-timbre
+    # investigation).
+    if getattr(spec, "renderer", "synthetic") == "real_piano_sample":
+        clip = render_real_piano_clip(spec, wav_path)
+    else:
+        clip = generate_reference_clip(spec, wav_path)
     stage_workdir = workdir / f"{spec.name}_stage"
     stage_workdir.mkdir(parents=True, exist_ok=True)
 

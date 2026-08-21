@@ -51,6 +51,12 @@ class ReferenceClipSpec:
     key: str
     instrument: str  # "guitar" | "piano"
     sample_rate: int = 22050
+    # "synthetic" (default -- test_fixtures.reference.generate_reference_clip,
+    # this spec's `timbre` picks the waveform model) | "real_piano_sample"
+    # (test_fixtures.real_piano.render_real_piano_clip -- real recorded piano
+    # audio at every note, `timbre` is ignored). Added for DQ-2's
+    # fixture-timbre investigation, see real_piano.py's module docstring.
+    renderer: str = "synthetic"
 
 
 @dataclass(frozen=True)

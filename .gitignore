@@ -23,3 +23,10 @@ apps/desktop/web/blob-report/
 # accepts any path, this just keeps the default one out of git.
 docs/benchmarks/manifest*.json
 docs/benchmarks/manifest_data/
+
+# DQ-2 (piano transcription model): the pretrained checkpoint (~164MB, CC-BY-4.0,
+# see docs/benchmarks/2026-08-21-dq2.md) is fetched at BUILD time by
+# workers/transcription/scripts/fetch_piano_weights.py, checksum-verified, never
+# committed to git (no git-lfs in this repo -- see that script's module docstring
+# for why a build-time fetch was chosen over vendoring).
+workers/transcription/weights/

@@ -41,6 +41,33 @@ dependencies = [
     "score-schema",
     "musicxml",
     "aura-api",
+    # Detection-quality roadmap item 2: dedicated piano transcription model
+    # (aura_worker.piano_engine), behind the engine adapter in
+    # stages/inference.py -- piano projects only, guitar keeps basic-pitch.
+    # torch is pulled from the "pytorch-cpu" index below on linux/win32 --
+    # the plain PyPI `torch` wheel on Linux unconditionally requires a full
+    # CUDA stack (cuda-toolkit + nvidia-cudnn/-cusparselt/-nccl/-nvshmem +
+    # triton, several GB) via its own install_requires on
+    # `platform_system == "Linux"`, which this app never uses (CPU-only
+    # inference) and cannot afford in installer size. macOS's plain PyPI
+    # wheel has no such CUDA tax (Apple has no CUDA), so it stays on the
+    # default index. Verified via `uv lock` in a scratch copy: this resolves
+    # without moving any pre-existing pin except `sympy` (see
+    # docs/benchmarks/2026-08-21-dq2.md's "Resolution check" section) --
+    # torch<2.7's own pin narrows a macOS-only transitive dependency of
+    # coremltools (a basic-pitch[tf] extra never imported by this app's
+    # runtime path) from 1.14.0 to 1.13.1.
+    "torch>=2.5,<2.7",
+    # ByteDance/Kong "High-resolution Piano Transcription" inference
+    # package (code: MIT per PyPI classifier, no LICENSE file upstream --
+    # see docs/benchmarks/2026-08-21-dq2.md's license record). Its own
+    # checkpoint-loading code (piano_transcription_inference.inference.
+    # PianoTranscription.__init__) skips its built-in Zenodo download
+    # whenever a local checkpoint_path already exists and is >=1.6e8 bytes
+    # -- aura_worker.piano_engine always passes a local, build-time-fetched
+    # path (see scripts/fetch_piano_weights.py), so this never touches the
+    # network at runtime.
+    "piano_transcription_inference>=0.0.6",
 ]
 
 [tool.uv.sources]
@@ -48,6 +75,15 @@ score-schema = { workspace = true }
 musicxml = { workspace = true }
 aura-api = { workspace = true }
 test-fixtures = { workspace = true }
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [project.optional-dependencies]
 test = ["pytest>=8.2", "test-fixtures"]

@@ -2,7 +2,16 @@
 name = "test-fixtures"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "scipy>=1.13", "score-schema"]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "score-schema",
+    # test_fixtures.real_piano decodes vendored real-piano .mp3 samples
+    # (DQ-2 fixture-timbre investigation) -- already a pinned dependency
+    # elsewhere in this workspace (workers/transcription), no new version
+    # constraint introduced here.
+    "librosa>=0.10",
+]
 
 [tool.uv.sources]
 score-schema = { workspace = true }

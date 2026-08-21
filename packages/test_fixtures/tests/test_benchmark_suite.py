@@ -6,7 +6,10 @@ _MAX_TOTAL_AUDIO_SECONDS = 90.0  # generous vs. the ~10 min CPU budget for the w
 
 def test_get_benchmark_suite_returns_curated_spec_list():
     suite = get_benchmark_suite()
-    assert 8 <= len(suite) <= 12
+    # Upper bound widened 12->16 for DQ-2's 2 real-piano-timbre fixtures
+    # (test_fixtures.real_piano, docs/benchmarks/2026-08-21-dq2.md) --
+    # still a small curated suite, not open-ended growth.
+    assert 8 <= len(suite) <= 16
     assert all(isinstance(s, ReferenceClipSpec) for s in suite)
 
 
