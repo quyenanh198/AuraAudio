@@ -1167,11 +1167,75 @@ next; 3 and 4 proceed only if 0-2 land OK:
    disclosed benchmark-gate caveat, not a clean pass (see item 2 above and
    `docs/benchmarks/2026-08-21-dq2.md`) — a human reviewer should decide
    whether that counts as "0-2 OK" before starting this item.
-4. **Meter detection overhaul (last, may conclude "not viable").** The
-   accent-comb feature family is proven saturated (see meter-expansion
-   adjudication above); anything better needs a learned downbeat
-   tracker. Honest outcome may be "documented infeasible on current
-   stack" — user correction via inspector remains the fallback.
+4. **Meter detection overhaul — INVESTIGATED, documented infeasible for
+   now; defer.** Time-boxed investigation (2026-08-21) of three
+   candidates, in order of promise, measured against the same fixture
+   families the accent-comb adjudication used (6/8 sweep 40-140bpm step
+   2, 2/4 sweep, legacy/generated 3/4 fixtures, the 14-clip melodic
+   benchmark suite): **(1) madmom** (`RNNDownBeatProcessor`) — does NOT
+   install cleanly on py3.11: PyPI ships no py3.11 wheel (last release
+   0.16.1 predates 3.10), and even a from-source build (via
+   `Cython`+`numpy` declared as `uv` extra-build-dependencies, the
+   standard workaround) produces a package that fails on import with two
+   separate, unpatched incompatibilities hit in its own eager import
+   chain — `from collections import MutableSequence` (removed from the
+   stdlib in Python 3.10+, used throughout `madmom.processors`, the base
+   of every `Processor` class including the one needed here) and, after
+   monkey-patching that, `np.float` (removed in numpy>=1.24, hit inside
+   `madmom.io`). Fixing both would mean forking and patching the
+   unmaintained upstream source, not a pinning change — genuinely
+   infeasible on this stack. **(2) beat_this** (CPJKU's ISMIR'24 "Beat
+   This!" tracker, pip name `beat-this`, pure-torch, MIT-licensed code
+   *and* published weights) — installs cleanly (torch is already a
+   dependency since DQ-2; note the plain PyPI resolution pulls a
+   CUDA-enabled torch + ~4GB of `nvidia-*` packages unless both `torch`
+   AND `torchaudio` are scoped to the `pytorch-cpu` index the way
+   `workers/transcription/pyproject.toml` already scopes `torch` alone —
+   scoping only `torch` was not sufficient in the scratch test), runs
+   fast on CPU (~0.3-0.8s/clip, ~67s for 87 fixtures), but measured
+   **9.2% (8/87) overall meter accuracy — worse than the existing 20%
+   melodic-benchmark baseline.** Diagnosis: its downbeat head is
+   unreliable on this project's fixture distribution (sparse click
+   tracks and monophonic synthetic melodies are far out of its
+   full-mix-real-recording training distribution) — predicted downbeats
+   were frequently degenerate (median beats-per-bar collapsing to 1).
+   Not a viable drop-in without fine-tuning on project-relevant audio,
+   which was out of scope for this investigation. **(3) librosa-native,
+   no new deps** — an onset-envelope autocorrelation margin (eighth-note
+   periodicity minus beat periodicity, using the tracker's own measured
+   beat period rather than a blind candidate sweep) targeted at the
+   specific case the comb adjudication proved saturated (3/4 vs. 6/8).
+   Using ground-truth tempo, this genuinely separates the two classes
+   with non-overlapping margin ranges on the tested fixtures (3/4:
+   [-1.01, -0.79], n=6; 6/8: [-0.29, 0.17], n=51) — including both
+   tempi (100/110bpm) the comb adjudication documented as decisive
+   *wrong-direction* failures. Using **detected** tempo
+   (`librosa.beat.beat_track`, the realistic condition) against a wider
+   3/4 sweep (n=106, both fixture generators, matching the 6/8 sweep's
+   density) the ranges do overlap and the best single threshold reaches
+   82.8% (130/157) overall — 3/4 recall is now near-ceiling (100%/98%
+   across the two 3/4 fixture families) while 6/8 recall is 47.1%
+   (24/51) at a fair (non-overfit) threshold — a real ~6x improvement
+   over the comb's own 6/8 hit rate (4/51 decisive wins) at zero new
+   dependency cost, but bottlenecked by `beat_track` itself locking onto
+   the wrong periodicity on a meaningful fraction of these synthetic
+   fixtures, which cascades directly into the margin. **None of the
+   three clears this investigation's bar for a follow-up implementation
+   proposal** (>80% on the cases the comb fails, decisively, not just
+   in aggregate) — madmom is a hard install blocker, beat_this
+   regresses accuracy, and the librosa-native lead is real but partial
+   and gated on a beat-tracking-error problem this investigation did not
+   solve. **Conclusion: defer the overhaul.** User correction via the
+   inspector's `set_part_fact` meter picker remains the fallback, as it
+   already was for 6/8/2/4. The librosa-native autocorrelation-margin
+   lead (candidate 3) is worth a future scoped follow-up specifically
+   aimed at the beat-tracking-error bottleneck (e.g. a more robust
+   measure-level period estimate, or folding the margin into the
+   existing Borda blend as an additional feature) rather than a
+   from-scratch reattempt — full method, code, and per-fixture numbers
+   for all three candidates are in the investigation's scratch
+   prototypes and report (not committed to the repo — scratchpad-only
+   investigation per this task's constraints).
 
 ## Release
 
