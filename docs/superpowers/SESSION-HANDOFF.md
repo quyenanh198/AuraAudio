@@ -897,6 +897,34 @@ correct — check it.
   Home screen's existing "Retry" button is today's only mitigation. Worth
   a real look if it recurs in a future session.
 
+## Detection-quality roadmap (user-approved, in progress)
+
+Approved order — each item is reviewed + benchmark-gated before the
+next; 3 and 4 proceed only if 0-2 land OK:
+
+0. **Benchmark harness (prerequisite).** Synthesized fixtures with
+   known reference events + optional local real-recording manifest;
+   note onset F1 / onset+offset F1 (mir_eval), key/meter/tempo
+   accuracy; baseline committed under docs/benchmarks/. No tuning
+   without measurement.
+1. **Post-filter cheap wins.** Ghost-note filtering (confidence +
+   min-duration + octave-shadow dedupe) in quantize, per-instrument
+   basic-pitch threshold tuning — must improve benchmark, no
+   regressions.
+2. **Piano-specific model.** Dedicated piano transcription model behind
+   the existing engine adapter (piano projects only; guitar keeps
+   basic-pitch). Weights must be bundled (offline rule) and licensed
+   compatibly; installer-size impact recorded.
+3. **Source separation (gated on 0-2 OK).** Optional Demucs "isolate
+   instrument from mix" toggle before inference — biggest win for real
+   mixed recordings (YouTube imports); heavy (~GB weights, slow CPU) so
+   opt-in, never default.
+4. **Meter detection overhaul (last, may conclude "not viable").** The
+   accent-comb feature family is proven saturated (see meter-expansion
+   adjudication above); anything better needs a learned downbeat
+   tracker. Honest outcome may be "documented infeasible on current
+   stack" — user correction via inspector remains the fallback.
+
 ## Release
 
 **v1.1.0 IS LIVE** (published 2026-08-20T01:21Z, run 32320010770 on
