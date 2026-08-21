@@ -50,6 +50,28 @@ user actually receives — not just this source repo.
   data files (`apps/desktop/build-backend.sh`'s `--collect-data
   basic_pitch`) — not separately vendored by this repo.
 
+## Demucs source-separation model (code MIT; weights disclosed, not separately licensed by upstream)
+
+- **What**: `5c90dfd2-34c22ccb.th`, the pretrained `htdemucs_6s` weights for
+  Meta's Demucs source-separation model, used by the OPT-IN "isolate
+  instrument from mix" step (guitar projects only, off by default — see
+  `docs/benchmarks/2026-08-21-dq3.md`).
+- **Code license**: MIT, per the `demucs` PyPI package and the
+  `facebookresearch/demucs` GitHub repository's own `LICENSE` file.
+- **Weights**: Meta has not published a license file or statement
+  specifically covering the pretrained weights (as distinct from the code)
+  at the time of this writing. The weights were trained in part on
+  MUSDB18-HQ, a dataset Zenodo lists under a custom non-commercial license
+  (`other-nc`) — see `docs/benchmarks/2026-08-21-dq3.md`'s "License record"
+  section for the full disclosure and the reasoning for treating this as a
+  disclosed, non-blocking risk rather than a hard blocker (these exact
+  weights are already widely embedded in numerous shipped commercial
+  audio-software products).
+- **Source**: <https://github.com/facebookresearch/demucs>, weights
+  fetched from `https://dl.fbaipublicfiles.com/demucs/`.
+- Full candidate assessment, stem-mapping decision, and benchmark:
+  `docs/benchmarks/2026-08-21-dq3.md`.
+
 ## TensorFlow and other bundled dependencies
 
 TensorFlow, PyTorch, and this app's other Python/Rust/JS dependencies

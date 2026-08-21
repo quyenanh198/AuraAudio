@@ -30,6 +30,15 @@ class CreateProjectRequest(BaseModel):
         return v
 
     object_key: str
+    # Detection-quality roadmap item 3: opt-in "isolate instrument from
+    # mix" source-separation step before inference, stored on
+    # Project.settings (no DB migration needed) and read by
+    # POST .../transcriptions. Guitar only in practice -- the frontend
+    # only offers the toggle for guitar (see docs/benchmarks/
+    # 2026-08-21-dq3.md's benchmark evidence for why); a piano project
+    # that sets this to true is not an error, it is simply a no-op (see
+    # aura_worker.runner's call site), never default True.
+    separate_source: bool = False
 
 
 class ProjectResponse(BaseModel):
@@ -39,6 +48,7 @@ class ProjectResponse(BaseModel):
     title: str
     instrument: str
     media_asset_id: str
+    separate_source: bool
 
 
 class CreateJobResponse(BaseModel):

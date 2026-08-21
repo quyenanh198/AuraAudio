@@ -30,12 +30,21 @@
 # repo's docs -- staged into every packaged installer right next to the
 # weights it documents, so a user who goes looking for it in the
 # installed app finds it in the same place as the file it's about.
+#
+# --add-data ...weights/demucs/...:demucs_weights (DQ-3, detection-quality
+# roadmap item 3): the opt-in source-separation model's weights, fetched
+# at build time by fetch_demucs_weights.py into
+# workers/transcription/weights/demucs/ (both the .th weight file and its
+# small .yaml manifest -- demucs.repo.LocalRepo/BagOnlyRepo need both).
+# Staged at <bundle_root>/demucs_weights/, matching
+# aura_worker.separation._resolve_weights_dir's frozen-mode lookup.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 uv run --package aura-worker python workers/transcription/scripts/fetch_piano_weights.py
+uv run --package aura-worker python workers/transcription/scripts/fetch_demucs_weights.py
 
 uv run --package aura-api pyinstaller \
   --onedir \
@@ -46,6 +55,9 @@ uv run --package aura-api pyinstaller \
   --collect-data basic_pitch \
   --add-data "${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth:piano_weights" \
   --add-data "${REPO_ROOT}/THIRD_PARTY_NOTICES.md:piano_weights" \
+  --add-data "${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th:demucs_weights" \
+  --add-data "${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml:demucs_weights" \
+  --add-data "${REPO_ROOT}/THIRD_PARTY_NOTICES.md:demucs_weights" \
   --noconfirm \
   apps/desktop/run_backend.py
 

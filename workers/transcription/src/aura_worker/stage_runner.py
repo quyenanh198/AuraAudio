@@ -10,6 +10,7 @@ from aura_api.models import StageArtifact, TranscriptionJob
 
 STAGE_PROGRESS = {
     "probe": 10,
+    "separate": 18,
     "normalize": 25,
     "inference": 55,
     "structure": 65,

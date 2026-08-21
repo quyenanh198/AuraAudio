@@ -68,6 +68,21 @@ dependencies = [
     # path (see scripts/fetch_piano_weights.py), so this never touches the
     # network at runtime.
     "piano_transcription_inference>=0.0.6",
+    # Detection-quality roadmap item 3: opt-in source separation
+    # (aura_worker.separation) before inference, guitar only -- see
+    # docs/benchmarks/2026-08-21-dq3.md's "Candidate assessment" section.
+    # demucs's own core deps (einops/huggingface-hub/julius/lameenc/pyyaml/
+    # safetensors/sphn/torch/tqdm) are lean and resolve against this
+    # project's existing torch pin without moving it (verified via a
+    # scratch `uv lock`, see dq3.md's "Resolution check" section) on
+    # Linux/win32. macOS x86_64 (older Intel Macs) resolves an older demucs
+    # release (4.0.1, since 4.1.0's own metadata caps torch<2.3 on that one
+    # platform) that pulls a heavier, disclosed-but-narrow extra dependency
+    # chain (dora-search/openunmix/torchaudio and their own transitives) --
+    # macOS is source-verified only in this repo's history (no local
+    # runner), so this is a documented risk for a future macOS build to
+    # confirm, not something blocking this item.
+    "demucs>=4.0,<5",
 ]
 
 [tool.uv.sources]

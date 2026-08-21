@@ -1160,13 +1160,79 @@ next; 3 and 4 proceed only if 0-2 land OK:
    engine's output — it exposes no per-note confidence signal the filter
    could use; see that file's "Ghost filter" section for the full
    rationale.
-3. **Source separation (gated on 0-2 OK).** Optional Demucs "isolate
-   instrument from mix" toggle before inference — biggest win for real
-   mixed recordings (YouTube imports); heavy (~GB weights, slow CPU) so
-   opt-in, never default. **Gate status:** item 2 shipped but with a
-   disclosed benchmark-gate caveat, not a clean pass (see item 2 above and
-   `docs/benchmarks/2026-08-21-dq2.md`) — a human reviewer should decide
-   whether that counts as "0-2 OK" before starting this item.
+3. **Source separation. SHIPPED (2026-08-21), opt-in, guitar only, with a
+   disclosed weights-license risk a human reviewer should independently
+   weigh in on.** Optional Demucs (`demucs` PyPI, `htdemucs_6s` weights,
+   MIT-licensed code) "isolate instrument from mix" toggle before
+   inference — a new `separate` worker stage between `probe` and
+   `normalize`, gated on `Project.settings["separateSource"]` (existing
+   JSON column, no DB migration) AND `instrument == "guitar"`, wired from
+   `aura_worker.runner.run_transcription_job`. A Home-screen checkbox
+   ("Isolate instrument from mix") at project creation
+   (`apps/desktop/web/src/components/Home.svelte`) sets it via
+   `POST /v1/projects`'s new `separate_source` field (default `false`,
+   never opt-out-by-default). `aura_api.hashing.compute_input_hash` now
+   folds the flag into `input_hash`, so toggling it re-transcribes instead
+   of reusing a cached job/artifact — verified by a real committed test
+   (`apps/api/tests/test_idempotency.py`). Full candidate assessment,
+   `uv lock` evidence, license record, stem-mapping investigation (two
+   rounds — a first "target the `other` stem alone" pass looked like a
+   clean win on one fixture and then caused a **total transcription
+   failure, 0 detected notes**, on a second, real, committed benchmark
+   fixture; fixed by summing the `guitar` and `other` stems, which this
+   report's real re-run confirmed resolves both the failure and 3 of 7
+   clean-fixture regressions the first mapping also caused), and CPU
+   timing are in `docs/benchmarks/2026-08-21-dq3.md` — read that file
+   before touching this item further, this paragraph only summarizes it.
+   **Piano is a documented no-op, not shipped**: `htdemucs_6s`'s own
+   piano stem is unreliable (matches upstream's own "doesn't work so well"
+   caveat) — a piano project with the setting enabled is inert by design,
+   verified directly in dq3.md's own mixed-fixture table (OFF and ON rows
+   identical for the piano fixture). **CPU time**: ~19s for a 30s clip,
+   ~28s for a 60s clip (sub-linear — a real, measured ~10s fixed overhead
+   dominates short clips), extrapolating to ~1.7 minutes of extra compute
+   for a 5-minute song, well under the 10-minutes-extra UX threshold this
+   item's own hard constraints named; the `separate` stage shows in the
+   Home screen's existing per-stage progress label so the wait isn't
+   silent. **The one real open risk**: Meta has not published a license
+   statement specifically covering the pretrained weights (as opposed to
+   the MIT-licensed code), and the weights were trained in part on
+   MUSDB18-HQ, whose own Zenodo record carries a non-commercial license —
+   disclosed prominently in `THIRD_PARTY_NOTICES.md` and dq3.md's "License
+   record" section, judged an acceptable, disclosed risk to ship (these
+   exact weights are already embedded in numerous shipped commercial
+   audio tools) but flagged as a genuinely different, higher-stakes
+   category of risk than anything disclosed in DQ-1/DQ-2 — a human
+   reviewer with legal context should weigh in before treating this as
+   fully closed. If a stricter reading is wanted, the revert is small and
+   localized: remove the single `if` gate calling `separate.run` in
+   `aura_worker.runner.run_transcription_job` (and the matching branch in
+   `aura_worker.eval.pipeline.run_pipeline_stages`) — everything else
+   (weights fetch, `aura_worker.separation`, the frontend checkbox) can
+   stay in place, inert.
+
+   **Verification performed**: `workers/transcription` 162/162
+   (153 pre-existing + 9 new: `test_separation.py`'s 6 + `test_separate_
+   stage.py`'s 3), `aura-api` 82/82 (78 pre-existing + 4 new: 2
+   `test_idempotency.py` toggle tests + 2 `test_projects.py` setting
+   tests), `score_schema` 173/173, `musicxml` 47/47, `aura-api` desktop
+   tests 10/10, `test_fixtures` 76/76 (64 pre-existing + 12 new —
+   `test_mixed.py`'s 6 + `test_mixed_benchmark.py`'s 6). Total across all
+   Python packages: 550/550. Frontend: `vitest` 190/190, `svelte-check`/
+   `tsc` clean (511 files, 0 errors/warnings). CI
+   (`.github/workflows/ci.yml`) gained a demucs-weights cache/fetch step
+   mirroring the piano checkpoint's own pattern, keyed on
+   `fetch_demucs_weights.py`'s own contents. `apps/desktop/build-backend.sh`
+   now fetches the demucs weights and stages them (`.th` + `.yaml`
+   manifest + `THIRD_PARTY_NOTICES.md`) into the PyInstaller bundle at
+   `demucs_weights/`, mirroring the piano checkpoint's staging — ran for
+   real, locally (`bash apps/desktop/build-backend.sh`), and confirmed
+   directly (`find`/`du`/checksum, not just "the script exited 0") that
+   the built bundle actually contains `demucs_weights/5c90dfd2-34c22ccb.th`
+   (correct size), `demucs_weights/htdemucs_6s.yaml`, and
+   `demucs_weights/THIRD_PARTY_NOTICES.md` at
+   `apps/desktop/dist/aura-backend/_internal/demucs_weights/`. See
+   dq3.md's own "Bundle verification" section for the exact sizes.
 4. **Meter detection overhaul — INVESTIGATED, documented infeasible for
    now; defer.** Time-boxed investigation (2026-08-21) of three
    candidates, in order of promise, measured against the same fixture

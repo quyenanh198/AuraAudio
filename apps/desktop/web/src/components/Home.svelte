@@ -23,6 +23,15 @@
   let fileInput: HTMLInputElement | undefined = $state();
   let isDragOver = $state(false);
   let pending: PendingSource | null = $state(null);
+  // Detection-quality roadmap item 3: opt-in "isolate instrument from mix"
+  // source-separation step before transcription. Guitar only in practice --
+  // see docs/benchmarks/2026-08-21-dq3.md's mixed-fixture benchmark for why
+  // (a large, reproducible onset-F1 win for guitar; no reliable benefit for
+  // piano with the current model) -- the checkbox is shown regardless of
+  // which instrument button the user ends up clicking (this panel doesn't
+  // know which yet), but only has an effect for guitar; picking Piano with
+  // it checked is a harmless no-op on the backend. Never defaults to true.
+  let separateSource = $state(false);
   let creating = $state(false);
   let creationError: string | null = $state(null);
   let retryingId: string | null = $state(null);
@@ -203,6 +212,7 @@
 
   function cancelPending(): void {
     pending = null;
+    separateSource = false;
     creationError = null;
   }
 
@@ -226,9 +236,10 @@
       // needs uploading here.
       const objectKey = source.kind === "file" ? (await api.upload(source.file)).object_key : source.objectKey;
       const title = source.kind === "file" ? titleFromFilename(source.file.name) : source.title;
-      const project = await api.createProject(title, instrument, objectKey);
+      const project = await api.createProject(title, instrument, objectKey, separateSource);
       await api.startTranscription(project.id);
       pending = null;
+      separateSource = false;
       await projects.refresh();
     } catch (err: unknown) {
       creationError = err instanceof Error ? err.message : String(err);
@@ -352,6 +363,15 @@
         <div class="instrument-choice">
           <p class="filename">{pending.kind === "file" ? pending.file.name : pending.title}</p>
           <p class="prompt">Which instrument is this?</p>
+          <label class="separate-toggle">
+            <input type="checkbox" bind:checked={separateSource} disabled={creating} />
+            Isolate instrument from mix
+          </label>
+          <p class="separate-hint">
+            For recordings with vocals or a full band (e.g. YouTube imports) — guitar only, and
+            adds roughly 20 seconds to 2 minutes of extra processing depending on length. Leave
+            unchecked for a clean solo recording; separation can slightly reduce accuracy there.
+          </p>
           <!-- Deliberate: only gate on status === "missing" (a confirmed-absent
                binary), never on "checking" or "error". A failed *check* isn't
                proof ffmpeg is missing -- most commonly it means the backend
@@ -697,6 +717,27 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .separate-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .separate-toggle input {
+    accent-color: var(--accent);
+  }
+
+  .separate-hint {
+    margin: -4px 0 0;
+    font-size: 11px;
+    color: var(--dim);
+    max-width: 380px;
+    text-align: center;
   }
 
   .choice-buttons {

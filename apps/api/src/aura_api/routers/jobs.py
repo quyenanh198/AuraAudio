@@ -32,6 +32,11 @@ def create_transcription(
         object_key=asset.object_key,
         instrument=project.instrument,
         pipeline_version="v1",
+        # Detection-quality roadmap item 3's opt-in project setting -- see
+        # aura_api.hashing.compute_input_hash's docstring for why this must
+        # be folded into the hash (toggling it must re-transcribe, not
+        # silently reuse an existing job/cached artifacts).
+        separate_source=bool(project.settings.get("separateSource", False)),
     )
 
     existing = (

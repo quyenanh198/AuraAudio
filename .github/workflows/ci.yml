@@ -71,6 +71,21 @@ jobs:
         timeout-minutes: 5
         run: uv run --package aura-worker python workers/transcription/scripts/fetch_piano_weights.py
 
+      # Detection-quality roadmap item 3 (docs/benchmarks/2026-08-21-dq3.md):
+      # the opt-in source-separation stage's mixed-fixture benchmark tests
+      # (and the guitar e2e case that exercises separateSource=true) need
+      # the demucs weights present locally -- same cache/fetch pattern as
+      # the piano weights above, keyed on the fetch script's own contents.
+      - name: Cache demucs weights
+        uses: actions/cache@v4
+        with:
+          path: workers/transcription/weights/demucs
+          key: demucs-weights-${{ hashFiles('workers/transcription/scripts/fetch_demucs_weights.py') }}
+
+      - name: Fetch demucs weights
+        timeout-minutes: 5
+        run: uv run --package aura-worker python workers/transcription/scripts/fetch_demucs_weights.py
+
       # Mirrors the Makefile's `test` target exactly, suite by suite.
       - name: score_schema tests
         run: uv run --package score-schema pytest packages/score_schema/tests

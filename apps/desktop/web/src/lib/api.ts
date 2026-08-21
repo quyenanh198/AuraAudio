@@ -118,6 +118,7 @@ export interface CreateProjectResponse {
   title: string;
   instrument: string;
   media_asset_id: string;
+  separate_source: boolean;
 }
 
 /** apps/api/src/aura_api/schemas.py CreateJobResponse (job_id, status). */
@@ -145,11 +146,11 @@ export const api = {
       json<{ object_key: string }>(r),
     );
   },
-  createProject: (title: string, instrument: string, object_key: string) =>
+  createProject: (title: string, instrument: string, object_key: string, separateSource = false) =>
     fetch(`${BASE}/v1/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, instrument, object_key }),
+      body: JSON.stringify({ title, instrument, object_key, separate_source: separateSource }),
     }).then((r) => json<CreateProjectResponse>(r)),
   startTranscription: (projectId: string) =>
     fetch(`${BASE}/v1/projects/${projectId}/transcriptions`, { method: "POST" }).then((r) =>

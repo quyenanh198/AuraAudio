@@ -1,0 +1,100 @@
+{
+  "generated_at": "2026-08-21T04:46:18.512772+00:00",
+  "commit": "4906720",
+  "mixed_suite_version": "2026-08-21-v1",
+  "mixed_results": [
+    {
+      "name": "guitar_melody_mixed_vocal_percussion",
+      "instrument": "guitar",
+      "interference_kind": "vocal_percussion",
+      "truth_note_count": 8,
+      "onset_f1_off": 0.8,
+      "onset_f1_on": 1.0,
+      "delta": 0.19999999999999996,
+      "detected_notes_off": 12,
+      "detected_notes_on": 8,
+      "error_off": null,
+      "error_on": null
+    },
+    {
+      "name": "piano_chords_mixed_vocal_percussion",
+      "instrument": "piano",
+      "interference_kind": "vocal_percussion",
+      "truth_note_count": 24,
+      "onset_f1_off": 0.3125,
+      "onset_f1_on": 0.3125,
+      "delta": 0.0,
+      "detected_notes_off": 104,
+      "detected_notes_on": 104,
+      "error_off": null,
+      "error_on": null
+    },
+    {
+      "name": "guitar_arpeggio_mixed_pad",
+      "instrument": "guitar",
+      "interference_kind": "pad",
+      "truth_note_count": 8,
+      "onset_f1_off": 0.761904761904762,
+      "onset_f1_on": 0.7000000000000001,
+      "delta": -0.06190476190476191,
+      "detected_notes_off": 13,
+      "detected_notes_on": 12,
+      "error_off": null,
+      "error_on": null
+    }
+  ],
+  "clean_guitar_results": [
+    {
+      "name": "guitar_melody_c_major_90",
+      "onset_f1_off": 1.0,
+      "onset_f1_on": 0.9411764705882353,
+      "delta": -0.05882352941176472
+    },
+    {
+      "name": "guitar_melody_g_major_120_3_4",
+      "onset_f1_off": 1.0,
+      "onset_f1_on": 0.823529411764706,
+      "delta": -0.17647058823529405
+    },
+    {
+      "name": "guitar_melody_d_major_140",
+      "onset_f1_off": 1.0,
+      "onset_f1_on": 0.9411764705882353,
+      "delta": -0.05882352941176472
+    },
+    {
+      "name": "guitar_two_voice_chords_a_minor_100",
+      "onset_f1_off": 0.9696969696969697,
+      "onset_f1_on": 0.9696969696969697,
+      "delta": 0.0
+    },
+    {
+      "name": "guitar_two_voice_chords_e_minor_110_3_4",
+      "onset_f1_off": 0.9375,
+      "onset_f1_on": 0.9375,
+      "delta": 0.0
+    },
+    {
+      "name": "guitar_arpeggio_a_minor_130",
+      "onset_f1_off": 1.0,
+      "onset_f1_on": 1.0,
+      "delta": 0.0
+    },
+    {
+      "name": "guitar_sixteenth_run_c_major_140",
+      "onset_f1_off": 0.8571428571428571,
+      "onset_f1_on": 0.888888888888889,
+      "delta": 0.031746031746031855
+    }
+  ],
+  "timing": {
+    "clip_30s": {
+      "clip_duration_s": 30.0,
+      "elapsed_s": 18.89649625600032
+    },
+    "clip_60s": {
+      "clip_duration_s": 60.0,
+      "elapsed_s": 27.882307510000828
+    }
+  }
+}

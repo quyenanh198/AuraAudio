@@ -58,9 +58,19 @@ class PipelineResult:
     score: dict  # the quantized schemaVersion-4 score JSON
 
 
-def run_pipeline_stages(wav_path: Path, instrument: str, workdir: Path) -> PipelineResult:
-    """Runs normalize -> inference -> structure -> quantize against
-    `wav_path` and returns the raw + detected results needed for scoring.
+def run_pipeline_stages(
+    wav_path: Path, instrument: str, workdir: Path, separate_source: bool = False
+) -> PipelineResult:
+    """Runs [separate ->] normalize -> inference -> structure -> quantize
+    against `wav_path` and returns the raw + detected results needed for
+    scoring.
+
+    `separate_source` (detection-quality roadmap item 3): when true, runs
+    the opt-in source-separation stage first -- mirrors aura_worker.runner's
+    own instrument gate (guitar only, see aura_worker.separation's module
+    docstring for the benchmark evidence behind that restriction), so
+    passing separate_source=True for a piano fixture is a documented no-op,
+    not an error, exactly like the real API/worker path.
 
     Caller must already have DATABASE_URL / AURA_DATA_DIR pointed at a
     scratch location (see module docstring) before the first call —
@@ -74,7 +84,7 @@ def run_pipeline_stages(wav_path: Path, instrument: str, workdir: Path) -> Pipel
     from sqlalchemy.orm import sessionmaker
 
     from aura_worker.stage_runner import StageContext
-    from aura_worker.stages import inference, normalize, quantize, structure
+    from aura_worker.stages import inference, normalize, quantize, separate, structure
 
     engine = create_engine(os.environ["DATABASE_URL"], connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
@@ -100,7 +110,10 @@ def run_pipeline_stages(wav_path: Path, instrument: str, workdir: Path) -> Pipel
 
         ctx = StageContext(job=job, session=session, storage=_DictStorage(), workdir=workdir)
 
-        normalized_path = normalize.run(ctx, source_path=wav_path)
+        source_path = wav_path
+        if separate_source and instrument == "guitar":
+            source_path = separate.run(ctx, source_path=source_path)
+        normalized_path = normalize.run(ctx, source_path=source_path)
         notes = inference.run(ctx, normalized_path=normalized_path)
         structure_result = structure.run(ctx, normalized_path=normalized_path, notes=notes)
         score = quantize.run(ctx, notes, structure_result)

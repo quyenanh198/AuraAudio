@@ -77,7 +77,16 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)) ->
     if head is None:
         raise HTTPException(status_code=404, detail="uploaded object not found")
 
-    project = Project(owner_id="anonymous", title=body.title, instrument=body.instrument)
+    project = Project(
+        owner_id="anonymous",
+        title=body.title,
+        instrument=body.instrument,
+        # Detection-quality roadmap item 3's opt-in setting -- see
+        # aura_api.schemas.CreateProjectRequest.separate_source's docstring.
+        # Stored under Project.settings (existing JSON column, no
+        # migration) rather than a new dedicated column.
+        settings={"separateSource": body.separate_source},
+    )
     db.add(project)
     db.flush()
 
@@ -91,5 +100,9 @@ def create_project(body: CreateProjectRequest, db: Session = Depends(get_db)) ->
     db.commit()
 
     return ProjectResponse(
-        id=project.id, title=project.title, instrument=project.instrument, media_asset_id=asset.id
+        id=project.id,
+        title=project.title,
+        instrument=project.instrument,
+        media_asset_id=asset.id,
+        separate_source=body.separate_source,
     )
