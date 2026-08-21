@@ -1078,13 +1078,81 @@ next; 3 and 4 proceed only if 0-2 land OK:
    `piano_engine.py`, the new fixtures) can stay in place inert pending a
    properly weighted suite update.
 
-   **Recommended follow-up (not done here, out of this item's scope):**
-   the committed benchmark suite's piano cohort should move toward
-   real-piano-timbre fixtures as its primary measure — the 2 added here
-   are a proof of concept demonstrating the gap, not a full replacement.
-   Until that's done, treat the synthetic suite's piano numbers as an
-   incomplete signal for any future piano-detection-quality work, the
-   same way this item's own numbers should be read.
+   **Adjudication (2026-08-21): SHIP, with fixes — both judgment calls
+   above ruled in favor of shipping, independently re-verified** (the
+   real-piano fixtures confirmed genuinely MP3-sample-based, not a
+   relabeled synthetic render; basic-pitch's 0.458 recall collapse on
+   real polyphonic piano chords reproduced to 3 decimals; the `sympy`
+   pin move ruled acceptable — `music21` has zero `sympy` dependency, and
+   only the darwin-gated `coremltools` extra plus `torch` itself depend
+   on it). Four fixes required before this counted as done, all applied
+   same-session:
+   1. **CI never fetched the checkpoint** — `apps/api/tests/
+      test_e2e_pipeline.py`'s piano case and several `workers/
+      transcription/tests` (the benchmark-regression floor guard, the
+      fast-passage regression) now need it, but `.github/workflows/
+      ci.yml`'s `python` job never ran `fetch_piano_weights.py`. This was
+      caught by the adjudication reproducing a real failure (pointing
+      `AURA_PIANO_CHECKPOINT_PATH` at nothing) — the original 525/525
+      green claim was true only because it rode on this sandbox's already-
+      cached weights, not because CI would actually pass on a fresh
+      checkout. Fixed: `ci.yml`'s `python` job now runs `fetch_piano_
+      weights.py` (checksum-verified, same script `build-backend.sh`
+      uses) before any test step, cached via `actions/cache` keyed on the
+      fetch script's own contents (so a checksum/URL change
+      auto-invalidates the cache). Verified for real in this sandbox by
+      relocating `workers/transcription/weights/` (simulating a fresh
+      checkout), confirming the exact tests the adjudication predicted
+      would fail actually did (`test_benchmark_regression.py`,
+      `test_fast_passage_regression.py`'s piano case), then running the
+      fetch step and confirming green again (4/4), then the full 525/525
+      suite green once more.
+   2. **CC-BY-4.0 attribution didn't reach end users.** Dev docs
+      (`dq2.md`) aren't enough for a license that requires attribution on
+      redistribution — added `THIRD_PARTY_NOTICES.md` at repo root
+      (checkpoint CC-BY-4.0 citation/DOI, the tonejs piano-sample MIT
+      notice, basic-pitch's Apache-2.0 note, a pointer to TensorFlow's own
+      bundled notices file), staged into every packaged installer by
+      `build-backend.sh` (`--add-data THIRD_PARTY_NOTICES.md:piano_weights`
+      — lands right next to the checkpoint it documents). An in-app
+      notices screen remains a tracked follow-up, not done here (see
+      below).
+   3. Refreshed two stale docstrings/comments that predated the piano
+      engine but still described basic-pitch-only behavior:
+      `test_fast_passage_regression.py`'s module docstring (piano now
+      runs through `aura_worker.piano_engine`, not basic-pitch — the
+      piano floor was also re-measured against the new engine's real
+      score, 0.35→0.55, since the old 0.35 floor was derived from
+      basic-pitch's 0.476, not the new engine's 0.651) and `aura_worker.
+      eval.benchmark`'s module docstring (now states the piano checkpoint
+      must be fetched first, or every piano fixture fails loudly with
+      `PianoWeightsMissingError`).
+   4. `apps/desktop/aura-backend.spec` (PyInstaller-GENERATED, rewritten
+      fresh by every `build-backend.sh` run) had been tracked in git by
+      mistake and baked in a contributor's local absolute path. Gitignored
+      and removed from tracking; verified `build-backend.sh` still
+      regenerates it correctly on every run (unaffected — it never reads
+      the tracked copy).
+
+   **Follow-up items tracked open (not done, adjudication explicitly
+   flagged these for a future session):**
+   - The committed benchmark suite's piano cohort should move toward
+     real-piano-timbre fixtures as its primary measure — the 2 added here
+     are a proof of concept demonstrating the gap, not a full replacement.
+     Until that's done, treat the synthetic suite's piano numbers as an
+     incomplete signal for any future piano-detection-quality work.
+   - Ghost-filter / octave-shadow analysis for the new piano engine's own
+     confidence distribution has NOT been done — the filter is bypassed
+     entirely (see below), which is the right call given it exposes no
+     per-note confidence signal today, but if a future change adds one
+     (e.g. sampling the model's raw onset activation instead of using the
+     velocity proxy), this filter question should be revisited from
+     scratch against that new signal's own distribution, not by reusing
+     basic-pitch's tuned constants.
+   - An in-app "Third-Party Notices" screen (surfacing
+     `THIRD_PARTY_NOTICES.md`'s content inside the app itself) is pending
+     — the file ships on disk in every installer (see fix 2 above), but
+     nothing in the UI points a user at it yet.
 
    Full detail, all numbers, and the license record:
    `docs/benchmarks/2026-08-21-dq2.md`. Ghost-note filtering

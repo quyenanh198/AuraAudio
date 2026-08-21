@@ -3,24 +3,40 @@
 `aura_worker.ghost_filter`'s "RE-DERIVATION" docstring paragraph and
 `docs/benchmarks/2026-08-21-dq1b.md`).
 
-Runs the REAL pipeline (ffmpeg + basic-pitch, no mocking) against the two
-16th-note-run fixtures added specifically to stress
-`aura_worker.ghost_filter.MIN_DURATION_S` against a genuinely fast, short
-real note (nominal note length ~0.091s, well under the 0.15s floor). Two
-things are asserted, deliberately kept separate so a future regression
-points at the right cause:
+Runs the REAL pipeline (ffmpeg + the real per-instrument engine, no
+mocking) against the two 16th-note-run fixtures added specifically to
+stress `aura_worker.ghost_filter.MIN_DURATION_S` against a genuinely
+fast, short real note (nominal note length ~0.091s, well under the 0.15s
+floor). Guitar still runs basic-pitch; piano runs the DQ-2 piano
+transcription engine (`aura_worker.piano_engine`) instead, since
+`test_fast_passage_onset_f1_stays_above_floor` drives
+`run_pipeline_stages` -- the real routed pipeline, not basic-pitch
+directly -- for both fixtures (see
+`docs/superpowers/SESSION-HANDOFF.md`'s "Detection-quality roadmap" item
+2 and `docs/benchmarks/2026-08-21-dq2.md`). This test therefore needs the
+real piano checkpoint present (`workers/transcription/scripts/
+fetch_piano_weights.py` -- see that script and CI's "Fetch piano
+transcription weights" step) to run at all for the piano fixture; a
+missing checkpoint fails it with `PianoWeightsMissingError`, not a
+silently-skipped/mocked pass. Two things are asserted, deliberately kept
+separate so a future regression points at the right cause:
 
 1. `filter_ghost_notes` does not delete any of basic-pitch's own true
-   positives on these fixtures -- i.e. the duration floor specifically is
-   not what limits fast-passage recall (locks in the RE-DERIVATION
-   finding: raw basic-pitch note durations on these fixtures never came
-   close to the 0.15s floor in either direction).
+   positives on the GUITAR fixture -- i.e. the duration floor specifically
+   is not what limits fast-passage recall (locks in the RE-DERIVATION
+   finding: raw basic-pitch note durations on this fixture never came
+   close to the 0.15s floor in either direction). This filter is not
+   applied to the piano engine's output at all (see
+   `aura_worker.piano_engine`'s module docstring), so this specific check
+   is guitar-only -- see the second test function below.
 2. Onset F1 on each fixture stays at or above its last-measured value
-   (with a margin) -- a coarser guard against silent regressions in
-   `aura_worker.instrument_thresholds` or `aura_worker.ghost_filter`
-   generally, without asserting these fixtures reach "good" F1 (piano's
-   0.476 here is a known, disclosed, NOT-fixed-here basic-pitch
-   onset-merging limitation, not a bug this test should paper over).
+   (with a margin) -- a coarser guard against silent regressions.
+   Guitar's floor is still measured against basic-pitch
+   (`docs/benchmarks/2026-08-21-dq1b.md`); piano's floor is now measured
+   against the DQ-2 piano engine
+   (`docs/benchmarks/2026-08-21-dq2.md`'s `piano_sixteenth_run_c_major_140`
+   score, 0.651) -- neither is asserted to reach "good" F1, only to not
+   silently regress from its last real measurement.
 """
 from __future__ import annotations
 
@@ -34,12 +50,15 @@ from aura_worker.ghost_filter import filter_ghost_notes
 from test_fixtures.benchmark_suite import get_benchmark_suite
 from test_fixtures.reference import generate_reference_clip
 
-# Measured via docs/benchmarks/2026-08-21-dq1b.md; a small absolute margin
-# below each so ordinary platform/library-version noise doesn't trip this
-# guard for reasons unrelated to a real regression.
+# Guitar measured via docs/benchmarks/2026-08-21-dq1b.md (basic-pitch);
+# piano measured via docs/benchmarks/2026-08-21-dq2.md (the DQ-2 piano
+# engine, aura_worker.piano_engine -- not basic-pitch, see module
+# docstring). A small absolute margin below each so ordinary
+# platform/library-version noise doesn't trip this guard for reasons
+# unrelated to a real regression.
 _FIXTURE_ONSET_F1_FLOORS = {
-    "guitar_sixteenth_run_c_major_140": 0.75,  # measured 0.857
-    "piano_sixteenth_run_c_major_140": 0.35,  # measured 0.476
+    "guitar_sixteenth_run_c_major_140": 0.75,  # measured 0.857 (basic-pitch)
+    "piano_sixteenth_run_c_major_140": 0.55,  # measured 0.651 (piano_engine)
 }
 
 
@@ -64,8 +83,9 @@ def test_fast_passage_onset_f1_stays_above_floor(fixture_name):
     f1 = metrics.onset_f1(clip.events, result.notes, onset_tolerance_s=0.05)
     floor = _FIXTURE_ONSET_F1_FLOORS[fixture_name]
     assert f1.f1 >= floor, (
-        f"{fixture_name} onset F1 {f1.f1:.3f} dropped below floor {floor} -- "
-        "see docs/benchmarks/2026-08-21-dq1b.md for the last measured value."
+        f"{fixture_name} onset F1 {f1.f1:.3f} dropped below floor {floor} -- see "
+        "docs/benchmarks/2026-08-21-dq1b.md (guitar) or 2026-08-21-dq2.md (piano) "
+        "for the last measured value."
     )
 
 

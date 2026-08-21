@@ -30,3 +30,12 @@ docs/benchmarks/manifest_data/
 # committed to git (no git-lfs in this repo -- see that script's module docstring
 # for why a build-time fetch was chosen over vendoring).
 workers/transcription/weights/
+
+# apps/desktop/aura-backend.spec is a PyInstaller-GENERATED file
+# (build-backend.sh's `pyinstaller ... --specpath apps/desktop` rewrites it
+# fresh on every run) -- it was previously tracked by mistake and baked in
+# a contributor's local absolute path (--add-data's source path is
+# resolved to an absolute path at generation time), which is misleading to
+# read and has no reason to be version-controlled since the real build
+# never reads the committed copy, only ever regenerates its own.
+apps/desktop/aura-backend.spec

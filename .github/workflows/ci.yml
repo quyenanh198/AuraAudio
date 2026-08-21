@@ -47,6 +47,30 @@ jobs:
       - name: Install python dependencies
         run: uv sync --all-packages --all-extras
 
+      # Detection-quality roadmap item 2 (docs/benchmarks/2026-08-21-dq2.md):
+      # apps/api/tests/test_e2e_pipeline.py and several
+      # workers/transcription/tests (test_benchmark_regression.py,
+      # test_fast_passage_regression.py, the real-pipeline benchmark
+      # harness) drive a real piano transcription job end to end, which
+      # needs the piano checkpoint present locally -- aura_worker.piano_engine
+      # never downloads it itself (see that module's OFFLINE GUARANTEE
+      # docstring paragraph). Cached across runs keyed on the fetch
+      # script's own contents (which embeds the pinned sha256/URL), so a
+      # checksum/URL change automatically invalidates the cache instead of
+      # silently reusing a stale download; a cache miss re-downloads
+      # (~172MB from Zenodo, ~30s observed) and re-verifies the checksum
+      # via the script itself either way -- this cache is purely a speed
+      # optimization, not a trust boundary.
+      - name: Cache piano transcription weights
+        uses: actions/cache@v4
+        with:
+          path: workers/transcription/weights/piano
+          key: piano-weights-${{ hashFiles('workers/transcription/scripts/fetch_piano_weights.py') }}
+
+      - name: Fetch piano transcription weights
+        timeout-minutes: 5
+        run: uv run --package aura-worker python workers/transcription/scripts/fetch_piano_weights.py
+
       # Mirrors the Makefile's `test` target exactly, suite by suite.
       - name: score_schema tests
         run: uv run --package score-schema pytest packages/score_schema/tests

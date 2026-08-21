@@ -24,6 +24,12 @@
 # (sys._MEIPASS / "piano_weights" / ...). Fetched here (not assumed
 # already present) so a fresh clone's first build works unattended, same
 # as this script already does for every other dependency.
+#
+# --add-data THIRD_PARTY_NOTICES.md:piano_weights: the checkpoint is
+# CC-BY-4.0, which requires attribution to reach end users, not just this
+# repo's docs -- staged into every packaged installer right next to the
+# weights it documents, so a user who goes looking for it in the
+# installed app finds it in the same place as the file it's about.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,6 +45,7 @@ uv run --package aura-api pyinstaller \
   --specpath apps/desktop \
   --collect-data basic_pitch \
   --add-data "${REPO_ROOT}/workers/transcription/weights/piano/piano_transcription_crnn.pth:piano_weights" \
+  --add-data "${REPO_ROOT}/THIRD_PARTY_NOTICES.md:piano_weights" \
   --noconfirm \
   apps/desktop/run_backend.py
 

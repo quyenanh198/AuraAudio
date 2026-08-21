@@ -14,8 +14,16 @@ human-readable Markdown report and a machine-readable JSON report to
 `--out`, named `{date}-{label}.{md,json}` (default label "baseline").
 
 Measurement only: this script never modifies pipeline behavior, and
-performs no network I/O (basic-pitch's weights are already local, per
-this project's offline rule).
+performs no network I/O AT RUN TIME (basic-pitch's weights are already
+local package data, per this project's offline rule). Piano fixtures
+route through `aura_worker.piano_engine` (detection-quality roadmap item
+2, see `docs/benchmarks/2026-08-21-dq2.md`), which requires the piano
+checkpoint to already be present locally -- fetched once, at BUILD/dev-
+setup time, via `uv run --package aura-worker python
+workers/transcription/scripts/fetch_piano_weights.py` (checksum-pinned,
+not run automatically by this script). Running this benchmark without
+that checkpoint present fails every piano fixture with
+`PianoWeightsMissingError`, not a silent skip.
 
 IMPORTANT: DATABASE_URL / AURA_DATA_DIR are pointed at a fresh temp
 directory as the very first thing this module does, BEFORE any aura_api /
