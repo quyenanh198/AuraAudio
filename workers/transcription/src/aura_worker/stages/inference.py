@@ -5,10 +5,18 @@ import json
 from pathlib import Path
 
 from aura_worker.errors import JobFailure
+from aura_worker.ghost_filter import filter_ghost_notes
+from aura_worker.instrument_thresholds import thresholds_for_instrument
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
 from score_schema.models import JobErrorCode, NoteEvent
 
-STAGE_VERSION = 1
+# v1 -> v2 (detection-quality roadmap item 1): ghost-note filtering
+# (aura_worker.ghost_filter) applied to raw predictions, and basic-pitch's
+# onset/frame thresholds now vary per instrument
+# (aura_worker.instrument_thresholds) instead of using basic-pitch's
+# built-in defaults for every instrument. Both change this stage's output,
+# so cached artifacts from v1 must not be reused.
+STAGE_VERSION = 2
 
 
 def run(ctx: StageContext, normalized_path: Path) -> list[NoteEvent]:
@@ -17,11 +25,18 @@ def run(ctx: StageContext, normalized_path: Path) -> list[NoteEvent]:
         raw = json.loads(ctx.storage.get_bytes(cached.object_key))
         return [NoteEvent(**item) for item in raw]
 
+    thresholds = thresholds_for_instrument(ctx.job.project.instrument)
+
     try:
         from basic_pitch.inference import predict
         from basic_pitch import ICASSP_2022_MODEL_PATH
 
-        _, _, note_events = predict(str(normalized_path), model_or_model_path=ICASSP_2022_MODEL_PATH)
+        _, _, note_events = predict(
+            str(normalized_path),
+            model_or_model_path=ICASSP_2022_MODEL_PATH,
+            onset_threshold=thresholds.onset_threshold,
+            frame_threshold=thresholds.frame_threshold,
+        )
     except JobFailure:
         raise
     except Exception as exc:  # basic-pitch/tensorflow errors are not a stable type to catch narrowly
@@ -29,7 +44,7 @@ def run(ctx: StageContext, normalized_path: Path) -> list[NoteEvent]:
 
     # note_events entries are (start_time_s, end_time_s, pitch_midi, amplitude, pitch_bends);
     # pitch_midi is already a MIDI note number.
-    notes = [
+    raw_notes = [
         NoteEvent(
             pitch=int(round(pitch_midi)),
             onset_s=float(start_s),
@@ -39,6 +54,7 @@ def run(ctx: StageContext, normalized_path: Path) -> list[NoteEvent]:
         )
         for start_s, end_s, pitch_midi, amplitude, *_rest in note_events
     ]
+    notes = filter_ghost_notes(raw_notes)
 
     if not notes:
         raise JobFailure(JobErrorCode.NO_MUSIC_DETECTED, "model returned zero note events")

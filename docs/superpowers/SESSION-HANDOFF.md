@@ -907,10 +907,34 @@ next; 3 and 4 proceed only if 0-2 land OK:
    note onset F1 / onset+offset F1 (mir_eval), key/meter/tempo
    accuracy; baseline committed under docs/benchmarks/. No tuning
    without measurement.
-1. **Post-filter cheap wins.** Ghost-note filtering (confidence +
-   min-duration + octave-shadow dedupe) in quantize, per-instrument
-   basic-pitch threshold tuning — must improve benchmark, no
-   regressions.
+1. **Post-filter cheap wins. DONE (2026-08-21), benchmark-verified.**
+   Ghost-note filtering (confidence floor + min-duration floor +
+   octave-shadow dedupe — `aura_worker.ghost_filter`) and per-instrument
+   basic-pitch onset/frame threshold tuning (`aura_worker.instrument_thresholds`)
+   both landed in the `inference` stage right after basic-pitch's raw
+   predictions (not in `quantize` as originally sketched above — see
+   deviation note below), `STAGE_VERSION` 1 → 2. Diagnosis (dumping
+   matched/unmatched notes for the worst fixtures) found the baseline's
+   0.540 mean onset F1 was driven almost entirely by poor precision
+   (0.24-0.59 per fixture) against near-perfect recall (0.75-1.0) — i.e.
+   the loss was dominated by ghost/extra notes, not missed real ones,
+   which is exactly the shape this item's filter targets rather than
+   raising thresholds blindly (which would have cut recall instead).
+   Result: **mean onset F1 0.540 → 0.971 (+0.431)**, onset+offset F1 0.155
+   → 0.256, tempo/key/meter accuracy unchanged (100%/50%/20%), every one
+   of the 10 fixtures improved (worst per-fixture delta +0.226, nowhere
+   near a regression). Full before/after table:
+   `docs/benchmarks/2026-08-21-dq1.md`. `test_benchmark_regression.py`'s
+   `FLOOR` raised 0.45 → 0.83 to match the new measured 3-fixture subset
+   mean (0.9899 - 0.15 margin).
+   Deviation from the sketch above: the ghost-note filter lives in
+   `inference.py` (applied to basic-pitch's raw output), not `quantize.py`
+   — the benchmark harness scores `inference.run`'s raw notes directly
+   (by design, see DQ-0's report), so a filter placed in `quantize` would
+   never show up in the very benchmark this item is gated on; `inference`
+   is also the natural place architecturally, since ghost notes are an
+   inference-stage artifact and `quantize`/`structure` both already
+   consume the filtered list downstream.
 2. **Piano-specific model.** Dedicated piano transcription model behind
    the existing engine adapter (piano projects only; guitar keeps
    basic-pitch). Weights must be bundled (offline rule) and licensed

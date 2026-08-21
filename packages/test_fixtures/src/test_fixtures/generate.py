@@ -246,6 +246,22 @@ def karplus_strong_pluck(
     output — reproducible across calls, which matters for deterministic
     benchmark fixtures that must regenerate byte-identical WAVs on every
     run.
+
+    KNOWN LIMIT — pitch accuracy at short periods (high pitches): the delay
+    line's length is `period = round(sample_rate / freq)`, an integer, so
+    the signal actually rings at `sample_rate / period`, not exactly
+    `freq`. The rounding error is negligible at the pitches this project's
+    curated benchmark suite currently uses (well under 20 cents — see
+    `test_karplus_strong_pluck_frequency_matches_nominal_pitch_for_suite_range`
+    in test_karplus_strong.py, which measures this directly via FFT and
+    fails if that ever stops being true), but it grows fast as `period`
+    gets short: a period around 25-30 samples (roughly the E5-G5 region at
+    a 22050 Hz sample rate) can already drift several tens of cents sharp
+    or flat, purely from that one rounding step. Do not add a benchmark
+    fixture pitch that high without re-checking this function's accuracy
+    at that specific pitch first — the parametrized test above is intended
+    to catch exactly that mistake automatically, since it is parametrized
+    over the suite's own pitch list rather than a hardcoded range.
     """
     n_samples = max(int(round(sample_rate * duration_s)), 1)
     period = max(int(round(sample_rate / freq)), 2)

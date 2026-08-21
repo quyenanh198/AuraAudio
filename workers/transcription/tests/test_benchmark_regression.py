@@ -8,20 +8,27 @@ minutes (see this file's `@pytest.mark.benchmark_regression` marker,
 registered in pyproject.toml, for how to exclude this file if it ever
 becomes a CI bottleneck: `-m "not benchmark_regression"`).
 
-FLOOR is derived from docs/benchmarks/2026-08-21-baseline.json's measured
-per-fixture onset F1 for these exact 3 fixtures (mean 0.6155), minus a
-0.15 absolute margin — generous enough to absorb ordinary
-platform/library-version noise while still catching a catastrophic
-regression (e.g. a stage silently returning near-zero notes). This guards
-against regressions ONLY; it does not replace the full benchmark run for
-measuring actual improvement/regression magnitude — use
-`python -m aura_worker.eval.benchmark` for that.
+FLOOR is derived from the most recent measured benchmark's per-fixture
+onset F1 for these exact 3 fixtures, minus a 0.15 absolute margin —
+generous enough to absorb ordinary platform/library-version noise while
+still catching a catastrophic regression (e.g. a stage silently returning
+near-zero notes). This guards against regressions ONLY; it does not
+replace the full benchmark run for measuring actual improvement/regression
+magnitude — use `python -m aura_worker.eval.benchmark` for that.
 
-If a future roadmap item (docs/benchmarks' item 1+) intentionally and
-verifiably improves onset F1, re-run the full benchmark, update
-FLOOR to (new measured mean - 0.15), and note the change in this file's
-comment trail — do not silently loosen the floor without a fresh
-measurement backing it.
+History:
+- 2026-08-21 (DQ-0 baseline): measured 3-fixture mean 0.6155 -> FLOOR 0.45.
+- 2026-08-21 (DQ-1, detection-quality roadmap item 1 — ghost-note filtering
+  + per-instrument basic-pitch thresholds, see
+  docs/benchmarks/2026-08-21-dq1.md): measured 3-fixture mean 0.9899
+  (guitar_two_voice_chords_a_minor_100 0.970, guitar_arpeggio_a_minor_130
+  1.000, piano_melody_c_major_100 1.000) -> FLOOR raised to 0.83 (0.9899 -
+  0.15 margin, rounded down).
+
+If a future roadmap item intentionally and verifiably improves onset F1,
+re-run the full benchmark, update FLOOR to (new measured mean - 0.15,
+rounded down), and add a line to the History list above — do not silently
+loosen the floor without a fresh measurement backing it.
 """
 from __future__ import annotations
 
@@ -39,7 +46,7 @@ _REGRESSION_FIXTURE_NAMES = (
     "guitar_arpeggio_a_minor_130",
     "piano_melody_c_major_100",
 )
-FLOOR = 0.45  # measured baseline mean 0.6155 - 0.15 margin; see module docstring
+FLOOR = 0.83  # measured DQ-1 mean 0.9899 - 0.15 margin, rounded down; see module docstring's History
 
 
 @pytest.mark.benchmark_regression
@@ -73,5 +80,5 @@ def test_aggregate_onset_f1_stays_above_baseline_floor():
         f"aggregate onset F1 {aggregate_f1:.3f} dropped below floor {FLOOR} "
         f"(per-fixture: {per_fixture}) -- "
         "this indicates a real detection-quality regression, not noise; see "
-        "docs/benchmarks/2026-08-21-baseline.json for the full baseline."
+        "docs/benchmarks/2026-08-21-dq1.json for the most recent full benchmark."
     )
