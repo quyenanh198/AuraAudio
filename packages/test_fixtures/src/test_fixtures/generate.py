@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 from scipy.io import wavfile
-
 from score_schema.meters import beats_per_measure, is_compound
 
 
@@ -212,6 +211,55 @@ _MAJOR_INTERVALS = [0, 2, 4, 5, 7, 9, 11, 12]
 _MINOR_INTERVALS = [0, 2, 3, 5, 7, 8, 10, 12]
 
 
+def scale_pitches(key: str, tonic_midi_base: int = 60) -> list[int]:
+    """MIDI pitches of the full ascending diatonic scale (tonic to octave,
+    8 notes) for `key` (music21 tonic-name convention: flats as '-', e.g.
+    'B- major'), anchored so the tonic falls in the octave containing
+    `tonic_midi_base` (default 60 = middle C). Shared by
+    write_diatonic_melody_wav below and by the benchmark reference-clip
+    suite (packages/test_fixtures/src/test_fixtures/benchmark_suite.py),
+    which builds melodies/chords in a stated key from these pitches."""
+    tonic_name, mode = key.split(" ")
+    tonic_midi = tonic_midi_base + _NOTE_NAME_TO_SEMITONE[tonic_name]
+    intervals = _MAJOR_INTERVALS if mode == "major" else _MINOR_INTERVALS
+    return [tonic_midi + iv for iv in intervals]
+
+
+def karplus_strong_pluck(
+    freq: float,
+    duration_s: float,
+    sample_rate: int = 22050,
+    decay: float = 0.996,
+    seed: int | None = None,
+) -> np.ndarray:
+    """Karplus-Strong plucked-string synthesis: a short burst of noise
+    circulated through a leaky-averaging delay line of length
+    `sample_rate / freq` samples. Produces a materially more guitar-like
+    timbre (sharp noise-burst attack, naturally decaying harmonic buzz)
+    than `_decaying_harmonic`'s additive sine-harmonic model below (which
+    is closer to a piano/tone). Returns the raw signal (not written to a
+    file, not normalized) so callers can place/mix it into a larger buffer
+    at an arbitrary onset time — see
+    test_fixtures.reference.generate_reference_clip.
+
+    `seed` makes the initial noise burst — and therefore the entire
+    output — reproducible across calls, which matters for deterministic
+    benchmark fixtures that must regenerate byte-identical WAVs on every
+    run.
+    """
+    n_samples = max(int(round(sample_rate * duration_s)), 1)
+    period = max(int(round(sample_rate / freq)), 2)
+    rng = np.random.default_rng(seed)
+    ring = rng.uniform(-1.0, 1.0, size=period)
+    out = np.zeros(n_samples)
+    for i in range(n_samples):
+        idx = i % period
+        nxt = (i + 1) % period
+        out[i] = ring[idx]
+        ring[idx] = decay * 0.5 * (ring[idx] + ring[nxt])
+    return out
+
+
 def write_diatonic_melody_wav(
     path: Path,
     key: str = "C major",
@@ -221,10 +269,7 @@ def write_diatonic_melody_wav(
     """Synthesize a short ascending diatonic scale in the given key (music21
     tonic-name convention: flats as '-', e.g. 'B- major'), so key detection
     can be tested against ground truth."""
-    tonic_name, mode = key.split(" ")
-    tonic_midi = 60 + _NOTE_NAME_TO_SEMITONE[tonic_name]
-    intervals = _MAJOR_INTERVALS if mode == "major" else _MINOR_INTERVALS
-    pitches = [tonic_midi + iv for iv in intervals]
+    pitches = scale_pitches(key)
 
     note_len = duration_s / len(pitches)
     t_full = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)

@@ -17,3 +17,9 @@ apps/desktop/src-tauri/resources/
 apps/desktop/web/test-results/
 apps/desktop/web/playwright-report/
 apps/desktop/web/blob-report/
+# Optional benchmark manifest (aura_worker.eval.manifest): local real
+# recordings + reference MIDI for `python -m aura_worker.eval.benchmark
+# --manifest ...`. Conventional local location; the --manifest flag itself
+# accepts any path, this just keeps the default one out of git.
+docs/benchmarks/manifest*.json
+docs/benchmarks/manifest_data/

@@ -248,6 +248,10 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+eval = [
+    { name = "mir-eval" },
+    { name = "test-fixtures" },
+]
 test = [
     { name = "pytest" },
     { name = "test-fixtures" },
@@ -259,6 +263,7 @@ requires-dist = [
     { name = "basic-pitch", extras = ["tf"], specifier = ">=0.4" },
     { name = "librosa", specifier = ">=0.10" },
     { name = "mido", specifier = ">=1.3" },
+    { name = "mir-eval", marker = "extra == 'eval'", specifier = ">=0.7" },
     { name = "music21", specifier = ">=9.1" },
     { name = "musicxml", editable = "packages/musicxml" },
     { name = "numpy", specifier = ">=1.26,<2" },
@@ -267,9 +272,10 @@ requires-dist = [
     { name = "setuptools", specifier = "<81" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "tensorflow-intel", marker = "sys_platform == 'win32'", specifier = "==2.14.0" },
+    { name = "test-fixtures", marker = "extra == 'eval'", editable = "packages/test_fixtures" },
     { name = "test-fixtures", marker = "extra == 'test'", editable = "packages/test_fixtures" },
 ]
-provides-extras = ["test"]
+provides-extras = ["test", "eval"]
 
 [[package]]
 name = "basic-pitch"

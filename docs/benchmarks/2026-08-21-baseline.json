@@ -1,0 +1,268 @@
+{
+  "generated_at": "2026-08-21T01:21:45.434709+00:00",
+  "commit": "50021da",
+  "suite_version": "2026-08-21-v1",
+  "manifest_path": null,
+  "aggregate": {
+    "fixture_count": 10,
+    "scored_count": 10,
+    "error_count": 0,
+    "mean_onset_f1": 0.5396133206090283,
+    "mean_onset_offset_f1": 0.15473803568473632,
+    "tempo_accuracy": 1.0,
+    "key_accuracy": 0.5,
+    "meter_accuracy": 0.2
+  },
+  "fixtures": [
+    {
+      "name": "guitar_melody_c_major_90",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 90.0,
+      "truth_meter": "4/4",
+      "truth_key": "C major",
+      "detected_tempo_bpm": 89.10290948275862,
+      "detected_meter": "4/4",
+      "detected_key": "C major",
+      "tempo_ok": true,
+      "meter_ok": true,
+      "key_ok": true,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.36363636363636365,
+        "recall": 1.0,
+        "f1": 0.5333333333333333
+      },
+      "onset_offset_f1": {
+        "precision": 0.045454545454545456,
+        "recall": 0.125,
+        "f1": 0.06666666666666667
+      }
+    },
+    {
+      "name": "guitar_melody_g_major_120_3_4",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 120.0,
+      "truth_meter": "3/4",
+      "truth_key": "G major",
+      "detected_tempo_bpm": 117.45383522727273,
+      "detected_meter": "2/4",
+      "detected_key": "G major",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": true,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.3333333333333333,
+        "recall": 0.875,
+        "f1": 0.48275862068965514
+      },
+      "onset_offset_f1": {
+        "precision": 0.09523809523809523,
+        "recall": 0.25,
+        "f1": 0.13793103448275862
+      }
+    },
+    {
+      "name": "guitar_melody_d_major_140",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 140.0,
+      "truth_meter": "4/4",
+      "truth_key": "D major",
+      "detected_tempo_bpm": 143.5546875,
+      "detected_meter": "3/4",
+      "detected_key": "B major",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": false,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.42105263157894735,
+        "recall": 1.0,
+        "f1": 0.5925925925925926
+      },
+      "onset_offset_f1": {
+        "precision": 0.15789473684210525,
+        "recall": 0.375,
+        "f1": 0.22222222222222218
+      }
+    },
+    {
+      "name": "guitar_two_voice_chords_a_minor_100",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 100.0,
+      "truth_meter": "4/4",
+      "truth_key": "A minor",
+      "detected_tempo_bpm": 99.38401442307692,
+      "detected_meter": "6/8",
+      "detected_key": "F# minor",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": false,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.5925925925925926,
+        "recall": 1.0,
+        "f1": 0.7441860465116279
+      },
+      "onset_offset_f1": {
+        "precision": 0.3333333333333333,
+        "recall": 0.5625,
+        "f1": 0.4186046511627907
+      }
+    },
+    {
+      "name": "guitar_two_voice_chords_e_minor_110_3_4",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 110.0,
+      "truth_meter": "3/4",
+      "truth_key": "E minor",
+      "detected_tempo_bpm": 112.34714673913044,
+      "detected_meter": "6/8",
+      "detected_key": "E- minor",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": false,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.45454545454545453,
+        "recall": 0.9375,
+        "f1": 0.6122448979591837
+      },
+      "onset_offset_f1": {
+        "precision": 0.12121212121212122,
+        "recall": 0.25,
+        "f1": 0.163265306122449
+      }
+    },
+    {
+      "name": "guitar_arpeggio_a_minor_130",
+      "source": "synthetic",
+      "instrument": "guitar",
+      "truth_tempo_bpm": 130.0,
+      "truth_meter": "4/4",
+      "truth_key": "A minor",
+      "detected_tempo_bpm": 129.19921875,
+      "detected_meter": "4/4",
+      "detected_key": "F# minor",
+      "tempo_ok": true,
+      "meter_ok": true,
+      "key_ok": false,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.5714285714285714,
+        "recall": 1.0,
+        "f1": 0.7272727272727273
+      },
+      "onset_offset_f1": {
+        "precision": 0.21428571428571427,
+        "recall": 0.375,
+        "f1": 0.2727272727272727
+      }
+    },
+    {
+      "name": "piano_melody_c_major_100",
+      "source": "synthetic",
+      "instrument": "piano",
+      "truth_tempo_bpm": 100.0,
+      "truth_meter": "4/4",
+      "truth_key": "C major",
+      "detected_tempo_bpm": 99.38401442307692,
+      "detected_meter": "3/4",
+      "detected_key": "A minor",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": false,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.25,
+        "recall": 0.75,
+        "f1": 0.375
+      },
+      "onset_offset_f1": {
+        "precision": 0.041666666666666664,
+        "recall": 0.125,
+        "f1": 0.0625
+      }
+    },
+    {
+      "name": "piano_melody_d_minor_120",
+      "source": "synthetic",
+      "instrument": "piano",
+      "truth_tempo_bpm": 120.0,
+      "truth_meter": "4/4",
+      "truth_key": "D minor",
+      "detected_tempo_bpm": 117.45383522727273,
+      "detected_meter": "2/4",
+      "detected_key": "D minor",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": true,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.24,
+        "recall": 0.75,
+        "f1": 0.36363636363636365
+      },
+      "onset_offset_f1": {
+        "precision": 0.04,
+        "recall": 0.125,
+        "f1": 0.06060606060606061
+      }
+    },
+    {
+      "name": "piano_two_hand_chords_f_major_90_3_4",
+      "source": "synthetic",
+      "instrument": "piano",
+      "truth_tempo_bpm": 90.0,
+      "truth_meter": "3/4",
+      "truth_key": "F major",
+      "detected_tempo_bpm": 89.10290948275862,
+      "detected_meter": "6/8",
+      "detected_key": "F major",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": true,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.2972972972972973,
+        "recall": 0.9166666666666666,
+        "f1": 0.4489795918367347
+      },
+      "onset_offset_f1": {
+        "precision": 0.0945945945945946,
+        "recall": 0.2916666666666667,
+        "f1": 0.14285714285714288
+      }
+    },
+    {
+      "name": "piano_two_hand_wide_range_e_minor_130",
+      "source": "synthetic",
+      "instrument": "piano",
+      "truth_tempo_bpm": 130.0,
+      "truth_meter": "4/4",
+      "truth_key": "E minor",
+      "detected_tempo_bpm": 129.19921875,
+      "detected_meter": "6/8",
+      "detected_key": "E minor",
+      "tempo_ok": true,
+      "meter_ok": false,
+      "key_ok": true,
+      "error": null,
+      "onset_f1": {
+        "precision": 0.34782608695652173,
+        "recall": 1.0,
+        "f1": 0.5161290322580645
+      },
+      "onset_offset_f1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      }
+    }
+  ]
+}

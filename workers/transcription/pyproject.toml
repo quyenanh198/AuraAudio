@@ -51,6 +51,14 @@ test-fixtures = { workspace = true }
 
 [project.optional-dependencies]
 test = ["pytest>=8.2", "test-fixtures"]
+# Benchmark-harness scoring (aura_worker.eval.*, docs/superpowers/SESSION-HANDOFF.md's
+# "Detection-quality roadmap" item 0). mir_eval is ALSO an undeclared transitive
+# dependency of basic-pitch[tf] already (basic-pitch's own PyPI metadata requires
+# it) -- it is listed explicitly here anyway so aura_worker.eval doesn't rely on
+# another package's implementation detail staying true. Verified against
+# uv.lock: pinning it here changed nothing else in the resolution (mir-eval
+# 0.8.2 was already the locked version via basic-pitch).
+eval = ["mir_eval>=0.7", "test-fixtures"]
 
 [build-system]
 requires = ["hatchling"]
@@ -61,3 +69,12 @@ packages = ["src/aura_worker"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    # A real (basic-pitch/ffmpeg/librosa) end-to-end run against 3 curated
+    # fixtures, gating aggregate onset F1 against the committed
+    # docs/benchmarks baseline. Runs in `make test` by default (a few
+    # seconds, well under the couple-minutes budget) but is markable/
+    # excludable via `-m "not benchmark_regression"` if it ever becomes a
+    # CI bottleneck -- see test_benchmark_regression.py's module docstring.
+    "benchmark_regression: slow-ish real-pipeline benchmark floor guard",
+]
