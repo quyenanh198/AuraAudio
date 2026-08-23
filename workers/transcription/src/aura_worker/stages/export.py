@@ -44,7 +44,11 @@ def run(ctx: StageContext, notes: list[NoteEvent], score: dict) -> dict:
     musicxml_path = ctx.workdir / "output.musicxml"
 
     _write_midi(notes, midi_path, tempo_bpm)
-    score_json_to_musicxml(score, musicxml_path)
+    # Bug D cosmetic fix: without an explicit title, music21's own writer
+    # falls back to its hardcoded "Music21 Fragment"/"Music21" placeholders
+    # (see musicxml.export._apply_metadata's doc comment) -- the exported
+    # score's title should be the project's real title, not music21's.
+    score_json_to_musicxml(score, musicxml_path, title=ctx.job.project.title)
 
     expected_note_count = sum(
         len(measure["events"]) for measure in score["parts"][0]["measures"]

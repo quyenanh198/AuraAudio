@@ -5,6 +5,7 @@
   import { api } from "../lib/api";
   import { createCoalescer } from "../lib/coalesce";
   import { buildEventPositionIndex, type StepNoteInfo } from "../lib/correlate";
+  import { isRestOrAllTiedStep } from "../lib/cursorWalk";
   import { editor } from "../lib/editor";
   import { clampPitch, findEvent, firstEventId, stepOnset } from "../lib/noteEdit";
   import { createAudioSource, playback } from "../lib/playback";
@@ -170,11 +171,17 @@
    * steps only ever appear as the MusicXML exporter's explicit gap-filling
    * (task-1b R2); the guitar TAB staff's duplicate per-staff notes never
    * affect this (both staves agree on isRest() for the same musical
-   * instant). `notesUnderCursor()[i]` and `gNotesUnderCursor()[i]` are
-   * index-aligned (verified: both iterate the exact same
-   * `VoicesUnderCursor().Notes` array in the installed bundle — see
-   * task-6-report.md), so zipping them by index is safe. Leaves the cursor
-   * reset to the start when done, ready for playback. */
+   * instant). A step whose remaining (non-rest) notes are ALL tie
+   * continuations is ALSO treated as rest-only (`cursorWalk.ts`'s
+   * `isRestOrAllTiedStep` — see its module doc comment for the full "Bug D"
+   * root-cause trail: a notated duration split into tied MusicXML notes by
+   * the exporter has no corresponding extra JSON onset group, so counting
+   * the tied continuation as its own step desyncs the correlation).
+   * `notesUnderCursor()[i]` and `gNotesUnderCursor()[i]` are index-aligned
+   * (verified: both iterate the exact same `VoicesUnderCursor().Notes`
+   * array in the installed bundle — see task-6-report.md), so zipping them
+   * by index is safe. Leaves the cursor reset to the start when done,
+   * ready for playback. */
   function walkCursor(cursor: OSMDCursorHandle): { nonRestStepIndices: number[]; stepNotes: StepNoteInfo[] } {
     const nonRestStepIndices: number[] = [];
     const stepNotes: StepNoteInfo[] = [];
@@ -183,7 +190,7 @@
     while (!cursor.isEndReached()) {
       const notes = cursor.notesUnderCursor();
       const gNotes = cursor.gNotesUnderCursor();
-      const isRestStep = notes.length === 0 || notes.every((note) => note.isRest());
+      const isRestStep = isRestOrAllTiedStep(notes);
       if (!isRestStep) {
         nonRestStepIndices.push(step);
         const stepEntry: StepNoteInfo = { step, notes: [] };

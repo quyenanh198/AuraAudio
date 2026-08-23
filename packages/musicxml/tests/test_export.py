@@ -67,6 +67,127 @@ def test_score_json_to_musicxml_uses_detected_tempo(tmp_path: Path):
     assert 'sound tempo="90"' in content
 
 
+def test_score_json_to_musicxml_rounds_raw_float_tempo_to_integer_mm(tmp_path: Path):
+    # Bug D cosmetic fix: a real librosa.beat.beat_track result (e.g.
+    # 99.38401442307692, see aura_worker.stages.structure) must be rounded
+    # for the notated tempo MARK -- printed scores conventionally notate a
+    # plain integer MM, and the raw float rendered directly was the
+    # reported bug. The precise value itself is a separate JSON-only
+    # concern, not exercised by this MusicXML-only test.
+    out_path = tmp_path / "out_raw_tempo.musicxml"
+    score_json_to_musicxml(_sample_score(tempo_bpm=99.38401442307692), out_path)
+    content = out_path.read_text()
+    assert "<per-minute>99</per-minute>" in content
+    assert 'sound tempo="99"' in content
+    assert "99.38401442307692" not in content
+
+
+def test_score_json_to_musicxml_rounds_tempo_half_up_at_the_boundary(tmp_path: Path):
+    # round() in Python uses banker's rounding (round-half-to-even) --
+    # confirms the exact behavior this fix inherits rather than assuming
+    # ordinary round-half-up, so a future reader isn't surprised by
+    # e.g. 120.5 -> 120, not 121.
+    out_path = tmp_path / "out_half_tempo.musicxml"
+    score_json_to_musicxml(_sample_score(tempo_bpm=120.5), out_path)
+    content = out_path.read_text()
+    assert "<per-minute>120</per-minute>" in content
+
+
+def test_score_json_to_musicxml_piano_tempo_mark_is_also_rounded(tmp_path: Path):
+    # The piano grand-staff builder has its own separate MetronomeMark call
+    # site (musicxml.export._build_piano_grand_staff) -- must not regress
+    # independently of the guitar/single-staff one covered above.
+    score = build_score(
+        instrument="piano",
+        tempo_bpm=143.87654321,
+        meter="4/4",
+        key="C major",
+        confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
+        time_map=[{"beat": 0, "seconds": 0.0}],
+        measures=[{
+            "number": 1,
+            "events": [
+                {
+                    "id": "note_00", "pitch": 60, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+                    "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+                    "confidence": 0.9, "locked": False, "hand": "right",
+                },
+            ],
+        }],
+    )
+    out_path = tmp_path / "out_piano_tempo.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+    assert "<per-minute>144</per-minute>" in content
+    assert "143.87654321" not in content
+
+
+class TestTitleMetadata:
+    """Bug D cosmetic fix: the exported score's title/composer must never
+    show music21's own hardcoded "Music21 Fragment"/"Music21" placeholders
+    (music21/defaults.py's `title`/`author`, written into
+    <movement-title>/<work-title>/<creator> by m21ToXml.py's
+    setIdentification whenever no metadata/contributor is set at all --
+    verified directly, see _apply_metadata's doc comment in export.py)."""
+
+    def test_real_project_title_is_used(self, tmp_path: Path):
+        out_path = tmp_path / "out_title.musicxml"
+        score_json_to_musicxml(_sample_score(), out_path, title="Fairy Tale")
+        content = out_path.read_text()
+        assert "<movement-title>Fairy Tale</movement-title>" in content
+        assert "<work-title>Fairy Tale</work-title>" in content
+        assert "Music21" not in content
+
+    def test_no_title_falls_back_to_untitled_not_music21(self, tmp_path: Path):
+        out_path = tmp_path / "out_no_title.musicxml"
+        score_json_to_musicxml(_sample_score(), out_path)  # title omitted entirely
+        content = out_path.read_text()
+        assert "<movement-title>Untitled</movement-title>" in content
+        assert "Music21 Fragment" not in content
+        assert "Music21" not in content
+
+    def test_empty_string_title_falls_back_to_untitled(self, tmp_path: Path):
+        # An empty-string project title is falsy in Python -- must be
+        # treated the same as "no title given", not written as a literal
+        # blank <movement-title></movement-title>.
+        out_path = tmp_path / "out_empty_title.musicxml"
+        score_json_to_musicxml(_sample_score(), out_path, title="")
+        content = out_path.read_text()
+        assert "<movement-title>Untitled</movement-title>" in content
+
+    def test_composer_is_blank_not_music21(self, tmp_path: Path):
+        out_path = tmp_path / "out_composer.musicxml"
+        score_json_to_musicxml(_sample_score(), out_path, title="Fairy Tale")
+        content = out_path.read_text()
+        assert '<creator type="composer" />' in content or '<creator type="composer"/>' in content
+        assert "<creator type=\"composer\">Music21</creator>" not in content
+
+    def test_piano_export_also_gets_real_title(self, tmp_path: Path):
+        score = build_score(
+            instrument="piano",
+            tempo_bpm=120.0,
+            meter="4/4",
+            key="C major",
+            confidence={"tempo": 0.9, "meter": 0.8, "key": 0.7},
+            time_map=[{"beat": 0, "seconds": 0.0}],
+            measures=[{
+                "number": 1,
+                "events": [
+                    {
+                        "id": "note_00", "pitch": 60, "onsetSeconds": 0.0, "offsetSeconds": 0.5,
+                        "notatedOnset": "0/1", "notatedDuration": "1/4", "voice": 1,
+                        "confidence": 0.9, "locked": False, "hand": "right",
+                    },
+                ],
+            }],
+        )
+        out_path = tmp_path / "out_piano_title.musicxml"
+        score_json_to_musicxml(score, out_path, title="Fairy Tale")
+        content = out_path.read_text()
+        assert "<movement-title>Fairy Tale</movement-title>" in content
+        assert "Music21" not in content
+
+
 def test_score_json_to_musicxml_uses_detected_key(tmp_path: Path):
     out_path = tmp_path / "out_key.musicxml"
     score_json_to_musicxml(_sample_score(key="D major"), out_path)
@@ -582,3 +703,54 @@ def test_score_json_to_musicxml_clamps_bar_crossing_duration(tmp_path: Path):
 
     assert notes[1].offset == 0.0  # measure 2, beat 0 (bar-relative)
     assert notes[1].duration.quarterLength == 1.0
+
+
+def test_score_json_to_musicxml_irregular_duration_within_a_measure_still_ties(tmp_path: Path):
+    # Bug D root cause (the "Playback sync unavailable" banner):
+    # quantize.py's 16th-note grid (GRID_BEATS) routinely produces notated
+    # durations, like "5/16" here (1.25 quarterLength), that aren't
+    # representable as a single note value -- music21's writer silently
+    # splits these into a tied PAIR of <note> elements (a quarter tied to a
+    # sixteenth) even though the duration stays entirely WITHIN one measure
+    # (unlike test_score_json_to_musicxml_clamps_bar_crossing_duration
+    # above, which is a DIFFERENT, already-fixed cross-measure case this
+    # test deliberately does not overlap with). One JSON event therefore
+    # becomes TWO real <note> elements in the exported file -- the exact
+    # mismatch apps/desktop/web/src/lib/cursorWalk.ts's
+    # `isRestOrAllTiedStep` exists to tolerate in the OSMD cursor walk (see
+    # that module's own tests, apps/desktop/web/src/lib/cursorWalk.test.ts).
+    # This test locks in the underlying MusicXML shape that fix depends on.
+    score = _sample_score()
+    score["parts"][0]["measures"] = [
+        {
+            "number": 1,
+            "events": [
+                {
+                    "id": "note_00", "pitch": 60, "onsetSeconds": 0.0, "offsetSeconds": 1.25,
+                    "notatedOnset": "0/1", "notatedDuration": "5/16", "voice": 1,
+                    "confidence": 0.9, "locked": False,
+                },
+                {
+                    "id": "note_01", "pitch": 64, "onsetSeconds": 1.25, "offsetSeconds": 2.0,
+                    "notatedOnset": "5/16", "notatedDuration": "3/16", "voice": 1,
+                    "confidence": 0.85, "locked": False,
+                },
+            ],
+        },
+    ]
+    out_path = tmp_path / "guitar_within_measure_tie.musicxml"
+    score_json_to_musicxml(score, out_path)
+    content = out_path.read_text()
+
+    assert '<tie type="start" />' in content
+    assert '<tie type="stop" />' in content
+
+    reopened = music21.converter.parse(str(out_path))
+    notation_part = next(p for p in reopened.parts if p.id.endswith("Staff1"))
+    measures = notation_part.recurse().getElementsByClass(music21.stream.Measure)
+    assert len(measures) == 1  # the tie never crosses a bar line here
+    # Reopened note COUNT is 3 (tie-start + tie-stop for note_00, plus
+    # note_01) even though the score JSON has only 2 events -- exactly the
+    # "one JSON event, multiple XML notes" shape this whole bug is about.
+    notes = list(notation_part.recurse().notes)
+    assert len(notes) == 3

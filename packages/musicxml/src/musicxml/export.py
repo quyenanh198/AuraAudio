@@ -4,13 +4,25 @@ from __future__ import annotations
 from fractions import Fraction
 from pathlib import Path
 
-from music21 import articulations, chord, clef, duration, instrument, key as m21_key, layout, meter as m21_meter, note, pitch as m21_pitch, stream, tempo
+from music21 import articulations, chord, clef, duration, instrument, key as m21_key, layout, meter as m21_meter, metadata as m21_metadata, note, pitch as m21_pitch, stream, tempo
 
 # packages/musicxml cannot depend on workers/transcription (packages sit
 # below workers in the dependency graph) — duplicated here rather than
 # imported from aura_worker.piano_hands, same reasoning as this file's
 # inlined "6 - internal_string" guitar-numbering conversion.
 _STANDARD_PIANO_RANGE = (21, 108)
+
+# Fallback movement/work title when the caller has no real project title to
+# hand in (e.g. an older/direct caller, or a project genuinely titled the
+# empty string) -- NEVER left unset: music21's own `stream.Score` defaults
+# an unset `.metadata` to `defaults.title` ("Music21 Fragment") and
+# `defaults.author` ("Music21") the moment `.write("musicxml", ...)` builds
+# the <identification> block (verified directly against
+# music21/musicxml/m21ToXml.py's `setIdentification`/`setTitles`), which is
+# exactly the "hardcoded 'Music21' as title" bug this constant exists to
+# never reproduce -- see `_apply_metadata` below, always called
+# unconditionally in `score_json_to_musicxml`.
+_FALLBACK_TITLE = "Untitled"
 
 # Grid floor for clamped durations, in quarterLength (ql). quantize.py
 # (workers/transcription/src/aura_worker/stages/quantize.py) snaps every
@@ -169,7 +181,49 @@ def _insert_notated_events(
         m21_measure.insert(cursor, note.Rest(quarterLength=measure_length_ql - cursor))
 
 
-def score_json_to_musicxml(score: dict, out_path: Path) -> Path:
+def _apply_metadata(m21_score: stream.Score, title: str | None) -> None:
+    """Sets the score's real title (falling back to `_FALLBACK_TITLE`, never
+    to music21's own "Music21 Fragment"/"Music21" defaults) and explicitly
+    blanks the composer.
+
+    Unconditional -- called for every export, not just when `title` is
+    truthy -- because the bug this fixes isn't "a project with a title
+    doesn't get one", it's "a `stream.Score` with NO metadata set at all
+    gets music21's own hardcoded placeholders written into
+    <movement-title>/<work-title>/<creator> the moment `.write()` runs" (see
+    `_FALLBACK_TITLE`'s doc comment). Composer is set to `""` (a real,
+    present but empty Contributor), not left unset: `m21ToXml.py`'s
+    `setIdentification` only skips its "Music21" `<creator>` fallback when
+    AT LEAST ONE contributor already exists on the metadata (verified
+    directly) -- an empty string still counts as one, so this suppresses
+    that fallback too without inventing a fake composer name nobody
+    supplied.
+    """
+    m21_metadata_obj = m21_metadata.Metadata()
+    m21_metadata_obj.title = title or _FALLBACK_TITLE
+    m21_metadata_obj.composer = ""
+    m21_score.metadata = m21_metadata_obj
+
+
+def _notated_tempo(tempo_bpm: float) -> int:
+    """Rounds a detected tempo to the nearest integer BPM for the notated
+    tempo mark (MusicXML `<per-minute>`/`<sound tempo=...>`, both driven by
+    the same `MetronomeMark.number` -- verified directly) only.
+
+    The precise, unrounded `tempo_bpm` (e.g. `99.38401442307692`, a real
+    `librosa.beat.beat_track` result -- see `aura_worker.stages.structure`)
+    stays exactly as detected everywhere else: the score JSON's own
+    `tempoBpm` field (`score_schema.models.build_score`, read by
+    `quantize.py`'s beat-grid math and the frontend's playback timeline)
+    is never touched by this function or its caller -- only the MusicXML
+    export's human-facing tempo MARKING is rounded, matching how printed
+    scores are conventionally notated (a plain integer MM mark), not the
+    underlying detected tempo used for actual sync/timing math.
+    """
+    return round(tempo_bpm)
+
+
+def score_json_to_musicxml(score: dict, out_path: Path, title: str | None = None) -> Path:
     part_data = score["parts"][0]
     tonic_name, mode = part_data["key"].split(" ")
     key_obj = m21_key.Key(tonic_name, mode)
@@ -178,6 +232,8 @@ def score_json_to_musicxml(score: dict, out_path: Path) -> Path:
         m21_score = _build_piano_grand_staff(part_data, key_obj)
     else:
         m21_score = _build_single_staff(part_data, key_obj)
+
+    _apply_metadata(m21_score, title)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     m21_score.write("musicxml", fp=str(out_path))
@@ -205,7 +261,7 @@ def _build_single_staff(part_data: dict, key_obj: m21_key.Key) -> stream.Score:
             # MetronomeMark must live in the Measure, not the Part — see the
             # "Validated design notes" in the implementation plan: inserting
             # it at the Part level silently drops it from the exported XML.
-            m21_measure.insert(0, tempo.MetronomeMark(number=part_data["tempoBpm"]))
+            m21_measure.insert(0, tempo.MetronomeMark(number=_notated_tempo(part_data["tempoBpm"])))
             is_first_measure = False
         elements = _events_to_notes_or_chords(measure_data["events"], key_obj, with_technical=False)
         _insert_notated_events(m21_measure, elements, measure_length_ql)
@@ -246,7 +302,7 @@ def _build_guitar_notation_and_tab(part_data: dict, key_obj: m21_key.Key) -> str
         if is_first_measure:
             # Tempo only needs to render on one staff (the notation staff,
             # by convention) — same verified behavior as the piano builder.
-            notation_measure.insert(0, tempo.MetronomeMark(number=part_data["tempoBpm"]))
+            notation_measure.insert(0, tempo.MetronomeMark(number=_notated_tempo(part_data["tempoBpm"])))
             is_first_measure = False
 
         notation_elements = _events_to_notes_or_chords(measure_data["events"], key_obj, with_technical=False)
@@ -298,7 +354,7 @@ def _build_piano_grand_staff(part_data: dict, key_obj: m21_key.Key) -> stream.Sc
             # Verified directly: the tempo mark only needs to go on ONE
             # staff's first measure (the right/treble one, by convention)
             # — it renders once in the output, not duplicated per staff.
-            right_measure.insert(0, tempo.MetronomeMark(number=part_data["tempoBpm"]))
+            right_measure.insert(0, tempo.MetronomeMark(number=_notated_tempo(part_data["tempoBpm"])))
             is_first_measure = False
 
         right_events = [e for e in measure_data["events"] if _hand_for_event(e) == "right"]
