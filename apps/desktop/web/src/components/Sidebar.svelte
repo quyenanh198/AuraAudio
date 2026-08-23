@@ -425,6 +425,13 @@
    * persisted to localStorage under PDF_PAGE_SIZE_STORAGE_KEY) is passed
    * straight through to `exportScoreToPdf` — it drives both OSMD's own
    * page layout and the PDF page dimensions, see exportPdf.ts.
+   *
+   * Title: `projectTitle` (this component's own prop — no extra fetch
+   * needed) is passed straight through too. Bug 1 fix: the title is no
+   * longer drawn by OSMD/svg2pdf.js at all (jsPDF's standard fonts are
+   * WinAnsi-only and garbled non-Latin titles) — exportScoreToPdf renders
+   * it itself as a Unicode-correct raster strip on page 1. See
+   * exportPdf.ts's buildTitleImage().
    */
   async function handleExportPdfClick(): Promise<void> {
     if (pdfExporting) return;
@@ -452,7 +459,7 @@
       // actually clicks "Export PDF" (per rules/web/performance.md:
       // "Dynamically import heavy libraries").
       const { exportScoreToPdf } = await import("../lib/exportPdf");
-      const bytes = await exportScoreToPdf(xmlText, pdfPageSize);
+      const bytes = await exportScoreToPdf(xmlText, pdfPageSize, projectTitle);
       const result = await savePdfBytes(bytes, sanitizedFilename("pdf"));
       if (result === "saved" || result === "fallback") {
         showExportSaved("pdf");

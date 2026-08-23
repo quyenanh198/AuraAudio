@@ -18,6 +18,7 @@ const jsPDFConstructorMock = vi.fn();
 const addPageMock = vi.fn();
 const outputMock = vi.fn();
 const svg2pdfMock = vi.fn();
+const addImageMock = vi.fn();
 
 vi.mock("jspdf", () => ({
   jsPDF: class {
@@ -27,6 +28,10 @@ vi.mock("jspdf", () => ({
 
     addPage(...args: unknown[]): void {
       addPageMock(...args);
+    }
+
+    addImage(...args: unknown[]): void {
+      addImageMock(...args);
     }
 
     output(...args: unknown[]): unknown {
@@ -73,6 +78,7 @@ describe("assemblePdfFromSvgPages", () => {
     addPageMock.mockReset();
     outputMock.mockReset();
     svg2pdfMock.mockReset();
+    addImageMock.mockReset();
     outputMock.mockReturnValue(new ArrayBuffer(4));
     svg2pdfMock.mockResolvedValue(undefined);
   });
@@ -185,5 +191,138 @@ describe("assemblePdfFromSvgPages", () => {
 
     await expect(assemblePdfFromSvgPages([fakeSvgPage("only", 1, 1)])).rejects.toThrow("svg2pdf exploded");
     expect(outputMock).not.toHaveBeenCalled();
+  });
+
+  // Bug 1 fix: the title is rendered as its own raster strip (never
+  // through OSMD/svg2pdf.js -- see exportPdf.ts's buildTitleImage() doc
+  // comment on why) and composited onto page 1 only. These tests cover
+  // the PLACEMENT geometry in assemblePdfFromSvgPages() itself (pure
+  // orchestration, same as the rest of this describe block) via a fake
+  // TitleImage -- buildTitleImage()'s own real-canvas rendering is
+  // DOM-only and covered separately by the wrapTitleLines() tests below
+  // plus by hand in the real webview, same limitation as
+  // renderScorePagesToSvg() (see this file's header comment).
+  describe("assemblePdfFromSvgPages with a titleImage", () => {
+    it("no titleImage (default null): behaves exactly as before, no addImage call", async () => {
+      const { assemblePdfFromSvgPages } = await import("./exportPdf");
+      const page = fakeSvgPage("only", 210 * CSS_PX_PER_MM, 297 * CSS_PX_PER_MM);
+
+      await assemblePdfFromSvgPages([page]);
+
+      expect(addImageMock).not.toHaveBeenCalled();
+      expect(svg2pdfMock).toHaveBeenCalledWith(page, expect.anything(), { x: 0, y: 0, width: 210, height: 297 });
+    });
+
+    it("draws the title image full-width at the top of page 1, and scales page 1's music down (never stretched) to fit below it", async () => {
+      const { assemblePdfFromSvgPages } = await import("./exportPdf");
+      const page = fakeSvgPage("only", 210 * CSS_PX_PER_MM, 297 * CSS_PX_PER_MM);
+      const titleImage = { dataUrl: "data:image/png;base64,AAAA", heightMm: 27 };
+
+      await assemblePdfFromSvgPages([page], "A4", titleImage);
+
+      expect(addImageMock).toHaveBeenCalledTimes(1);
+      expect(addImageMock).toHaveBeenCalledWith(titleImage.dataUrl, "PNG", 0, 0, 210, 27);
+
+      expect(svg2pdfMock).toHaveBeenCalledTimes(1);
+      const [, , svg2pdfOptions] = svg2pdfMock.mock.calls[0] as [unknown, unknown, { x: number; y: number; width: number; height: number }];
+      // Page starts exactly where the title image ends -- no gap, no
+      // overlap.
+      expect(svg2pdfOptions.y).toBe(27);
+      expect(svg2pdfOptions.height).toBe(297 - 27);
+      // Uniform scale-down: the box's own aspect ratio still matches the
+      // full page's (210/297) -- i.e. this is a smaller copy of the same
+      // shape, not a squish.
+      expect(svg2pdfOptions.width / svg2pdfOptions.height).toBeCloseTo(210 / 297, 5);
+      // Horizontally centered in the (now-narrower) page width.
+      expect(svg2pdfOptions.x).toBeCloseTo((210 - svg2pdfOptions.width) / 2, 5);
+    });
+
+    it("only page 1 gets the title image and the scale-down -- later pages render full-size as usual", async () => {
+      const { assemblePdfFromSvgPages } = await import("./exportPdf");
+      const pages = [fakeSvgPage("p0", 1, 1), fakeSvgPage("p1", 1, 1)];
+      const titleImage = { dataUrl: "data:image/png;base64,AAAA", heightMm: 20 };
+
+      await assemblePdfFromSvgPages(pages, "A4", titleImage);
+
+      expect(addImageMock).toHaveBeenCalledTimes(1);
+      expect(svg2pdfMock).toHaveBeenCalledTimes(2);
+      const [, , secondPageOptions] = svg2pdfMock.mock.calls[1] as [unknown, unknown, { x: number; y: number; width: number; height: number }];
+      expect(secondPageOptions).toEqual({ x: 0, y: 0, width: 210, height: 297 });
+    });
+  });
+});
+
+// wrapTitleLines() -- pure text-layout math (Bug 1 fix's title raster
+// text-wrapping, see exportPdf.ts's own doc comment on the split between
+// this and the DOM-only buildTitleImage()). `measureWidth` here is a
+// deterministic fake (1 unit per UTF-16 code unit) rather than a real
+// canvas measurement -- exactly what makes this half unit-testable at all
+// under this project's DOM-less `environment: "node"` vitest config.
+describe("wrapTitleLines", () => {
+  const measureWidth = (text: string): number => text.length;
+
+  it("returns an empty array for blank/whitespace-only input", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    expect(wrapTitleLines(measureWidth, "", 100, 3)).toEqual([]);
+    expect(wrapTitleLines(measureWidth, "   \n\t  ", 100, 3)).toEqual([]);
+  });
+
+  it("returns an empty array when maxLines is non-positive", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    expect(wrapTitleLines(measureWidth, "Fairy Tale", 100, 0)).toEqual([]);
+    expect(wrapTitleLines(measureWidth, "Fairy Tale", 100, -1)).toEqual([]);
+  });
+
+  it("a short title that fits stays on a single line, trimmed", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    expect(wrapTitleLines(measureWidth, "  Fairy Tale  ", 100, 3)).toEqual(["Fairy Tale"]);
+  });
+
+  it("word-wraps Latin/Vietnamese text at word boundaries, never mid-word", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    // "aaa bbb" = 7 chars, exactly maxWidthPx; adding " ccc" would be 11.
+    const lines = wrapTitleLines(measureWidth, "aaa bbb ccc ddd", 7, 10);
+    expect(lines).toEqual(["aaa bbb", "ccc ddd"]);
+    // No line carries a stray leading/trailing space from the collapse.
+    for (const line of lines) {
+      expect(line).toBe(line.trim());
+    }
+  });
+
+  it("wraps CJK text between individual characters (no spaces to break on)", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    // 6 Han characters, maxWidthPx 3 -> 3 chars per line, 2 lines.
+    const lines = wrapTitleLines(measureWidth, "起风了合唱版", 3, 10);
+    expect(lines).toEqual(["起风了", "合唱版"]);
+  });
+
+  it("keeps a Vietnamese word whole while still wrapping adjacent CJK per-character", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    // "Xướng" (5 chars) must never split; "起风" (2 chars) can break from it.
+    const lines = wrapTitleLines(measureWidth, "Xướng 起风", 6, 10);
+    expect(lines).toEqual(["Xướng", "起风"]);
+  });
+
+  it("caps at maxLines and appends an ellipsis to the last kept line when content overflows", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    const lines = wrapTitleLines(measureWidth, "aaa bbb ccc ddd eee", 7, 2);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe("aaa bbb");
+    expect(lines[1].endsWith("…")).toBe(true);
+    // The truncated line (ellipsis included) still respects maxWidthPx.
+    expect(measureWidth(lines[1])).toBeLessThanOrEqual(7);
+  });
+
+  it("does not append an ellipsis when the content fits exactly within maxLines", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    const lines = wrapTitleLines(measureWidth, "aaa bbb ccc ddd", 7, 2);
+    expect(lines).toEqual(["aaa bbb", "ccc ddd"]);
+    expect(lines[1].endsWith("…")).toBe(false);
+  });
+
+  it("falls back to a bare ellipsis when maxWidthPx is too narrow even for one truncated character", async () => {
+    const { wrapTitleLines } = await import("./exportPdf");
+    const lines = wrapTitleLines(measureWidth, "aaaaaaaaaa bbbbbbbbbb", 1, 1);
+    expect(lines).toEqual(["…"]);
   });
 });

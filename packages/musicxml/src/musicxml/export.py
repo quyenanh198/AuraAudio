@@ -198,9 +198,31 @@ def _apply_metadata(m21_score: stream.Score, title: str | None) -> None:
     directly) -- an empty string still counts as one, so this suppresses
     that fallback too without inventing a fake composer name nobody
     supplied.
+
+    Sets `movementName` ONLY, deliberately leaving `title` unset -- NOT a
+    duplication of the previous single `title = ...` assignment. Verified
+    directly against the installed music21 (`m21ToXml.py`'s `setTitles`):
+    when `Metadata.title` is set, it ALWAYS writes a `<work><work-title>`
+    element, and separately ALWAYS writes a `<movement-title>` element too
+    (falling back to the same title text when `movementName` is unset) --
+    i.e. setting only `.title` writes the SAME text into two different XML
+    elements. That is exactly Bug 1's on-screen duplicate title (a large
+    line + a smaller line): OSMD's `MusicSheetReader.readTitle()` reads
+    `<work-title>` into `musicSheet.Title` (drawn large) and, when a
+    `<movement-title>` is ALSO present, reads it into `musicSheet.Subtitle`
+    (drawn smaller, directly below) -- duplicating the same text at two
+    sizes. Setting `movementName` instead of `title` leaves `Metadata.title`
+    empty, so music21 never emits `<work>`/`<work-title>` at all, and
+    `setTitles()`'s `movementNames` branch writes exactly one
+    `<movement-title>` element. OSMD's `readTitle()` then finds no `<work>`
+    element (skipped), reads the lone `<movement-title>` into
+    `musicSheet.Title` (nothing already there to fall back to), and leaves
+    `n` (-> Subtitle) empty -- one title line, not two. MuseScore and other
+    MusicXML consumers also read `<movement-title>` as the score's main
+    title when no `<work-title>` is present.
     """
     m21_metadata_obj = m21_metadata.Metadata()
-    m21_metadata_obj.title = title or _FALLBACK_TITLE
+    m21_metadata_obj.movementName = title or _FALLBACK_TITLE
     m21_metadata_obj.composer = ""
     m21_score.metadata = m21_metadata_obj
 

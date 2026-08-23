@@ -138,7 +138,28 @@ export async function renderScorePagesToSvg(
 
   const osmd = new OpenSheetMusicDisplay(container, {
     autoResize: false,
-    drawTitle: true,
+    // Bug 1 fix: OSMD's title/subtitle text goes through svg2pdf.js into
+    // jsPDF's 14 standard fonts, which are WinAnsi-only -- Vietnamese
+    // diacritics and CJK characters (this app's actual project titles;
+    // see the bug report) garble into mojibake. This ALSO used to draw
+    // the title twice at two sizes (music21 wrote the same text into both
+    // <work><work-title> and <movement-title>; see
+    // musicxml/export.py's _apply_metadata for that fix). Verified against
+    // the installed 2.1.2 `OSMDOptions.d.ts`: "Whether to draw the title
+    // of the piece. If false, disables drawing Subtitle as well." -- i.e.
+    // `drawTitle: false` alone (no separate `drawSubtitle` needed) fully
+    // removes OSMD/svg2pdf from the title's rendering path for BOTH
+    // elements, regardless of what the fetched MusicXML's title metadata
+    // says. The title is instead rendered as a high-DPI Unicode-correct
+    // raster strip and composited directly onto the PDF -- see
+    // buildTitleImage()/assemblePdfFromSvgPages() below.
+    //
+    // Matches Notation.svelte's on-screen OSMD instance, which already
+    // uses `drawTitle: false` (verified directly) -- so this makes the
+    // offscreen PDF-export instance consistent with the on-screen view
+    // rather than introducing new title-drawing behavior; the on-screen
+    // view is unaffected by this change.
+    drawTitle: false,
     pageFormat: format.osmdPageFormatId,
   });
 
@@ -171,13 +192,29 @@ export async function renderScorePagesToSvg(
   }
 }
 
+/** A pre-rendered title strip ready to composite onto page 1 of the PDF --
+ * see buildTitleImage() below for how this gets produced. Plain data (a
+ * PNG data URL + its physical height) rather than a live canvas so
+ * assemblePdfFromSvgPages() stays DOM-free and unit-testable (see its own
+ * doc comment). */
+export interface TitleImage {
+  /** `data:image/png;base64,...` -- passed straight to jsPDF's addImage(). */
+  readonly dataUrl: string;
+  /** Physical height of the strip in mm. Its width always equals the full
+   * page width (format.widthMm) -- the text within is already centered by
+   * buildTitleImage(), so no horizontal offset math is needed here. */
+  readonly heightMm: number;
+}
+
 /** Assembles one portrait PDF page per entry in `pages` (in order), sized
  * to `pageSize`, via jsPDF + svg2pdf.js, and returns the finished document
  * as bytes.
  *
  * Pure orchestration -- no OSMD, no live layout, no real DOM measurements
  * -- so it's unit-testable with fake `SVGElement` stand-ins and mocked
- * "jspdf"/"svg2pdf.js" modules (see exportPdf.test.ts).
+ * "jspdf"/"svg2pdf.js" modules (see exportPdf.test.ts). `titleImage` is
+ * already-rendered DATA (see the TitleImage doc comment), not a live
+ * canvas, which is what keeps this function itself DOM-free.
  *
  * Every page gets the SAME jsPDF page format AND the same svg2pdf
  * width/height, both taken from `PDF_PAGE_FORMATS[pageSize]` -- so the
@@ -185,7 +222,19 @@ export async function renderScorePagesToSvg(
  * exact same aspect ratio as each other (no stretch mismatch), and (since
  * OSMD itself laid the SVG out at that same aspect ratio via
  * `osmdPageFormatId` in renderScorePagesToSvg()) as the score's own
- * engraved page too.
+ * engraved page too -- EXCEPT page 1 when `titleImage` is given (Bug 1
+ * fix): that page's music is uniformly scaled down (both dimensions by
+ * the SAME factor, so its aspect ratio -- and therefore its engraving --
+ * is never distorted, just slightly smaller) to leave `titleImage`'s own
+ * exact height free at the top, where the raster title strip is drawn.
+ * This sidesteps needing to know anything about OSMD's own internal
+ * title-margin reservation (its exact size isn't part of OSMD's public
+ * API, and verifying it would require the real webview DOM this project's
+ * vitest config can't provide -- see this file's header comment): the
+ * scale-down here is derived purely from `titleImage.heightMm`, which
+ * this function already has as a plain number, so it's exact by
+ * construction regardless of what OSMD's own layout did. Pages after the
+ * first are never affected -- "Multi-page: title on page 1 only".
  *
  * Throws if `pages` is empty: an empty PDF is never a useful result for
  * this feature, and the real caller (exportScoreToPdf) already gets
@@ -195,6 +244,7 @@ export async function renderScorePagesToSvg(
 export async function assemblePdfFromSvgPages(
   pages: readonly SVGElement[],
   pageSize: PdfPageSize = DEFAULT_PDF_PAGE_SIZE,
+  titleImage: TitleImage | null = null,
 ): Promise<Uint8Array> {
   if (pages.length === 0) throw new Error("No pages to export.");
 
@@ -205,6 +255,31 @@ export async function assemblePdfFromSvgPages(
   for (let i = 0; i < pages.length; i += 1) {
     // First page: jsPDF's constructor above already created it.
     if (i > 0) doc.addPage(pdfFormat, "portrait");
+
+    if (i === 0 && titleImage !== null) {
+      // Full page width, top-anchored -- buildTitleImage() already
+      // centered the text horizontally within that width, so this needs
+      // no x offset.
+      doc.addImage(titleImage.dataUrl, "PNG", 0, 0, format.widthMm, titleImage.heightMm);
+
+      // Uniform (non-distorting) scale-down: shrinking ONLY the height
+      // given to svg2pdf while keeping the full page width (like the
+      // titleImage === null branch below does) would stretch the
+      // engraving vertically-compressed, since svg2pdf maps the source
+      // SVG's own width/height directly onto whatever box it's given.
+      // Scaling width by the SAME factor as height keeps the box's own
+      // aspect ratio equal to format.widthMm/format.heightMm -- the exact
+      // aspect ratio OSMD laid this SVG out at (see this function's own
+      // doc comment above) -- so nothing distorts, the page just renders
+      // slightly smaller and centered in the remaining width.
+      const contentHeightMm = format.heightMm - titleImage.heightMm;
+      const contentWidthMm = format.widthMm * (contentHeightMm / format.heightMm);
+      const xOffsetMm = (format.widthMm - contentWidthMm) / 2;
+      // eslint-disable-next-line no-await-in-loop
+      await svg2pdf(pages[i], doc, { x: xOffsetMm, y: titleImage.heightMm, width: contentWidthMm, height: contentHeightMm });
+      continue;
+    }
+
     // Pages must render onto the document in order -- svg2pdf mutates
     // `doc`'s CURRENT page, so this can't be parallelized across pages.
     // eslint-disable-next-line no-await-in-loop
@@ -214,6 +289,190 @@ export async function assemblePdfFromSvgPages(
   return new Uint8Array(doc.output("arraybuffer"));
 }
 
+// --- Title raster (Bug 1 fix) -----------------------------------------
+//
+// The project title is rendered OURSELVES onto an offscreen <canvas>,
+// using the webview's own font stack (system-ui resolves to a real font
+// with full Vietnamese + CJK coverage on every desktop OS this app ships
+// on -- no bundled/CDN font needed, staying offline), and composited as a
+// PNG image -- never routed through jsPDF's WinAnsi-only standard fonts.
+// Split the same way the rest of this file is split (see header comment):
+// wrapTitleLines() is pure text-layout math, unit-testable with a mocked
+// measureWidth function; buildTitleImage() is the real-canvas half that
+// calls it, DOM-only like renderScorePagesToSvg() and equally untestable
+// under this project's `environment: "node"` vitest config (see
+// exportPdf.test.ts for exactly what IS covered).
+
+/** ~16pt print title, expressed in mm (1pt = 1/72in) so it can be
+ * converted to raster px at whatever DPI buildTitleImage() renders at,
+ * without ever going through a CSS-px/print-pt mismatch. */
+const TITLE_FONT_SIZE_MM = (16 / 72) * 25.4;
+const TITLE_LINE_HEIGHT_FACTOR = 1.3;
+/** "2-3 lines max with ellipsis beyond" -- see this module's header. */
+const TITLE_MAX_LINES = 3;
+/** Raster resolution for the title strip -- print-quality (300dpi), high
+ * enough that the strip stays crisp when placed into the PDF at its full
+ * physical mm size (see buildTitleImage()'s use of MM_PER_INCH below). */
+const TITLE_RASTER_DPI = 300;
+const MM_PER_INCH = 25.4;
+const TITLE_RASTER_PX_PER_MM = TITLE_RASTER_DPI / MM_PER_INCH;
+/** Blank margin on each side of the title strip, in mm -- independent of
+ * OSMD's own page margins (this is a different visual element entirely,
+ * see assemblePdfFromSvgPages()'s doc comment on why no OSMD margin needs
+ * to be known here at all). */
+const TITLE_SIDE_MARGIN_MM = 12;
+const TITLE_VERTICAL_PADDING_MM = 3;
+/** system-ui resolves to the OS's real UI font (San Francisco / Segoe UI /
+ * Ubuntu Sans / etc.), which on every desktop OS this Tauri app ships on
+ * already covers Vietnamese + CJK -- no bundled or CDN font needed. The
+ * explicit fallbacks are defense-in-depth for whichever webview engine is
+ * in play, not a requirement for correctness. */
+const TITLE_FONT_STACK =
+  "system-ui, -apple-system, 'Segoe UI', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Malgun Gothic', sans-serif";
+
+/** Splits `text` into wrap tokens: each run of non-CJK, non-whitespace
+ * characters is ONE token (so Vietnamese/Latin words never break
+ * mid-word), each individual CJK ideograph/kana/hangul character is its
+ * OWN token (so CJK -- which uses no spaces -- can still wrap between any
+ * two characters, matching how CJK text is conventionally typeset), and
+ * whitespace runs are their own tokens (collapsed to a single space when
+ * kept, dropped at line starts). Verified directly: V8 (this app's
+ * webview engine, and Node's, for the unit tests below) supports `\p{Script=...}`
+ * Unicode property escapes with the `u` flag. */
+function tokenizeTitle(text: string): string[] {
+  return (
+    text.match(
+      /\s+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu,
+    ) ?? []
+  );
+}
+
+/** Shortens `line` (assumed already <= maxWidthPx on its own) so that
+ * `line + ellipsis` fits within maxWidthPx, trimming from the end one
+ * character at a time. Falls back to a bare ellipsis if even that alone
+ * doesn't fit (pathological: an extremely narrow maxWidthPx). */
+function truncateWithEllipsis(
+  line: string,
+  maxWidthPx: number,
+  measureWidth: (text: string) => number,
+  ellipsis: string,
+): string {
+  if (measureWidth(line + ellipsis) <= maxWidthPx) return `${line}${ellipsis}`;
+  let end = line.length;
+  while (end > 0 && measureWidth(`${line.slice(0, end)}${ellipsis}`) > maxWidthPx) {
+    end -= 1;
+  }
+  return end > 0 ? `${line.slice(0, end).trimEnd()}${ellipsis}` : ellipsis;
+}
+
+/** Pure text-wrapping: greedily packs `text`'s tokens (see tokenizeTitle())
+ * into lines no wider than `maxWidthPx` (per the injected `measureWidth`),
+ * then caps the result at `maxLines`, truncating the last kept line with
+ * `ellipsis` if content had to be dropped. `measureWidth` is injected
+ * (rather than this function touching `document`/`canvas` itself)
+ * specifically so it's unit-testable with a deterministic fake under this
+ * project's DOM-less `environment: "node"` vitest config -- see
+ * buildTitleImage() below for the real `CanvasRenderingContext2D.
+ * measureText`-backed caller. Returns `[]` for blank/whitespace-only
+ * input or a non-positive `maxLines`. */
+export function wrapTitleLines(
+  measureWidth: (text: string) => number,
+  text: string,
+  maxWidthPx: number,
+  maxLines: number = TITLE_MAX_LINES,
+  ellipsis: string = "…",
+): string[] {
+  const trimmed = text.trim();
+  if (trimmed === "" || maxLines <= 0) return [];
+
+  const tokens = tokenizeTitle(trimmed);
+  const allLines: string[] = [];
+  let current = "";
+
+  for (const token of tokens) {
+    if (/^\s+$/.test(token)) {
+      // Collapse any whitespace run to a single space, and only keep it
+      // if there's already content on the current line (never start a
+      // line with a leading space).
+      if (current !== "") current += " ";
+      continue;
+    }
+    const candidate = current === "" ? token : current + token;
+    if (current !== "" && measureWidth(candidate) > maxWidthPx) {
+      // trimEnd: `current` may carry the single trailing space collapsed
+      // in above (kept there so it counted towards `candidate`'s measured
+      // width, matching how a real word-space would) -- never wanted in
+      // the pushed line itself.
+      allLines.push(current.trimEnd());
+      current = token;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current !== "") allLines.push(current.trimEnd());
+
+  if (allLines.length <= maxLines) return allLines;
+
+  const kept = allLines.slice(0, maxLines);
+  kept[kept.length - 1] = truncateWithEllipsis(kept[kept.length - 1], maxWidthPx, measureWidth, ellipsis);
+  return kept;
+}
+
+/** Renders `title` onto an offscreen `<canvas>` at print quality and
+ * returns it as a `TitleImage` (PNG data URL + physical height), or
+ * `null` when there's no title to draw (blank/whitespace-only `title`, or
+ * the webview's canvas 2D context is unavailable for some reason) -- both
+ * cases degrade to "page 1 renders like every other page", never a
+ * thrown error, since a missing title strip is cosmetic, not fatal to the
+ * export.
+ *
+ * DOM/webview-only, like renderScorePagesToSvg() -- see this module's
+ * header comment; not covered by this project's Node-only vitest suite.
+ */
+export function buildTitleImage(title: string, pageSize: PdfPageSize = DEFAULT_PDF_PAGE_SIZE): TitleImage | null {
+  const trimmed = title.trim();
+  if (trimmed === "") return null;
+
+  const format = PDF_PAGE_FORMATS[pageSize];
+  const canvasWidthPx = Math.round(format.widthMm * TITLE_RASTER_PX_PER_MM);
+  const fontSizePx = Math.round(TITLE_FONT_SIZE_MM * TITLE_RASTER_PX_PER_MM);
+  const lineHeightPx = Math.round(fontSizePx * TITLE_LINE_HEIGHT_FACTOR);
+  const maxWidthPx = (format.widthMm - 2 * TITLE_SIDE_MARGIN_MM) * TITLE_RASTER_PX_PER_MM;
+  const fontSpec = `600 ${fontSizePx}px ${TITLE_FONT_STACK}`;
+
+  const measureCtx = document.createElement("canvas").getContext("2d");
+  if (measureCtx === null) return null;
+  measureCtx.font = fontSpec;
+  const lines = wrapTitleLines((text) => measureCtx.measureText(text).width, trimmed, maxWidthPx, TITLE_MAX_LINES);
+  if (lines.length === 0) return null;
+
+  const paddingPx = Math.round(TITLE_VERTICAL_PADDING_MM * TITLE_RASTER_PX_PER_MM);
+  const canvasHeightPx = paddingPx * 2 + lines.length * lineHeightPx;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidthPx;
+  canvas.height = canvasHeightPx;
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) return null;
+
+  // Opaque white background: this strip sits at the very top of page 1,
+  // above the (uniformly scaled-down, never overlapping) music content --
+  // an opaque fill here is simplest and matches the page's own white
+  // background, avoiding any dependency on PNG alpha support round-
+  // tripping correctly through jsPDF's addImage().
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvasWidthPx, canvasHeightPx);
+  ctx.font = fontSpec;
+  ctx.fillStyle = "#000000";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  lines.forEach((line, index) => {
+    ctx.fillText(line, canvasWidthPx / 2, paddingPx + lineHeightPx * index + lineHeightPx / 2);
+  });
+
+  return { dataUrl: canvas.toDataURL("image/png"), heightMm: canvasHeightPx / TITLE_RASTER_PX_PER_MM };
+}
+
 /** Full export: fetch is the CALLER's job, same as every other consumer of
  * the project's MusicXML export (reuse the identical
  * `fetch(api.exportDownloadUrl(musicxmlExportId), { cache: "no-store" })`
@@ -221,11 +480,19 @@ export async function assemblePdfFromSvgPages(
  * docs/superpowers/SESSION-HANDOFF.md's OSMD gotcha #2 on why
  * `cache: "no-store"` is required for that URL). This just renders +
  * assembles what the caller already fetched, for the given page size
- * (defaults to A4). */
+ * (defaults to A4).
+ *
+ * `title` (Bug 1 fix): the project's own title, from the app's existing
+ * state (the caller -- Sidebar.svelte -- already has it as a prop; no new
+ * fetch needed), rendered as a raster strip on page 1 -- see
+ * buildTitleImage() above. Optional/defaults to "" (no title strip) so
+ * this stays backwards compatible for any other caller. */
 export async function exportScoreToPdf(
   xmlText: string,
   pageSize: PdfPageSize = DEFAULT_PDF_PAGE_SIZE,
+  title: string = "",
 ): Promise<Uint8Array> {
   const pages = await renderScorePagesToSvg(xmlText, pageSize);
-  return assemblePdfFromSvgPages(pages, pageSize);
+  const titleImage = buildTitleImage(title, pageSize);
+  return assemblePdfFromSvgPages(pages, pageSize, titleImage);
 }

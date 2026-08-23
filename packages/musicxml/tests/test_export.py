@@ -128,15 +128,44 @@ class TestTitleMetadata:
     (music21/defaults.py's `title`/`author`, written into
     <movement-title>/<work-title>/<creator> by m21ToXml.py's
     setIdentification whenever no metadata/contributor is set at all --
-    verified directly, see _apply_metadata's doc comment in export.py)."""
+    verified directly, see _apply_metadata's doc comment in export.py).
+
+    Also covers Bug 1's title-duplication fix: exactly ONE title element
+    (<movement-title>, never <work>/<work-title> as well) must be written,
+    so consumers that render both (OSMD's on-screen/PDF-export title, plus
+    MuseScore et al.) show the title once, not twice at two sizes."""
 
     def test_real_project_title_is_used(self, tmp_path: Path):
         out_path = tmp_path / "out_title.musicxml"
         score_json_to_musicxml(_sample_score(), out_path, title="Fairy Tale")
         content = out_path.read_text()
         assert "<movement-title>Fairy Tale</movement-title>" in content
-        assert "<work-title>Fairy Tale</work-title>" in content
         assert "Music21" not in content
+
+    def test_title_is_written_exactly_once_not_duplicated(self, tmp_path: Path):
+        # Bug 1 root cause: music21 previously wrote the SAME title text
+        # into both <work><work-title> and <movement-title> whenever
+        # Metadata.title was set (verified directly in _apply_metadata's
+        # doc comment) -- OSMD then rendered the first as Title (large) and
+        # the second as Subtitle (smaller), i.e. the title twice. Only
+        # <movement-title> may appear now; <work>/<work-title> must not.
+        out_path = tmp_path / "out_title_once.musicxml"
+        score_json_to_musicxml(_sample_score(), out_path, title="Fairy Tale")
+        content = out_path.read_text()
+        assert content.count("Fairy Tale") == 1
+        assert "<work-title>" not in content
+        assert "<work>" not in content
+
+    def test_non_latin_title_round_trips_intact(self, tmp_path: Path):
+        # Bug 1: Vietnamese diacritics + CJK must survive into the XML
+        # untouched (the mojibake in Bug 1 was a jsPDF/svg2pdf rendering
+        # problem downstream, not an XML/encoding problem -- this confirms
+        # the XML side was never at fault and stays that way).
+        out_path = tmp_path / "out_title_unicode.musicxml"
+        title = "GIÓ NỔI RỒI (Bản Vang Hợp Xướng)｜起风了(合唱版)"
+        score_json_to_musicxml(_sample_score(), out_path, title=title)
+        content = out_path.read_text(encoding="utf-8")
+        assert f"<movement-title>{title}</movement-title>" in content
 
     def test_no_title_falls_back_to_untitled_not_music21(self, tmp_path: Path):
         out_path = tmp_path / "out_no_title.musicxml"
