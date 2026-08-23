@@ -8,6 +8,7 @@
     NOTE_NAME_OPTIONS,
     clampPitch,
     findEvent,
+    formatKeyForDisplay,
     nameOctaveToPitch,
     pitchToName,
     stepDuration,
@@ -526,7 +527,7 @@
               <dd>
                 <select class="fact-select" value={part.key} onchange={(e) => handleKeyChange((e.currentTarget as HTMLSelectElement).value)} aria-label="Key">
                   {#each keyOptions as option (option)}
-                    <option value={option}>{option}</option>
+                    <option value={option}>{formatKeyForDisplay(option)}</option>
                   {/each}
                 </select>
                 <span class="confidence-dots" title={`${Math.round(part.confidence.key * 100)}% confidence`}>

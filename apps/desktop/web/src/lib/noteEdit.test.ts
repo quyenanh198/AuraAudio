@@ -5,6 +5,7 @@ import {
   clampPitch,
   findEvent,
   firstEventId,
+  formatKeyForDisplay,
   measureLengthWhole,
   nameOctaveToPitch,
   pitchToName,
@@ -211,5 +212,54 @@ describe("stepOnset with 6/8 and 7/8", () => {
   it("clamps at 0 for 6/8 when stepping back from start", () => {
     const stepped = stepOnset("0/1", -1, "6/8");
     expect(stepped).toBe("0/1");
+  });
+});
+
+describe("formatKeyForDisplay", () => {
+  const LETTERS = ["A", "B", "C", "D", "E", "F", "G"] as const;
+  const ACCIDENTALS = [
+    { raw: "", display: "" },
+    { raw: "#", display: "♯" },
+    { raw: "-", display: "♭" },
+  ] as const;
+  const MODES = ["major", "minor"] as const;
+
+  // Bug 2 fix: all 7 letters x sharp/flat/natural x major/minor -- the
+  // full matrix score_schema's `^[A-G](#|-)? (major|minor)$` pattern
+  // allows (this is a pure string transform, not a musical-realism check,
+  // so it covers every syntactically valid key the backend could emit,
+  // not just the ones KEY_TONICS in Sidebar.svelte happens to offer).
+  for (const letter of LETTERS) {
+    for (const accidental of ACCIDENTALS) {
+      for (const mode of MODES) {
+        const raw = `${letter}${accidental.raw} ${mode}`;
+        const expected = `${letter}${accidental.display} ${mode}`;
+        it(`"${raw}" -> "${expected}"`, () => {
+          expect(formatKeyForDisplay(raw)).toBe(expected);
+        });
+      }
+    }
+  }
+
+  it("never mutates a natural key's spelling (no accidental to map)", () => {
+    expect(formatKeyForDisplay("C major")).toBe("C major");
+    expect(formatKeyForDisplay("A minor")).toBe("A minor");
+  });
+
+  it("maps '-' to a real flat sign, not a hyphen-minus lookalike", () => {
+    expect(formatKeyForDisplay("E- major")).toBe("E♭ major");
+    expect(formatKeyForDisplay("E- major")).not.toContain("-");
+  });
+
+  it("maps '#' to a real sharp sign, not the ASCII number-sign", () => {
+    expect(formatKeyForDisplay("F# minor")).toBe("F♯ minor");
+    expect(formatKeyForDisplay("F# minor")).not.toContain("#");
+  });
+
+  it("returns unrecognized input unchanged rather than throwing", () => {
+    expect(formatKeyForDisplay("")).toBe("");
+    expect(formatKeyForDisplay("not a key")).toBe("not a key");
+    expect(formatKeyForDisplay("H major")).toBe("H major");
+    expect(formatKeyForDisplay("C phrygian")).toBe("C phrygian");
   });
 });

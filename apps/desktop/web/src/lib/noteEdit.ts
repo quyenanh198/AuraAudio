@@ -148,6 +148,34 @@ export function nameOctaveToPitch(name: string, octave: number): number {
 
 export const NOTE_NAME_OPTIONS: readonly string[] = NOTE_NAMES;
 
+// --- Key display formatting ---------------------------------------------
+
+const KEY_ACCIDENTAL_DISPLAY: Record<string, string> = { "#": "♯", "-": "♭" };
+
+/** Bug 2 fix: score_schema's key format (`^[A-G](#|-)? (major|minor)$` --
+ * see score_schema/validate.py and score_schema/edits.py's identical
+ * `_KEY_PATTERN`) spells sharp/flat as plain ASCII "#"/"-" on the wire,
+ * matching what music21/MusicXML tooling expects. That raw ASCII form
+ * ("E- major", "F# minor") was leaking straight into the UI verbatim.
+ *
+ * DISPLAY-ONLY: this must never be applied to the value actually sent to
+ * or stored by the backend (the key `<select>`'s own `value`, or any
+ * `EditOp.value`) -- only what's shown to the user changes, e.g. in the
+ * `<option>` text. Callers pass the RAW backend string through unchanged
+ * everywhere else.
+ *
+ * Input that doesn't match the expected pattern (should never happen for
+ * a value the backend already accepted/emitted, but a stray or future key
+ * spelling shouldn't crash the Sidebar) is returned unchanged rather than
+ * thrown on. */
+export function formatKeyForDisplay(key: string): string {
+  const match = /^([A-G])(#|-)?( (?:major|minor))$/.exec(key);
+  if (!match) return key;
+  const [, tonic, accidental, modeSuffix] = match;
+  const displayAccidental = accidental ? KEY_ACCIDENTAL_DISPLAY[accidental] : "";
+  return `${tonic}${displayAccidental}${modeSuffix}`;
+}
+
 // --- Add-note measure targeting -----------------------------------------
 
 export type MeasureNumberValidation = { ok: true; measureNumber: number } | { ok: false; error: string };
