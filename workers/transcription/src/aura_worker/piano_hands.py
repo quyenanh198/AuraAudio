@@ -10,6 +10,47 @@ PREFERRED_MAX_SPAN = 12
 MIDDLE_C_PULL_WEIGHT = 0.05
 MIDDLE_C_MIDI = 60
 
+# Cap on how many simultaneous-onset pitches get the full exhaustive
+# treatment (candidate_splits' k+1 options, then DP'd against the
+# neighboring onset group's own options) before falling back to a fast,
+# honest single-option split -- the same discipline as
+# aura_worker.fingering.MAX_EXHAUSTIVE_CHORD_SIZE, though for a DIFFERENT
+# underlying reason: unlike guitar's assign_chord (combinatorial in chord
+# size -- every pitch is an independent string-choice point), THIS
+# algorithm's per-group cost is already just O(k) (candidate_splits emits
+# exactly k+1 splits, one per cut point in sorted order, never all
+# subsets) -- directly measured: a single 800-pitch onset group resolves
+# in ~16ms, not remotely exponential. The real cost that scales badly here
+# is the DP TRANSITION between two ADJACENT groups, O(|options_i| x
+# |options_{i-1}|) = O(k_i x k_{i-1}) -- fine for realistic chords (basic
+# playable/pedaled polyphony tops out in the dozens), but genuinely
+# quadratic-and-compounding across a whole measure of PATHOLOGICALLY
+# oversized groups. This is a real, reachable input shape specifically
+# for piano (not guitar): aura_worker.piano_engine's module docstring
+# discloses that `aura_worker.ghost_filter.filter_ghost_notes` is
+# deliberately NOT applied to this engine's output ("no octave-shadow
+# diagnosis has been run against this model's own output distribution"),
+# so raw CRNN onset noise -- which basic-pitch's guitar path would have
+# had filtered out -- reaches this stage unfiltered. Directly measured on
+# a synthetic dense-pedal fixture (thousands of notes, 16th-note-quantized
+# onset buckets holding up to 300 simultaneous pitches): the DP alone
+# still completed (~30s across a 123-measure piece, no crash, no hang),
+# but at a cost that scales with the SQUARE of each oversized group's
+# size, purely wasted on "chords" no ten-fingered performance could ever
+# produce. 24 = two hands x ten fingers, plus headroom for the
+# quantization grid legitimately merging two real, closely-spaced
+# keystrokes into one 16th-note bucket under heavy pedal use -- generous
+# above any real playable/pedaled chord (the detection-quality benchmark's
+# piano fixtures never exceed single digits), so every existing case is
+# byte-for-byte unchanged, exactly like the guitar cap's own precedent.
+# The fallback (`_synthesize_locked_split`, reused as-is with an empty
+# lock set when there are no real locks) is honest, not lossy: EVERY
+# pitch in an oversized group still gets a real left/right hand -- none
+# are dropped from the score, only the OPTIMAL joint split is skipped in
+# favor of the same middle-C-anchored register-threshold rule the module
+# already uses to place unlocked members around a locked split.
+MAX_CHORD_SIZE = 24
+
 
 @dataclass(frozen=True)
 class HandSplit:
@@ -152,12 +193,23 @@ def _options_for_group(
     # is what makes duplicate-pitch chords split correctly.
     order = sorted(in_range, key=lambda i: events[i]["pitch"])
     pitches = [events[i]["pitch"] for i in order]
+    locked_here = {i: locked[i] for i in in_range if i in locked}
+
+    if len(in_range) > MAX_CHORD_SIZE:
+        # Pathologically oversized onset group (see MAX_CHORD_SIZE's
+        # docstring) -- skip the k+1-option exhaustive split entirely
+        # (and the DP transition cost it would impose against its
+        # neighbors) in favor of the same single, honest, lock-respecting
+        # synthesis already used below when no generated split satisfies
+        # every lock. Every pitch still gets a real hand assignment.
+        split, left_indices, right_indices = _synthesize_locked_split(events, order, pitches, locked_here)
+        return [_PlacementOption(split=split, left_indices=left_indices, right_indices=right_indices)]
+
     splits = candidate_splits(pitches)
     options = []
     for k, split in enumerate(splits):
         options.append(_PlacementOption(split=split, left_indices=order[:k], right_indices=order[k:]))
 
-    locked_here = {i: locked[i] for i in in_range if i in locked}
     if not locked_here:
         return options
 

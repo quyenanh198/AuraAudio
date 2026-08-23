@@ -97,6 +97,104 @@ def test_assign_measure_handles_empty_events_safely():
     assert assign_measure([]) == {}
 
 
+class TestDenseChordCap:
+    """Regression coverage for MAX_CHORD_SIZE (piano_hands.py): real dense
+    piano output (sustain-pedal-blurred onsets, plus aura_worker.piano_engine's
+    disclosed ghost_filter bypass letting raw CRNN noise through unfiltered)
+    can produce a single quantized onset holding far more simultaneous
+    pitches than any ten-fingered performance ever could. Bug B's own
+    reproduction (a synthetic dense-pedal fixture) measured the piano DP
+    itself as polynomial, not exponential like guitar's -- a single 800-pitch
+    group resolved in ~16ms -- but the DP TRANSITION cost between many such
+    oversized ADJACENT groups is genuinely quadratic-and-compounding, and a
+    300-note "chord" isn't meaningful notation regardless of speed. These
+    tests prove the cap kicks in, stays fast even far beyond it, and never
+    drops a note."""
+
+    def test_chord_at_cap_still_uses_full_exhaustive_split(self):
+        # Exactly MAX_CHORD_SIZE pitches -- must NOT trigger the fallback,
+        # i.e. every existing (small-chord) test's exact behavior is
+        # preserved up to and including the cap itself.
+        from aura_worker import piano_hands
+
+        pitches = list(range(40, 40 + piano_hands.MAX_CHORD_SIZE))  # 24 consecutive pitches
+        events = [_event(p, "0/1") for p in pitches]
+        assignment = assign_measure(events)
+        assert len(assignment) == piano_hands.MAX_CHORD_SIZE
+        assert set(assignment.values()) <= {"left", "right"}
+
+    def test_oversized_chord_assigns_every_note_a_hand_without_hanging(self):
+        import time
+
+        from aura_worker import piano_hands
+
+        pitches = [21 + (i % 88) for i in range(300)]  # 300 simultaneous pitches, one onset
+        events = [_event(p, "0/1") for p in pitches]
+
+        t0 = time.monotonic()
+        assignment = assign_measure(events)
+        elapsed = time.monotonic() - t0
+
+        assert len(assignment) == len(events)  # no note silently dropped
+        assert set(assignment.values()) <= {"left", "right"}
+        assert elapsed < 1.0, f"oversized chord took {elapsed:.3f}s -- cap did not engage"
+
+    def test_oversized_chord_keeps_left_at_or_below_right_by_register(self):
+        # The fallback splits strictly on pitch <= MIDDLE_C_MIDI, so the
+        # same "every left-hand pitch <= every right-hand pitch" invariant
+        # the exhaustive DP path guarantees for small chords must still
+        # hold for the capped fallback.
+        pitches = list(range(21, 109))  # every in-range MIDI pitch at once (88 notes)
+        events = [_event(p, "0/1") for p in pitches]
+        assignment = assign_measure(events)
+
+        left_pitches = [pitches[i] for i, hand in assignment.items() if hand == "left"]
+        right_pitches = [pitches[i] for i, hand in assignment.items() if hand == "right"]
+        assert left_pitches and right_pitches
+        assert max(left_pitches) <= min(right_pitches)
+
+    def test_many_adjacent_oversized_groups_stay_fast(self):
+        # The DP-transition cost this cap actually targets: many LARGE
+        # groups in a row (not just one in isolation), the shape Bug B's
+        # dense-pedal reproduction actually hit (16 onset buckets per
+        # measure at the 16th-note quantize grid, each holding up to 300
+        # simultaneous pitches in the reproduction's extreme case).
+        # Directly measured WITHOUT the cap: this exact fixture takes
+        # ~0.9s (uncapped O(k^2) DP transitions between adjacent 300-pitch
+        # groups) -- the bound below is loose enough not to flake on a
+        # slow CI runner while still failing outright pre-fix.
+        import random
+        import time
+
+        rng = random.Random(7)
+        events = []
+        for group_i in range(16):
+            onset = f"{group_i}/16"
+            for _ in range(300):
+                events.append(_event(rng.randint(21, 108), onset))
+
+        t0 = time.monotonic()
+        assignment = assign_measure(events)
+        elapsed = time.monotonic() - t0
+
+        assert len(assignment) == len(events)
+        assert elapsed < 0.3, f"16 oversized adjacent groups took {elapsed:.3f}s -- cap did not engage"
+
+    def test_oversized_group_still_honors_a_lock(self):
+        # Locks are a real, separate feature (interactive edits) that must
+        # keep working even when a group is oversized -- reuses
+        # _synthesize_locked_split exactly as the "no split satisfies every
+        # lock" path already does for small chords.
+        pitches = [21 + (i % 88) for i in range(60)]
+        events = [_event(p, "0/1") for p in pitches]
+        # Lock the very first (lowest-pitch) index to "right", against its
+        # natural register -- the synthesized boundary must move to honor it.
+        locked = {0: "right"}
+        assignment = assign_measure(events, locked=locked)
+        assert assignment[0] == "right"
+        assert len(assignment) == len(events)
+
+
 def test_assign_measure_left_never_exceeds_right_within_an_onset_property():
     # Spec Testing bullet 5 (matches ARCHITECTURE.md §9's property-testing
     # target, and sub-project 2's precedent of committing this directly
