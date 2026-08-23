@@ -29,6 +29,16 @@
     tabAvailable: boolean;
     viewMode: ViewMode;
     onViewModeChange: (mode: ViewMode) => void;
+    /** Note audition ("nghe để kiểm tra nốt") mute toggle state — see
+     * lib/auditioner.ts. */
+    auditionEnabled: boolean;
+    onAuditionEnabledChange: (enabled: boolean) => void;
+    /** Called with the newly targeted pitch whenever the Inspector's pitch
+     * stepper moves it — ScoreView owns the actual `Auditioner` instance
+     * (it also needs to reach it from the keyboard shortcuts and the
+     * selection-change effect), so this component only reports the
+     * intent, same shape as `onZoomChange`/`onViewModeChange`. */
+    onAuditionPitch: (pitch: number) => void;
     zoomPercent: number;
     onZoomChange: (percent: number) => void;
     exports: ProjectExportSummary[];
@@ -43,6 +53,9 @@
     tabAvailable,
     viewMode,
     onViewModeChange,
+    auditionEnabled,
+    onAuditionEnabledChange,
+    onAuditionPitch,
     zoomPercent,
     onZoomChange,
     exports: exportItems,
@@ -77,11 +90,12 @@
 
   function stepPitch(direction: 1 | -1, semitones: number): void {
     if (!selectedEvent) return;
-    applyOp("pitch", {
-      type: "set_pitch",
-      eventId: selectedEvent.id,
-      pitch: clampPitch(selectedEvent.pitch + direction * semitones),
-    });
+    const pitch = clampPitch(selectedEvent.pitch + direction * semitones);
+    // Audition the NEW pitch from the computed value, not from a later
+    // `editor.score` update — same reasoning as ScoreView's ArrowUp/
+    // ArrowDown handler.
+    onAuditionPitch(pitch);
+    applyOp("pitch", { type: "set_pitch", eventId: selectedEvent.id, pitch });
   }
 
   function stepOnsetControl(direction: 1 | -1): void {
@@ -791,6 +805,19 @@
               </button>
             {/each}
           </div>
+        </div>
+        <div class="view-row">
+          <span class="view-label">Audition notes</span>
+          <button
+            type="button"
+            class="toggle"
+            class:on={auditionEnabled}
+            aria-pressed={auditionEnabled}
+            title={auditionEnabled ? "Selecting or editing a note plays its pitch" : "Note audition is muted"}
+            onclick={() => onAuditionEnabledChange(!auditionEnabled)}
+          >
+            <span class="toggle-knob"></span>
+          </button>
         </div>
         <div class="view-row">
           <span class="view-label">Zoom</span>

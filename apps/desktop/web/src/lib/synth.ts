@@ -165,7 +165,27 @@ const INSTRUMENT_BUFFERS: Record<SynthInstrument, Record<string, string>> = {
  * close the old one before creating a new one. */
 export interface SynthPlaybackSource extends PlaybackSource {
   dispose(): void;
+  /** Note audition ("nghe để kiểm tra nốt"): sounds `pitch` briefly on the
+   * SAME sampler/AudioContext this source already owns — a separate,
+   * short-lived voice from `play()`'s scheduled notes (its own `StopFn`,
+   * kept apart from `scheduledStops`), so it can never be cut off by
+   * `pause()`/`seek()` mid-playback and never adds a note to what real
+   * playback schedules. See lib/auditioner.ts for the debounce/suppression
+   * logic that decides WHEN to call this. */
+  auditionNote(pitch: number): void;
 }
+
+/** ~0.5-0.8s per the brief — long enough to actually hear the pitch, short
+ * enough that a fast run of edits (holding an arrow key) doesn't pile up
+ * overlapping tails. */
+const AUDITION_DURATION_SECONDS = 0.6;
+
+/** "Moderate" velocity per the brief (smplr's own MIDI-scale 0-127, default
+ * 100 — see the installed smplr typings' `NoteEvent.velocity`) — audible
+ * without being jarring next to a real `play()`'s per-note velocity
+ * (schedulePlan/play() below don't set one, so they take smplr's own 100
+ * default; auditioning intentionally a shade under that). */
+const AUDITION_VELOCITY = 90;
 
 /** The smplr `Sampler` options that must always be concrete, finite
  * numbers — never omitted (and therefore never `undefined`) — to avoid a
@@ -252,6 +272,13 @@ export function createSynthSource(score: ScoreJson, instrument: SynthInstrument)
   let anchorFrom = 0;
   let anchorCtxTime = 0;
   let frozenPosition = 0;
+  /** The most recently started audition voice's `StopFn`, if it might still
+   * be sounding — deliberately separate from `scheduledStops` (see
+   * `SynthPlaybackSource.auditionNote`'s doc comment). Stopped before
+   * starting a new one so a fast run of auditions (the debounce in
+   * lib/auditioner.ts already collapses most of these, but a stray
+   * immediate call is still possible) doesn't stack overlapping tails. */
+  let auditionStop: ((time?: number) => void) | null = null;
 
   function cancelScheduled(): void {
     for (const stop of scheduledStops) stop();
@@ -296,6 +323,17 @@ export function createSynthSource(score: ScoreJson, instrument: SynthInstrument)
     if (wasPlaying) play(t);
   }
 
+  function auditionNote(pitch: number): void {
+    auditionStop?.();
+    void ctx.resume();
+    auditionStop = sampler.start({
+      note: pitch,
+      time: ctx.currentTime,
+      duration: AUDITION_DURATION_SECONDS,
+      velocity: AUDITION_VELOCITY,
+    });
+  }
+
   return {
     play,
     pause,
@@ -307,7 +345,9 @@ export function createSynthSource(score: ScoreJson, instrument: SynthInstrument)
     setVolume(v: number): void {
       gainNode.gain.value = v;
     },
+    auditionNote,
     dispose(): void {
+      auditionStop?.();
       cancelScheduled();
       sampler.dispose();
       void ctx.close();

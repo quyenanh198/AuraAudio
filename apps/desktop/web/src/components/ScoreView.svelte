@@ -3,6 +3,7 @@
   import type { Note } from "opensheetmusicdisplay";
 
   import { api } from "../lib/api";
+  import { createAuditioner, loadStoredAuditionEnabled, saveStoredAuditionEnabled } from "../lib/auditioner";
   import { createCoalescer } from "../lib/coalesce";
   import { buildEventPositionIndex, type StepNoteInfo } from "../lib/correlate";
   import { isRestOrAllTiedStep } from "../lib/cursorWalk";
@@ -60,6 +61,12 @@
    * resolves the real per-project value (persisted choice vs. this
    * project's own instrument — see there). */
   let viewMode = $state<ViewMode>("both");
+  /** Audition ("nghe để kiểm tra nốt") mute toggle — Sidebar's VIEW-section
+   * control. Loaded from localStorage once at module-instance creation
+   * (this component is remounted per project, but the preference is
+   * global, same as the PDF page-size one) rather than per `loadScore()`,
+   * since nothing about it depends on the loaded project. */
+  let auditionEnabled = $state(loadStoredAuditionEnabled());
   /** Whether the user dismissed the current rederive-failure banner (Task 7
    * Step 4). Reset to `false` whenever a NEW `editor.rederiveError` value
    * arrives — see the refresh-loop `$effect` below — so a fresh failure
@@ -101,6 +108,11 @@
    * creation, once from the effect noticing the same store write) and
    * against rebuilding for a reference-identical no-op update. */
   let lastSynthScore: ScoreJson | null = null;
+  /** `editor.selectedEventId`'s value as of the last time the audition
+   * effect below ran — dedupes so a re-render (e.g. an unrelated
+   * `editor.score` write) doesn't re-audition a selection that hasn't
+   * actually changed. */
+  let lastAuditionedSelectionId: string | null = null;
   /** `editor.updating`'s value as of the last time the refresh-loop effect
    * ran — a true->false transition (with neither `editor.error` nor
    * `editor.rederiveError` set) is what starts `refreshAfterEdit()`: an op
@@ -144,6 +156,25 @@
     viewMode = mode;
     saveStoredViewMode(mode);
   }
+
+  function onAuditionEnabledChange(enabled: boolean): void {
+    auditionEnabled = enabled;
+    saveStoredAuditionEnabled(enabled);
+  }
+
+  /** Auditioner deps close over live component state (`auditionEnabled`,
+   * `$playback.playing`, `synthSource`) rather than snapshotting any of
+   * them — `synthSource` in particular is rebuilt on every project load AND
+   * on every edit's synth-follows-store effect below, so this must always
+   * reach whichever instance is CURRENT at fire time, not whichever one
+   * existed when `request()` was called. Created once (this component
+   * itself is fresh per project — see onMount's own note on why `editor` is
+   * the only thing that needs an explicit reset), not per `loadScore()`. */
+  const auditioner = createAuditioner({
+    isEnabled: () => auditionEnabled,
+    isPlaybackActive: () => $playback.playing,
+    playPitch: (pitch) => synthSource?.auditionNote(pitch),
+  });
 
   function toggleSidebar(): void {
     sidebarCollapsed = !sidebarCollapsed;
@@ -633,22 +664,24 @@
     const ev = found.event;
 
     switch (event.key) {
-      case "ArrowUp":
+      case "ArrowUp": {
         event.preventDefault();
-        void editor.apply(projectId, {
-          type: "set_pitch",
-          eventId: ev.id,
-          pitch: clampPitch(ev.pitch + (event.shiftKey ? 12 : 1)),
-        });
+        const pitch = clampPitch(ev.pitch + (event.shiftKey ? 12 : 1));
+        // Audition the NEW pitch immediately from the computed value, not
+        // from `editor.score` after the apply() round-trip settles — the
+        // debounce in auditioner.ts is what keeps holding the key from
+        // machine-gunning, not waiting on the network.
+        auditioner.request(pitch);
+        void editor.apply(projectId, { type: "set_pitch", eventId: ev.id, pitch });
         break;
-      case "ArrowDown":
+      }
+      case "ArrowDown": {
         event.preventDefault();
-        void editor.apply(projectId, {
-          type: "set_pitch",
-          eventId: ev.id,
-          pitch: clampPitch(ev.pitch - (event.shiftKey ? 12 : 1)),
-        });
+        const pitch = clampPitch(ev.pitch - (event.shiftKey ? 12 : 1));
+        auditioner.request(pitch);
+        void editor.apply(projectId, { type: "set_pitch", eventId: ev.id, pitch });
         break;
+      }
       case "ArrowLeft":
         if (!part) break;
         event.preventDefault();
@@ -694,6 +727,13 @@
     // A selection from a previous project (or a previous failed load) has no
     // meaning for whatever loads next.
     editor.clearSelection();
+    lastAuditionedSelectionId = null;
+    // Any audition still debouncing belongs to the OUTGOING project's synth
+    // (about to be disposed below) — a timer that fired after this point
+    // would either sound through a disposed Sampler or, worse, through the
+    // NEW project's just-created one for a pitch that has nothing to do
+    // with it.
+    auditioner.cancel();
     playback.reset();
     if (synthSource) {
       playback.attachSource("synth", null);
@@ -782,6 +822,22 @@
     notation?.highlightEvent($editor.selectedEventId);
   });
 
+  // Note audition, selection half: "selecting a note plays that note's
+  // pitch briefly" (the keyboard/Inspector-pitch-change half is wired at
+  // its own call sites — see handleKeydown's ArrowUp/ArrowDown and
+  // Sidebar's `onAuditionPitch` prop below). Gated on `lastAuditionedSelectionId`
+  // actually changing (not just this effect re-running, e.g. from an
+  // unrelated `editor.score` write bundled into the same reactive pass) so
+  // a rebuild/rerender doesn't re-audition a selection that hasn't moved.
+  $effect(() => {
+    const id = $editor.selectedEventId;
+    if (id === lastAuditionedSelectionId) return;
+    lastAuditionedSelectionId = id;
+    if (id === null) return;
+    const found = findEvent($editor.score, id);
+    if (found) auditioner.request(found.event.pitch);
+  });
+
   onMount(() => {
     // `editor` is a module-level singleton and this component is remounted
     // per project (the hash router swaps `ScoreView` instances via
@@ -801,6 +857,7 @@
     window.removeEventListener("keydown", handleKeydown);
     stopLoop();
     scheduleCursorSync.cancel();
+    auditioner.cancel();
     playback.pause();
     playback.attachSource("recording", null);
     playback.attachSource("synth", null);
@@ -844,6 +901,9 @@
         {tabAvailable}
         {viewMode}
         {onViewModeChange}
+        {auditionEnabled}
+        {onAuditionEnabledChange}
+        onAuditionPitch={(pitch) => auditioner.request(pitch)}
         {zoomPercent}
         {onZoomChange}
         exports={project?.exports ?? []}
