@@ -1566,6 +1566,26 @@ next; 3 and 4 proceed only if 0-2 land OK:
 
 ## Release
 
+**v1.2.1 IS LIVE** (published 2026-08-23T05:43Z, tag at main@9ac1e05,
+green first attempt, run 32620375786):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.2.1 —
+`AuraAudio_1.2.1_amd64.deb` (1,123,945,538 B),
+`AuraAudio_1.2.1_aarch64.dmg` (809,941,385 B),
+`AuraAudio_1.2.1_x64_en-US.msi` (760,096,284 B). Contents (all from
+real user-reported issues): dependency auto-install ("Install
+automatically" button, Tauri-side fixed-argv winget/brew, post-install
+recheck with version display, WingetMissing/BrewMissing typed outcomes,
+600s timeout); robust binary resolution (env -> PATH -> winget
+Links/Packages, Program Files, chocolatey, homebrew; absolute paths at
+every call site; --ffmpeg-location for yt-dlp; PATH-prepend on
+known-location hits so demucs's internal bare-name ffmpeg shellout
+resolves too — no app restart needed after installing deps); YouTube
+import diagnostics (max-filesize skip -> specific 422, output tail in
+generic errors, broadened output glob); fingering DP exhaustive-search
+cap at 8-note chords with greedy fallback (measured exponential blowup,
+n=22 = 8.7s/chord); job stage now updates at stage START (fixes
+"Normalize 25%" shown during multi-minute piano inference).
+
 **v1.2.0 IS LIVE** (published 2026-08-21T18:01Z, tag at main@d533831):
 https://github.com/quyenanh198/AuraAudio/releases/tag/v1.2.0 —
 `AuraAudio_1.2.0_amd64.deb` (1,123,919,168 B),
