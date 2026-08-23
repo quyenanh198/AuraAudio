@@ -1564,10 +1564,62 @@ next; 3 and 4 proceed only if 0-2 land OK:
    prototypes and report (not committed to the repo — scratchpad-only
    investigation per this task's constraints).
 
-## Note audition + view mode (2026-08-23, held for review — NOT released)
+## PDF title Unicode fix + key glyph display (2026-08-23, shipped in v1.4.0)
 
-Two features on `claude/multi-ai-skills-caveman-7tx5l0`, two commits
-(7811174 view mode, 61d7356 audition), built on top of v1.3.0 (main@4fb4281).
+- 13e135b: exported-PDF title was mojibake for Vietnamese/CJK (jsPDF
+  standard fonts are WinAnsi-only) and duplicated (music21 wrote the
+  title into BOTH work-title and movement-title; OSMD renders that as
+  Title + Subtitle). Fix: export.py now sets Metadata.movementName only
+  (exactly one <movement-title> in the XML — verified by music21
+  round-trip); exportPdf.ts disables OSMD's title (drawTitle:false on
+  the offscreen instance only) and composites the title as a high-DPI
+  canvas raster drawn with the webview's own font stack (full
+  Vietnamese+CJK coverage, no font embedding), CJK-aware line wrap,
+  page-1 music uniformly scaled down to make room.
+- 4fb4281: key strings shown as "E- major" → now display "E♭ major" /
+  "F♯ minor" via formatKeyForDisplay() (display-only; option VALUES and
+  everything sent to the backend keep the raw `[A-G](#|-)? major|minor`
+  spelling).
+
+## Pre-release hardening wave (2026-08-23, commit 45928e2, shipped in v1.4.0)
+
+- Child-process console windows on Windows: the backend exe was already
+  --noconsole, but every subprocess it spawns (ffmpeg, ffprobe, yt-dlp,
+  version probes) could still flash its own console. `subprocess_flags()`
+  in aura_worker/binaries.py returns win32-gated CREATE_NO_WINDOW
+  (hardcoded 0x08000000 so non-Windows Python never touches the
+  attribute) and is applied at all six shipped call sites; install.rs's
+  winget/brew spawns got the matching #[cfg(windows)] flags.
+- demucs's INTERNAL ffmpeg shellout (demucs.audio.AudioFile — cannot be
+  flagged from outside) was replaced in separation.py with our own
+  decode (same argv, same temp-file pattern, channel conversion via
+  demucs's own convert_audio_channels). Verified bit-identical decoded
+  tensors across mono/stereo × 8k/22.05k/44.1k/48k × mp3, identical
+  separated-WAV SHA-256, and identical dq3 mixed-benchmark values.
+- View-mode layout verified reclaiming hidden-staff space (e2e measures
+  SVG heights: Tab-only/Notation-only strictly < Both, round-trip
+  restores exactly).
+- **NEW OSMD gotchas (2.1.2), playback cursor in Tab-only mode**: the
+  cursor was permanently hidden when a staff was hidden. Two real OSMD
+  defects, both verified in the installed bundle: (1) the CURSOR filters
+  entries by Voice.Visible — Staff.Visible alone is not enough, so view
+  modes must toggle the staff AND all its voices
+  (setStaffAndVoicesVisible in Notation.svelte); (2)
+  `get Instrument.Visible` incorrectly derives from only voices[0], so
+  hiding the notation staff's voices made the whole instrument (and
+  cursor) invisible — patched via Object.defineProperty on
+  Instrument.prototype (partial descriptor: the original setter
+  survives; PROCESS-GLOBAL, applies to the offscreen PDF instance too —
+  benign there since PDF never hides staves). The patch is written
+  against OSMD 2.1.2 (package.json pins ^2.1.2): RE-VERIFY BOTH DEFECTS
+  ON ANY OSMD UPGRADE before keeping the override. Follow-up (tracked,
+  not gating): scope the patch per-instance and add a version guard.
+
+## Note audition + view mode (2026-08-23, reviewed + merged; shipped in v1.4.0)
+
+Two features, two commits (7811174 view mode, 61d7356 audition), on top
+of the post-v1.3.0 fix commits (v1.3.0 itself is main@07665c3; the PDF
+title and key-glyph fixes 13e135b/4fb4281 landed in between).
 Release is deliberately held pending review — do not tag/publish from this
 branch without an explicit go-ahead.
 
@@ -1630,7 +1682,7 @@ test):
 Verified green on this branch: `npx vitest run` (apps/desktop/web) —
 17 files / 308 tests; `npm run check` (svelte-check + tsc) — 0 errors;
 `npm run build`; `npm run test:e2e` (Playwright, real backend + real
-transcription) — 9/9, including the new Tab-only mode-switch test.
+transcription) — 10/10, including the new Tab-only mode-switch test.
 
 ## Release
 

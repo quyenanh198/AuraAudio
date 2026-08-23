@@ -245,16 +245,6 @@
     return osmd.Sheet.Instruments.flatMap((instrument) => instrument.Staves).filter((staff) => !staff.isTab);
   }
 
-  /** Piano scores (and any other score with no TAB staff) have no `isTab`
-   * staff at all — self-guarding no-op here (rather than relying on the
-   * caller's own `tabAvailable` check) means an inconsistent `viewMode`
-   * value reaching this component (e.g. a "tab"/"notation" choice persisted
-   * from an earlier GUITAR project, applied for one render before the
-   * caller's own instrument check catches up — see viewMode.ts's
-   * `resolveViewMode`) can never hide EVERY staff and blank the score: with
-   * no real TAB staff to distinguish, every mode renders identically (full
-   * display), matching the OLD toggle's existing no-op-for-piano behavior
-   * (`if (staves.length === 0) return;`) exactly. */
   /** Sets a staff's own `Visible` (drives layout/ink — the mechanism the
    * doc comment above already covers) AND every one of its `Voice`s'
    * `Visible` (drives which staff's `VoiceEntry`s the OSMD *cursor*
@@ -312,6 +302,16 @@
    * function's own e2e regression: fixing the cursor this way, alone,
    * broke click-to-select (`.event-highlight` stopped appearing in
    * Tab-only mode) until that second patch was added too. */
+  /** Piano scores (and any other score with no TAB staff) have no `isTab`
+   * staff at all — self-guarding no-op here (rather than relying on the
+   * caller's own `tabAvailable` check) means an inconsistent `viewMode`
+   * value reaching this component (e.g. a "tab"/"notation" choice persisted
+   * from an earlier GUITAR project, applied for one render before the
+   * caller's own instrument check catches up — see viewMode.ts's
+   * `resolveViewMode`) can never hide EVERY staff and blank the score: with
+   * no real TAB staff to distinguish, every mode renders identically (full
+   * display), matching the OLD toggle's existing no-op-for-piano behavior
+   * (`if (staves.length === 0) return;`) exactly. */
   function applyViewMode(): void {
     if (!osmd) return;
     const tab = tabStaves();
