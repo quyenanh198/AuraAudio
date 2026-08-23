@@ -3,6 +3,8 @@
 
   import { api } from "../lib/api";
   import { deps, detectPlatform, installCommandFor, isYtDlpMissing } from "../lib/deps";
+  import { createInstallStore, isTauri } from "../lib/installDeps";
+  import type { InstallOutcome, InstallPhase } from "../lib/installDeps";
   import { projects } from "../lib/projects";
   import { separationNoopNote } from "../lib/separation";
   import type { ProjectListItem } from "../lib/types";
@@ -56,6 +58,38 @@
   const ytDlpInstallCommand = installCommandFor(detectPlatform(), "ytDlp");
 
   const ytDlpMissing = $derived(isYtDlpMissing($deps));
+
+  // Auto-install (Tauri desktop only -- see lib/installDeps.ts). Each
+  // dependency gets its own independent state machine so installing one
+  // never shows a spinner on the other. `runningInTauri` is read once at
+  // mount (not `$derived`): whether the app is running inside the Tauri
+  // shell can't change over a session, so there's nothing to react to.
+  const runningInTauri = isTauri();
+  const ffmpegInstall = createInstallStore("ffmpeg");
+  const ytDlpInstall = createInstallStore("ytDlp");
+
+  const ffmpegInstallBusy = $derived(
+    $ffmpegInstall.phase === "installing" || $ffmpegInstall.phase === "rechecking",
+  );
+  const ytDlpInstallBusy = $derived(
+    $ytDlpInstall.phase === "installing" || $ytDlpInstall.phase === "rechecking",
+  );
+
+  function installButtonLabel(phase: InstallPhase): string {
+    if (phase === "installing") return "Installing…";
+    if (phase === "rechecking") return "Checking…";
+    return "Install automatically";
+  }
+
+  /** User-facing copy for a failed auto-install, branching on the
+   * machine-readable `outcome` the Rust side reports (install.rs's
+   * `InstallOutcome`) so "Homebrew isn't installed" and "not supported
+   * here" read differently from a genuine install failure. */
+  function installFailureHeadline(outcome: InstallOutcome | null): string {
+    if (outcome === "brew_missing") return "Homebrew isn't installed.";
+    if (outcome === "unsupported") return "Automatic install isn't available here.";
+    return "Automatic install failed.";
+  }
 
   onMount(() => {
     void projects.refresh();
@@ -454,6 +488,27 @@
             <p class="deps-message">
               <strong>yt-dlp</strong> not found on your system. It's optional and only needed for YouTube import.
             </p>
+            {#if runningInTauri}
+              <div class="deps-auto-install">
+                <button
+                  type="button"
+                  class="deps-install-auto"
+                  disabled={ytDlpInstallBusy}
+                  onclick={() => ytDlpInstall.install()}
+                >
+                  {installButtonLabel($ytDlpInstall.phase)}
+                </button>
+                {#if $ytDlpInstall.phase === "failed"}
+                  <p class="deps-install-error" role="alert">
+                    {installFailureHeadline($ytDlpInstall.outcome)}
+                    {#if $ytDlpInstall.outputTail}
+                      <code class="deps-install-output">{$ytDlpInstall.outputTail}</code>
+                    {/if}
+                  </p>
+                {/if}
+              </div>
+            {/if}
+            <p class="deps-manual-label">Or install it manually:</p>
             <div class="deps-command-row">
               <code class="deps-command">{ytDlpInstallCommand}</code>
               <button type="button" class="deps-copy" onclick={copyYtDlpInstallCommand}>
@@ -471,6 +526,14 @@
           </div>
         {/if}
 
+        {#if $ytDlpInstall.phase === "ok"}
+          <div class="deps-banner deps-install-ok" role="status">
+            <p class="deps-message">
+              ✓ yt-dlp{$ytDlpInstall.version ? ` ${$ytDlpInstall.version}` : ""} installed and detected.
+            </p>
+          </div>
+        {/if}
+
         {#if youtubeError}
           <div class="error-panel">{youtubeError}</div>
         {/if}
@@ -483,6 +546,27 @@
           <strong>{missingBinaryNames()}</strong> not found on your system. ffmpeg is required to decode
           audio before transcription can run.
         </p>
+        {#if runningInTauri}
+          <div class="deps-auto-install">
+            <button
+              type="button"
+              class="deps-install-auto"
+              disabled={ffmpegInstallBusy}
+              onclick={() => ffmpegInstall.install()}
+            >
+              {installButtonLabel($ffmpegInstall.phase)}
+            </button>
+            {#if $ffmpegInstall.phase === "failed"}
+              <p class="deps-install-error" role="alert">
+                {installFailureHeadline($ffmpegInstall.outcome)}
+                {#if $ffmpegInstall.outputTail}
+                  <code class="deps-install-output">{$ffmpegInstall.outputTail}</code>
+                {/if}
+              </p>
+            {/if}
+          </div>
+          <p class="deps-manual-label">Or install it manually:</p>
+        {/if}
         <div class="deps-command-row">
           <code class="deps-command">{installCommand}</code>
           <button type="button" class="deps-copy" onclick={copyInstallCommand}>
@@ -509,6 +593,20 @@
       <div class="error-panel">
         Couldn't check dependencies: {$deps.error}
         <button type="button" class="retry-link" onclick={() => deps.recheck()}>Check again</button>
+      </div>
+    {/if}
+
+    {#if $ffmpegInstall.phase === "ok"}
+      <!-- Rendered OUTSIDE the `$deps.status === "missing"` banner above on
+           purpose: a successful install flips `$deps.status` to "ok" via
+           the recheck that already ran inside `ffmpegInstall.install()`
+           (lib/installDeps.ts), which makes that banner disappear the same
+           instant -- this is the only place left to show the "found AFTER
+           install" confirmation the user asked for. -->
+      <div class="deps-banner deps-install-ok" role="status">
+        <p class="deps-message">
+          ✓ ffmpeg{$ffmpegInstall.version ? ` ${$ffmpegInstall.version}` : ""} installed and detected.
+        </p>
       </div>
     {/if}
 
@@ -932,6 +1030,70 @@
   .deps-recheck:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+
+  .deps-auto-install {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .deps-install-auto {
+    align-self: flex-start;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--bg);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .deps-install-auto:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .deps-install-auto:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .deps-install-error {
+    margin: 0;
+    font-size: 12px;
+    color: #e58a8a;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .deps-install-output {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    white-space: pre-wrap;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .deps-manual-label {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text);
+    opacity: 0.7;
+  }
+
+  .deps-install-ok {
+    border-left-color: var(--success);
+  }
+
+  .deps-install-ok .deps-message {
+    color: var(--success);
   }
 
   .error-panel {

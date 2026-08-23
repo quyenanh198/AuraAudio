@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 
+from aura_worker.binaries import resolve_binary
 from fastapi import APIRouter
 
 from aura_api.schemas import DependencyStatus, SystemDepsResponse
@@ -46,10 +46,19 @@ def _parse_version(binary: str, executable_path: str) -> str | None:
 
 
 def _check_binary(binary: str) -> DependencyStatus:
-    executable_path = shutil.which(binary)
-    if executable_path is None:
-        return DependencyStatus(found=False, version=None)
-    return DependencyStatus(found=True, version=_parse_version(binary, executable_path))
+    # Resolved (not a bare `shutil.which`), so this reports "found" for the
+    # exact same set of binaries the real probe/normalize/import call sites
+    # can actually use -- see aura_worker.binaries's module docstring for
+    # why plain PATH lookup alone isn't enough on Windows.
+    resolved = resolve_binary(binary)
+    if resolved is None:
+        return DependencyStatus(found=False, version=None, path=None, source=None)
+    return DependencyStatus(
+        found=True,
+        version=_parse_version(binary, resolved.path),
+        path=resolved.path,
+        source=resolved.source,
+    )
 
 
 def _parse_yt_dlp_version(executable_path: str) -> str | None:
@@ -78,10 +87,15 @@ def _parse_yt_dlp_version(executable_path: str) -> str | None:
 
 
 def _check_yt_dlp() -> DependencyStatus:
-    executable_path = shutil.which("yt-dlp")
-    if executable_path is None:
-        return DependencyStatus(found=False, version=None)
-    return DependencyStatus(found=True, version=_parse_yt_dlp_version(executable_path))
+    resolved = resolve_binary("yt-dlp")
+    if resolved is None:
+        return DependencyStatus(found=False, version=None, path=None, source=None)
+    return DependencyStatus(
+        found=True,
+        version=_parse_yt_dlp_version(resolved.path),
+        path=resolved.path,
+        source=resolved.source,
+    )
 
 
 @router.get("/system/deps", response_model=SystemDepsResponse)

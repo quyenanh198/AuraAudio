@@ -176,6 +176,11 @@ export interface EditResponse {
 export interface DependencyStatus {
   found: boolean;
   version: string | null;
+  // Absolute resolved path, and how it was found ("env" | "path" |
+  // "known_location") -- both null when `found` is false. See
+  // apps/api/src/aura_api/schemas.py's DependencyStatus.
+  path: string | null;
+  source: string | null;
 }
 
 export interface SystemDepsResponse {

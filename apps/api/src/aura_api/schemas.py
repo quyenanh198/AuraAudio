@@ -97,6 +97,15 @@ class ProjectListItem(BaseModel):
 class DependencyStatus(BaseModel):
     found: bool
     version: str | None
+    # Absolute resolved path, and how it was found -- "env" (an
+    # AURA_*_PATH override), "path" (plain PATH lookup), or
+    # "known_location" (one of aura_worker.binaries's well-known per-OS
+    # install locations, e.g. winget's Links dir on Windows). Both `None`
+    # when `found` is `False`. Purely diagnostic today (surfaced so a
+    # confusing "it's installed but the app still says it's missing"
+    # report is debuggable), not yet rendered by the frontend.
+    path: str | None = None
+    source: str | None = None
 
 
 class SystemDepsResponse(BaseModel):

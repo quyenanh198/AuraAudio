@@ -708,9 +708,12 @@ Design points worth knowing if extending this:
 
 - **yt-dlp is optional-on-PATH, not bundled.** Same guided-install pattern
   as ffmpeg (`deps.ts`'s `INSTALL_COMMANDS`, now keyed by dependency name
-  instead of assuming ffmpeg is the only one) — checked via `shutil.which`,
-  with a per-OS one-line install command shown in the frontend when
-  missing. Unlike ffmpeg it is **non-blocking**: `SystemDepsResponse.allFound`
+  instead of assuming ffmpeg is the only one) — resolved via
+  `aura_worker.binaries.resolve_binary` (see "Dependency auto-detect +
+  auto-install" below; this used to be a bare `shutil.which`, which is why
+  older references to that call in this doc are now historical), with a
+  per-OS one-line install command shown in the frontend when missing.
+  Unlike ffmpeg it is **non-blocking**: `SystemDepsResponse.allFound`
   stays scoped to `ffmpeg`/`ffprobe` only, and yt-dlp missing never trips
   Home's existing transcription-blocking banner — only the YouTube-import
   affordance itself gates on it (`isYtDlpMissing` in `deps.ts`). yt-dlp is
@@ -745,6 +748,156 @@ Design points worth knowing if extending this:
   `lib/youtube.ts`'s `isYoutubeUrl`) — specifically to reject the userinfo
   trick `https://youtube.com@evil.com/...`, whose real (parsed) hostname is
   `evil.com`.
+
+## Dependency auto-detect + auto-install (Windows PATH-refresh fix)
+
+**Three user reports, one root cause.** A real Windows (v1.2.0) user hit
+three symptoms that looked unrelated but traced to the SAME thing: (1)
+YouTube import failing with an audio-extraction error, (2) transcription
+failing for BOTH guitar and piano, and (3) after following the install
+guidance and clicking "Check again", the app kept reporting the
+dependency missing. Diagnosis: yt-dlp's `-x --audio-format mp3`
+post-processing shells out to ffmpeg (symptom 1); `probe_media`/
+`normalize` shell out to ffmpeg/ffprobe directly for every transcription
+job regardless of instrument (symptom 2, explaining "both guitar AND
+piano" — neither path is instrument-specific). All three were really one
+missing binary, seen from three call sites.
+
+**The Windows PATH-refresh trap (symptom 3).** After `winget install
+Gyan.FFmpeg` succeeds, Windows updates the registry-level PATH for *new*
+processes, but a process already running (this app, launched before the
+install) keeps its own stale copy of the environment it started with —
+its PATH literally cannot see the new install until the app restarts.
+Bare `shutil.which("ffmpeg")` (what every call site used before this fix)
+reads that same stale PATH, so "Check again" kept failing even though the
+install genuinely succeeded. This is not a bug in winget or in Windows —
+it is baseline process-environment behavior — so the fix has to route
+around it rather than "fix" PATH refresh, which isn't fixable from inside
+an already-running process.
+
+**Resolution order (`workers/transcription/src/aura_worker/binaries.py`,
+`resolve_binary(name)`).** Deliberately placed in `aura_worker`, not
+`aura_api`, even though the fix is used by both: `aura-api`'s own
+`pyproject.toml` already depends on `aura-worker` (`dependencies = [...,
+"aura-worker"]`), and `aura-api`'s routers already import from
+`aura_worker` elsewhere (`stages/probe.py` imports `aura_api.models` the
+other direction, so this project's package boundary is already not a
+strict one-way DAG) — so a new shared module belongs on the side that's
+already the common dependency, with `aura_api.routers.{system,imports}`
+importing it, rather than duplicating the logic or inventing a third
+shared package. Order, first hit wins:
+1. An env var override (`AURA_FFMPEG_PATH` / `AURA_FFPROBE_PATH` /
+   `AURA_YT_DLP_PATH`), trusted outright if set (not even checked to
+   exist — a bad override fails loudly at the real subprocess call site).
+2. `shutil.which(name)` — ordinary PATH lookup, unchanged behavior for
+   the common case where PATH is already correct.
+3. A fixed list of well-known per-OS install locations, first existing
+   file wins: **Windows** — winget's own stable `%LOCALAPPDATA%\
+   Microsoft\WinGet\Links\<name>.exe` shim dir (checked first), then a
+   `Gyan.FFmpeg*/**/bin/<name>.exe` glob under `%LOCALAPPDATA%\Microsoft\
+   WinGet\Packages\` (the real, version-suffixed per-package install
+   tree), then `%ProgramFiles%\ffmpeg\bin`, then Chocolatey's flat
+   `%ProgramData%\chocolatey\bin`. **macOS** — `/opt/homebrew/bin` (Apple
+   Silicon default), then `/usr/local/bin` (Intel/older installs).
+   **Linux** — `/usr/bin`, `/usr/local/bin`, `~/.local/bin`.
+
+Every real call site now goes through this instead of a bare binary name:
+`ffmpeg_utils.probe_media` (ffprobe), `stages/normalize.py` (ffmpeg), and
+`routers/imports.py` (yt-dlp) — all raise a clear, actionable error
+(`JobFailure`/machine-readable 409, not a raw `FileNotFoundError`) when a
+binary genuinely can't be resolved anywhere. `imports.py` additionally
+resolves ffmpeg (not just yt-dlp) and passes `--ffmpeg-location <dir>` to
+yt-dlp whenever ffmpeg resolves — yt-dlp does its OWN independent PATH
+search for ffmpeg internally when postprocessing, which would miss the
+exact same known-but-not-on-PATH install this module just found, without
+that flag. `GET /v1/system/deps` (`DependencyStatus`) now reports the
+resolved absolute `path` and `source` (`"env"` | `"path"` |
+`"known_location"`) alongside `found`/`version`, so a "it's installed but
+the app still says it's missing" report is diagnosable from the response
+alone.
+
+**Auto-install, from the Tauri shell, not the backend
+(`apps/desktop/src-tauri/src/install.rs`).** Actually running a
+package-manager install is a privileged action — launching another
+process on the user's machine — so it's a Tauri v2 command
+(`install_dependency`, invoked from the frontend), not an HTTP endpoint
+on the backend's loopback port that anything on the machine could hit.
+Every command is a **fixed, hardcoded argv** — the only caller input
+(`name`, one of `"ffmpeg"`/`"ytDlp"`) is matched against a small Rust enum
+before anything is spawned, and nothing caller-supplied is ever
+interpolated into the argv itself, so there is no injection surface
+regardless of what a malicious `name` might contain. Per OS:
+- **Windows**: `winget install --id Gyan.FFmpeg --accept-source-agreements
+  --accept-package-agreements` for ffmpeg; `winget install --id
+  yt-dlp.yt-dlp --accept-source-agreements --accept-package-agreements`
+  for yt-dlp — the id verified against the real winget-pkgs manifest
+  (`microsoft/winget-pkgs`, `manifests/y/yt-dlp/yt-dlp`); it is
+  `yt-dlp.yt-dlp`, not `yt-dlp` alone.
+- **macOS**: `brew install ffmpeg` / `brew install yt-dlp`, but only after
+  confirming `brew` itself resolves on PATH first (a lightweight PATH
+  scan, not a spawn — spawning just to test existence would trigger
+  side effects for other binaries like `pkexec`'s auth dialog below). If
+  Homebrew isn't there, returns a typed `brew_missing` outcome so the
+  frontend can show "install Homebrew first" guidance instead of a raw
+  failure.
+- **Linux**: ffmpeg is **never** auto-installed at runtime — the `.deb`
+  package already declares it as a hard `Depends`
+  (`tauri.conf.json`'s `bundle.linux.deb.depends: ["ffmpeg"]`), so a
+  correctly-installed packaged app already has it, and there is no single
+  safe, distro-agnostic install command to fall back to (apt/dnf/pacman
+  all differ). For yt-dlp, attempts `pkexec apt-get install -y yt-dlp`
+  ONLY if `pkexec` itself is present (same PATH-scan-not-spawn check as
+  Homebrew); otherwise returns a typed `unsupported` outcome with
+  guidance to use the distro's own package manager.
+
+**ACL wiring (Tauri v2, verified against the installed `tauri-build
+2.6.3`/`tauri 2.11.5` crate source, not memory).** `install_dependency` is
+a privileged command, so it gets an explicit permission rather than being
+left ungated: `build.rs` now calls
+`tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new()
+.commands(&["install_dependency"])))`, which autogenerates
+`permissions/autogenerated/install_dependency.toml` (`allow-`/
+`deny-install-dependency` identifiers) at every build, picked up by the
+default `./permissions/**/*` glob; `capabilities/default.json` references
+the bare identifier `allow-install-dependency` (no plugin prefix — Tauri's
+ACL resolver treats an unprefixed identifier as belonging to the app's own
+manifest, confirmed by reading `tauri-2.11.5/src/ipc/authority.rs`'s
+`get_permissions`, not assumed). Confirmed end-to-end by a real `cargo
+check`: `gen/schemas/acl-manifests.json` shows the generated
+`allow-install-dependency` permission under the `__app-acl__` key, and
+`gen/schemas/capabilities.json` shows `default`'s permission list
+including it — `tauri-build`'s own `validate_capabilities` step would have
+failed the build if the reference were wrong.
+
+**Frontend state machine (`apps/desktop/web/src/lib/installDeps.ts`,
+`createInstallStore(dep)`).** `idle → installing → rechecking →
+ok/failed`. The "check version AFTER install, not just show the command
+before" requirement lives entirely inside `install()`: after the install
+command reports success, it calls the SAME `deps.recheck()` the banner
+already uses (not a bespoke check, and not just trusting the install
+command's own exit code) before ever reporting `ok`, and reports `failed`
+with a "try restarting the app" hint if the recheck still doesn't find
+it — the exact Windows PATH-refresh trap this feature exists to fix,
+should it recur for some other reason. `Home.svelte`'s banners gained an
+"Install automatically" button (Tauri only — `isTauri()` from
+`@tauri-apps/api/core`, same runtime check `saveExport.ts` already uses;
+outside Tauri the browser build keeps the original guidance-only
+behavior unchanged) with the manual copyable command kept as secondary,
+and a separate small success banner (`ffmpeg 7.1 ✓`) that renders
+independently of the missing-deps banner — necessary because a successful
+recheck flips `$deps.status` to `"ok"`, which makes the missing-deps
+banner (and any success message nested inside it) disappear the same
+instant.
+
+**What's testable in this environment vs. Windows-hardware-only.** The
+resolution order, the ACL wiring, the Rust command's argv selection per
+`cfg!(windows/macos)` branch (via unit tests, not real winget/brew calls),
+and the full frontend state machine are all covered by real, non-mocked
+CI-runnable tests. What is NOT verifiable here: an actual `winget install`
+run against a real Windows machine, or empirically re-confirming the
+PATH-staleness behavior itself (that's standard, well-documented Windows
+process-environment behavior, not something this sandbox can reproduce or
+needed to reproduce to fix correctly).
 
 ## Working process (established this session, keep using it)
 

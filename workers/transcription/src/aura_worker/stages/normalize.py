@@ -3,10 +3,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from score_schema.models import JobErrorCode
+
+from aura_worker.binaries import resolve_binary
 from aura_worker.errors import JobFailure
 from aura_worker.ffmpeg_utils import sha256_file
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
-from score_schema.models import JobErrorCode
 
 TARGET_SAMPLE_RATE = 22050
 STAGE_VERSION = 1
@@ -21,10 +23,17 @@ def run(ctx: StageContext, source_path: Path) -> Path:
         out_path.write_bytes(ctx.storage.get_bytes(cached.object_key))
         return out_path
 
+    ffmpeg = resolve_binary("ffmpeg")
+    if ffmpeg is None:
+        raise JobFailure(
+            JobErrorCode.DECODE_FAILED,
+            "ffmpeg not found -- install it (see the app's dependency banner) and try again",
+        )
+
     try:
         subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(source_path),
+                ffmpeg.path, "-y", "-i", str(source_path),
                 "-ac", "1", "-ar", str(TARGET_SAMPLE_RATE),
                 "-af", "loudnorm=I=-23:TP=-2:LRA=7",
                 str(out_path),

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-dependency"
+description = "Enables the install_dependency command without any pre-configured scope."
+commands.allow = ["install_dependency"]
+
+[[permission]]
+identifier = "deny-install-dependency"
+description = "Denies the install_dependency command without any pre-configured scope."
+commands.deny = ["install_dependency"]

@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from aura_worker.binaries import resolve_binary
 from fastapi import APIRouter, HTTPException
 
 from aura_api.config import settings
@@ -119,8 +120,15 @@ def _stderr_tail(text: str | None) -> str:
 def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
     url = _validate_youtube_url(body.url)
 
-    yt_dlp_path = shutil.which("yt-dlp")
-    if yt_dlp_path is None:
+    # Resolved (not a bare `shutil.which`) for the same reason
+    # ffmpeg_utils.probe_media/normalize are: on Windows in particular, a
+    # freshly-`winget install`ed binary can be invisible to this already-
+    # running process's PATH until the app restarts (see
+    # aura_worker.binaries's module docstring) even though it's really
+    # installed. Checking winget's own stable install locations too closes
+    # that gap without requiring a restart.
+    yt_dlp = resolve_binary("yt-dlp")
+    if yt_dlp is None:
         # Machine-readable so the frontend can show install guidance
         # (mirrors the ffmpeg-missing banner's install-command pattern)
         # instead of a raw error string.
@@ -131,6 +139,22 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
                 "message": "yt-dlp was not found on PATH. Install it to import audio from YouTube.",
             },
         )
+    yt_dlp_path = yt_dlp.path
+
+    # yt-dlp's OWN internal ffmpeg lookup is independent of ours -- it does
+    # its own PATH search when postprocessing (`-x --audio-format mp3`),
+    # which can miss the exact same known-but-not-on-PATH ffmpeg install
+    # this module just resolved for itself. `--ffmpeg-location <dir>`
+    # (yt-dlp's own documented flag, accepts either the binary's directory
+    # or the binary's exact path) points it at whatever we found, so its
+    # own extraction step doesn't independently fail the same way. Omitted
+    # entirely (not passed as an empty string) when ffmpeg can't be
+    # resolved at all -- yt-dlp then falls through to its own PATH search
+    # and, ultimately, its own natural "ffmpeg not found" failure.
+    ffmpeg = resolve_binary("ffmpeg")
+    ffmpeg_location_args = (
+        ["--ffmpeg-location", str(Path(ffmpeg.path).parent)] if ffmpeg is not None else []
+    )
 
     imports_root = Path(settings.data_dir) / "imports_tmp"
     imports_root.mkdir(parents=True, exist_ok=True)
@@ -148,6 +172,7 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
             "-x",
             "--audio-format",
             "mp3",
+            *ffmpeg_location_args,
             "--print",
             f"{_TITLE_MARKER}%(title)s",
             "-o",

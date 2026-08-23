@@ -1,4 +1,5 @@
 mod backend;
+mod install;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -6,6 +7,7 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
     .manage(backend::BackendProcess::default())
+    .invoke_handler(tauri::generate_handler![install::install_dependency])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

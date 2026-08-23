@@ -1,5 +1,7 @@
 import wave
 
+import pytest
+from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext
 from aura_worker.stages import normalize
 from test_fixtures.generate import write_guitar_pluck_wav
@@ -56,3 +58,22 @@ def test_normalize_stage_second_call_resumes_without_reencoding(db_session, samp
         monkeypatch.setattr(subprocess, "run", real_run)
 
     assert second_path.read_bytes() == first_bytes
+
+
+def test_normalize_raises_clear_error_when_ffmpeg_unresolved(
+    db_session, sample_job, workdir, monkeypatch
+):
+    # Root-cause regression: same "clear, actionable error" contract as
+    # ffmpeg_utils.probe_media -- an unresolvable ffmpeg must not fall
+    # through to a raw FileNotFoundError from subprocess.run.
+    source_path = workdir / "source" / "input.wav"
+    write_guitar_pluck_wav(source_path, duration_s=1.0, sample_rate=44100)
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    monkeypatch.setattr(normalize, "resolve_binary", lambda _name: None)
+
+    with pytest.raises(JobFailure) as exc_info:
+        normalize.run(ctx, source_path=source_path)
+    assert exc_info.value.code.value == "DECODE_FAILED"
+    assert "ffmpeg" in exc_info.value.detail

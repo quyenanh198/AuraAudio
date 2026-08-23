@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from aura_api.main import create_app
+from aura_worker.binaries import ResolvedBinary
+from fastapi.testclient import TestClient
 
 VALID_URLS = [
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -61,7 +61,7 @@ def test_valid_youtube_urls_pass_validation(url, client, monkeypatch):
     # the 422 (URL rejected).
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", lambda _binary: None)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_nothing)
     resp = client.post("/v1/imports/youtube", json={"url": url})
     assert resp.status_code == 409, f"{url!r} should pass validation, got {resp.status_code}: {resp.text}"
 
@@ -84,7 +84,7 @@ def test_nul_byte_in_url_returns_422_not_500(client, monkeypatch):
     # (and raises) before it ever gets to exec/FileNotFoundError.
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
     resp = client.post(
         "/v1/imports/youtube",
         json={"url": "https://youtube.com/watch?v=x\x00y"},
@@ -106,7 +106,7 @@ def test_url_over_max_length_returns_422(client):
 def test_yt_dlp_missing_returns_409_with_machine_readable_detail(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", lambda _binary: None)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_nothing)
     resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
     assert resp.status_code == 409
     detail = resp.json()["detail"]
@@ -114,8 +114,17 @@ def test_yt_dlp_missing_returns_409_with_machine_readable_detail(client, monkeyp
     assert "message" in detail
 
 
-def _fake_which(binary: str) -> str | None:
-    return "/usr/bin/yt-dlp" if binary == "yt-dlp" else None
+def _resolve_nothing(_name: str) -> ResolvedBinary | None:
+    return None
+
+
+def _resolve_only_yt_dlp(name: str) -> ResolvedBinary | None:
+    """`resolve_binary` stub: yt-dlp resolves (from PATH), ffmpeg does not --
+    isolates these tests from the `--ffmpeg-location` behavior, which has
+    its own dedicated tests below (`test_ffmpeg_location_flag_*`)."""
+    if name == "yt-dlp":
+        return ResolvedBinary(path="/usr/bin/yt-dlp", source="path")
+    return None
 
 
 def _find_output_dir(cmd: list[str]) -> Path:
@@ -128,7 +137,7 @@ def _find_output_dir(cmd: list[str]) -> Path:
 def test_success_path_registers_upload_and_returns_shape_compatible_response(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     captured_cmd: dict[str, list[str]] = {}
 
@@ -181,7 +190,7 @@ def test_success_path_registers_upload_and_returns_shape_compatible_response(cli
 def test_success_path_without_title_marker_omits_title(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 0
@@ -205,7 +214,7 @@ def test_success_path_without_title_marker_omits_title(client, monkeypatch):
 def test_nonzero_exit_returns_502_with_truncated_stderr_tail(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 1
@@ -233,7 +242,7 @@ def test_timeout_returns_502(client, monkeypatch):
 
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     def _fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=300)
@@ -248,7 +257,7 @@ def test_timeout_returns_502(client, monkeypatch):
 def test_no_output_file_produced_returns_502(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 0
@@ -279,7 +288,7 @@ def test_max_filesize_skip_returns_422_not_generic_502(client, monkeypatch):
     a genuine failure; it must instead surface a specific, actionable 422."""
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 0
@@ -309,7 +318,7 @@ def test_max_filesize_skip_detected_even_on_nonzero_returncode(client, monkeypat
     # nonzero for the same skip.
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 1
@@ -336,7 +345,7 @@ def test_non_mp3_audio_output_is_accepted(client, monkeypatch):
     file" just because the glob only looked for *.mp3."""
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     def _fake_run(cmd, **kwargs):
         out_dir = _find_output_dir(cmd)
@@ -359,7 +368,7 @@ def test_non_mp3_audio_output_is_accepted(client, monkeypatch):
 def test_mp3_preferred_over_other_extensions_when_both_present(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 
-    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
 
     class _FakeCompletedProcess:
         returncode = 0
@@ -378,3 +387,71 @@ def test_mp3_preferred_over_other_extensions_when_both_present(client, monkeypat
     resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
     assert resp.status_code == 201, resp.text
     assert resp.json()["object_key"].endswith("abc123.mp3")
+
+
+def _resolve_yt_dlp_and_known_location_ffmpeg(name: str) -> ResolvedBinary | None:
+    if name == "yt-dlp":
+        return ResolvedBinary(path="/usr/bin/yt-dlp", source="path")
+    if name == "ffmpeg":
+        # "known_location" -- the exact case that matters here: ffmpeg was
+        # NOT found via plain PATH lookup, only via one of the well-known
+        # per-OS install locations, so yt-dlp's own independent PATH search
+        # would miss it too without --ffmpeg-location telling it where to
+        # look.
+        return ResolvedBinary(path="/opt/winget-links/ffmpeg.exe", source="known_location")
+    return None
+
+
+def test_ffmpeg_location_flag_present_when_ffmpeg_resolves_via_known_location(client, monkeypatch):
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_yt_dlp_and_known_location_ffmpeg)
+
+    captured_cmd: dict[str, list[str]] = {}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        out_dir = _find_output_dir(cmd)
+        (out_dir / "abc123.mp3").write_bytes(b"bytes")
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+
+    cmd = captured_cmd["cmd"]
+    assert "--ffmpeg-location" in cmd
+    # The directory containing the resolved ffmpeg binary, not the binary
+    # path itself.
+    assert cmd[cmd.index("--ffmpeg-location") + 1] == "/opt/winget-links"
+
+
+def test_ffmpeg_location_flag_omitted_when_ffmpeg_cannot_be_resolved_at_all(client, monkeypatch):
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
+
+    captured_cmd: dict[str, list[str]] = {}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        out_dir = _find_output_dir(cmd)
+        (out_dir / "abc123.mp3").write_bytes(b"bytes")
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+    assert "--ffmpeg-location" not in captured_cmd["cmd"]

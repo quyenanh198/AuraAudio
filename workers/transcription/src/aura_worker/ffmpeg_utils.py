@@ -6,8 +6,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from aura_worker.errors import JobFailure
 from score_schema.models import JobErrorCode
+
+from aura_worker.binaries import resolve_binary
+from aura_worker.errors import JobFailure
 
 _ALLOWED_CODECS = {"pcm_s16le", "mp3", "aac", "h264"}
 
@@ -24,10 +26,17 @@ def probe_media(path: Path) -> ProbeInfo:
     if not path.exists():
         raise JobFailure(JobErrorCode.DECODE_FAILED, f"file not found: {path}")
 
+    ffprobe = resolve_binary("ffprobe")
+    if ffprobe is None:
+        raise JobFailure(
+            JobErrorCode.DECODE_FAILED,
+            "ffprobe not found -- install it (see the app's dependency banner) and try again",
+        )
+
     try:
         proc = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-print_format", "json",
+                ffprobe.path, "-v", "error", "-print_format", "json",
                 "-show_format", "-show_streams", str(path),
             ],
             capture_output=True, text=True, timeout=30, check=True,

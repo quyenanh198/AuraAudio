@@ -1,5 +1,4 @@
 import pytest
-
 from aura_worker.errors import JobFailure
 from aura_worker.ffmpeg_utils import probe_media, sha256_file
 from test_fixtures.generate import write_guitar_pluck_wav
@@ -26,3 +25,20 @@ def test_sha256_file_is_deterministic(workdir):
     wav_path = workdir / "fixture.wav"
     write_guitar_pluck_wav(wav_path, duration_s=1.0, sample_rate=22050)
     assert sha256_file(wav_path) == sha256_file(wav_path)
+
+
+def test_probe_media_raises_clear_error_when_ffprobe_unresolved(workdir, monkeypatch):
+    # Root-cause regression: an unresolvable ffprobe (not on PATH, not at
+    # any known install location) must fail with a clear, actionable
+    # message -- not a raw FileNotFoundError from subprocess.run trying to
+    # exec the literal string "ffprobe".
+    import aura_worker.ffmpeg_utils as ffmpeg_utils_module
+
+    wav_path = workdir / "fixture.wav"
+    write_guitar_pluck_wav(wav_path, duration_s=1.0, sample_rate=22050)
+    monkeypatch.setattr(ffmpeg_utils_module, "resolve_binary", lambda _name: None)
+
+    with pytest.raises(JobFailure) as exc_info:
+        probe_media(wav_path)
+    assert exc_info.value.code.value == "DECODE_FAILED"
+    assert "ffprobe" in exc_info.value.detail

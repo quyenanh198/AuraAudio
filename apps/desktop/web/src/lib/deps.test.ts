@@ -13,9 +13,9 @@ vi.mock("./api", () => ({
 
 function depsResponse(overrides: Partial<SystemDepsResponse> = {}): SystemDepsResponse {
   return {
-    ffmpeg: { found: true, version: "6.1.1" },
-    ffprobe: { found: true, version: "6.1.1" },
-    ytDlp: { found: true, version: "2024.08.06" },
+    ffmpeg: { found: true, version: "6.1.1", path: "/usr/bin/ffmpeg", source: "path" },
+    ffprobe: { found: true, version: "6.1.1", path: "/usr/bin/ffprobe", source: "path" },
+    ytDlp: { found: true, version: "2024.08.06", path: "/usr/bin/yt-dlp", source: "path" },
     allFound: true,
     ...overrides,
   };
@@ -57,7 +57,7 @@ describe("deps store", () => {
 
   it("transitions to missing when a binary is not found", async () => {
     getSystemDepsMock.mockResolvedValueOnce(
-      depsResponse({ ffmpeg: { found: false, version: null }, allFound: false }),
+      depsResponse({ ffmpeg: { found: false, version: null, path: null, source: null }, allFound: false }),
     );
 
     const { deps } = await import("./deps");
@@ -103,7 +103,7 @@ describe("deps store", () => {
 
   it("recheck() re-runs the same check and can flip missing back to ok", async () => {
     getSystemDepsMock
-      .mockResolvedValueOnce(depsResponse({ ffmpeg: { found: false, version: null }, allFound: false }))
+      .mockResolvedValueOnce(depsResponse({ ffmpeg: { found: false, version: null, path: null, source: null }, allFound: false }))
       .mockResolvedValueOnce(depsResponse());
 
     const { deps } = await import("./deps");
@@ -117,7 +117,7 @@ describe("deps store", () => {
 
   it("recheck() sets status back to checking while the new request is in flight", async () => {
     getSystemDepsMock.mockResolvedValueOnce(
-      depsResponse({ ffmpeg: { found: false, version: null }, allFound: false }),
+      depsResponse({ ffmpeg: { found: false, version: null, path: null, source: null }, allFound: false }),
     );
     const { deps } = await import("./deps");
     await deps.check();
@@ -216,13 +216,13 @@ describe("isYtDlpMissing", () => {
   it("is true once a check confirms yt-dlp is absent", async () => {
     const { isYtDlpMissing } = await import("./deps");
     expect(
-      isYtDlpMissing({ detail: depsResponse({ ytDlp: { found: false, version: null } }) }),
+      isYtDlpMissing({ detail: depsResponse({ ytDlp: { found: false, version: null, path: null, source: null } }) }),
     ).toBe(true);
   });
 
   it("is independent of ffmpeg/ffprobe -- yt-dlp missing alone doesn't need allFound to be false", async () => {
     const { isYtDlpMissing } = await import("./deps");
-    const detail = depsResponse({ ytDlp: { found: false, version: null }, allFound: true });
+    const detail = depsResponse({ ytDlp: { found: false, version: null, path: null, source: null }, allFound: true });
     expect(isYtDlpMissing({ detail })).toBe(true);
   });
 });
