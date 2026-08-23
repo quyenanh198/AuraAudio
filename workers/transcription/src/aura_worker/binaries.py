@@ -53,10 +53,62 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
+
+#: Windows `CreateProcess` flag suppressing the console window a
+#: console-subsystem child (`ffmpeg`/`ffprobe`/`yt-dlp`, all plain CLI
+#: executables, not GUI-subsystem builds) would otherwise get --
+#: `CREATE_NO_WINDOW`, winapi constant `0x08000000`. Same numeric value as
+#: `apps/desktop/src-tauri/src/backend.rs`'s own `CREATE_NO_WINDOW` (that
+#: module's doc comment has the full citation/rationale) -- kept as a
+#: hardcoded literal here too, deliberately NOT read off
+#: `subprocess.CREATE_NO_WINDOW` (the stdlib's own name for this same
+#: value): that attribute is ONLY defined on `subprocess` when running ON
+#: Windows -- referencing it, even lazily inside `subprocess_flags()` below,
+#: would raise `AttributeError` the moment a test forces the `sys.platform
+#: == "win32"` branch on this suite's real Linux/macOS/CI host (see
+#: `subprocess_flags()`'s own doc comment: `sys.platform` is a plain string
+#: check, freely monkeypatchable to simulate Windows, independent of what
+#: attributes the REAL, un-mockable OS-detected `subprocess` module actually
+#: exposes) -- a hardcoded literal has no such off-Windows existence
+#: problem at all, so `subprocess_flags()` can be exercised for both
+#: branches on any host, not just a real Windows one.
+_CREATE_NO_WINDOW: int = 0x0800_0000
+
+
+def subprocess_flags() -> dict[str, int]:
+    """Extra keyword arguments to splat into every `subprocess.run`/`Popen`
+    call this app makes, so a packaged Windows build never flashes a console
+    window for a child process -- see `apps/desktop/src-tauri/src/backend.rs`'s
+    module doc comment for why the parent app itself already doesn't have
+    one (Bug C's `--noconsole` PyInstaller build) and why that alone isn't
+    enough: every child THIS process spawns can still get its own console
+    unless each spawn site opts out individually.
+
+    Returns `{"creationflags": _CREATE_NO_WINDOW}` on win32 (numerically
+    identical to the real `subprocess.CREATE_NO_WINDOW`, see that
+    constant's own doc comment for why this module keeps its own hardcoded
+    copy instead), `{}` everywhere else -- NEVER raises and NEVER
+    references the real `subprocess.CREATE_NO_WINDOW` attribute, which
+    doesn't exist off-Windows at all. Every call site does
+    `subprocess.run([...], **subprocess_flags(), ...)` rather than checking
+    `sys.platform` itself, so this is the ONE place that combination is
+    decided.
+
+    Checked via `sys.platform` (not `platform.system()`, which the rest of
+    this module uses for its OS-specific PATH lookups) to match exactly how
+    the Python standard library itself gates `subprocess.CREATE_NO_WINDOW`'s
+    own existence -- `sys.platform` is `"win32"` on both 32- and 64-bit
+    Windows (a historical stdlib naming quirk, not a bitness check).
+    """
+    if sys.platform == "win32":
+        return {"creationflags": _CREATE_NO_WINDOW}
+    return {}
 
 #: Binary name -> environment variable that, if set to a non-empty value,
 #: is trusted as the exact path to that binary without any further checks

@@ -5,8 +5,14 @@ import wave
 
 import numpy as np
 import pytest
-from aura_worker import separation
-from aura_worker.separation import DemucsWeightsMissingError, _resolve_weights_dir, separate_guitar
+from aura_worker import binaries, separation
+from aura_worker.binaries import ResolvedBinary
+from aura_worker.separation import (
+    DemucsWeightsMissingError,
+    _decode_first_audio_stream,
+    _resolve_weights_dir,
+    separate_guitar,
+)
 from scipy.io import wavfile
 
 
@@ -112,3 +118,100 @@ def test_separate_guitar_handles_silent_input_without_crashing(monkeypatch, work
     result_path = separate_guitar(source_path, out_path)
 
     assert result_path.exists()
+
+
+def test_decode_first_audio_stream_matches_demucs_audiofile_output(workdir):
+    """Windows hidden-console audit regression: `_decode_first_audio_stream`
+    replaced `demucs.audio.AudioFile(...).read(...)` as the decode this
+    module uses (see `separation.py`'s module docstring "OWN DECODE"
+    paragraph) specifically so the ffmpeg/ffprobe shellouts go through
+    THIS app's own `creationflags`-safe subprocess calls instead of
+    demucs's un-audited internal ones. This test proves that swap didn't
+    change the decoded SAMPLES: runs both the new helper and demucs's own
+    `AudioFile` against the identical real WAV fixture and asserts the
+    resulting tensors are numerically indistinguishable (`torch.allclose`,
+    not `torch.equal`, since two independent ffmpeg invocations writing
+    then reading a raw f32le stream can differ in the last ULP or two of
+    floating-point precision, though in practice this passes bit-identical
+    on this suite's ffmpeg build too)."""
+    import torch
+    from demucs.audio import AudioFile
+
+    sample_rate = 44100
+    duration_s = 1.0
+    t = np.linspace(0, duration_s, int(sample_rate * duration_s), endpoint=False)
+    signal = (0.3 * np.sin(2 * np.pi * 220 * t) * 32767).astype(np.int16)
+    source_path = workdir / "tone.wav"
+    wavfile.write(str(source_path), sample_rate, signal)
+
+    target_samplerate = 44100
+    ours = _decode_first_audio_stream(source_path, target_samplerate)
+    theirs = AudioFile(str(source_path)).read(streams=0, samplerate=target_samplerate, channels=None)
+
+    assert ours.shape == theirs.shape
+    assert torch.allclose(ours, theirs, atol=1e-6)
+
+
+def test_decode_first_audio_stream_raises_clear_error_when_ffmpeg_unresolved(workdir, monkeypatch):
+    monkeypatch.setattr(separation, "resolve_binary", lambda name: None if name == "ffmpeg" else ResolvedBinary(path="ffprobe", source=binaries.ON_PATH))
+
+    source_path = workdir / "tone.wav"
+    wavfile.write(str(source_path), 22050, np.zeros(22050, dtype="int16"))
+
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        _decode_first_audio_stream(source_path, 22050)
+
+
+def test_decode_first_audio_stream_raises_clear_error_when_ffprobe_unresolved(workdir, monkeypatch):
+    monkeypatch.setattr(separation, "resolve_binary", lambda name: None if name == "ffprobe" else ResolvedBinary(path="ffmpeg", source=binaries.ON_PATH))
+
+    source_path = workdir / "tone.wav"
+    wavfile.write(str(source_path), 22050, np.zeros(22050, dtype="int16"))
+
+    with pytest.raises(RuntimeError, match="ffprobe"):
+        _decode_first_audio_stream(source_path, 22050)
+
+
+def test_decode_first_audio_stream_passes_windows_creationflags_on_win32(workdir, monkeypatch):
+    """Windows hidden-console audit: BOTH subprocess calls this helper
+    makes (the ffprobe stream-info probe and the ffmpeg raw-PCM decode)
+    must splat `aura_worker.binaries.subprocess_flags()`. `subprocess.run`
+    is fully faked (not just wrapped) so `sys.platform` can be forced to
+    `"win32"` (via `aura_worker.binaries.sys`) without also handing a
+    Windows-only `creationflags` kwarg to this suite's real POSIX
+    `subprocess.Popen`, which would raise."""
+    import json
+
+    monkeypatch.setattr(binaries.sys, "platform", "win32")
+    monkeypatch.setattr(
+        separation,
+        "resolve_binary",
+        lambda name: ResolvedBinary(path=name, source=binaries.ON_PATH),
+    )
+
+    source_path = workdir / "tone.wav"
+    wavfile.write(str(source_path), 22050, np.zeros(22050, dtype="int16"))
+
+    captured_calls: list[dict] = []
+
+    def _fake_run(cmd, **kwargs):
+        captured_calls.append(kwargs)
+        if cmd[0] == "ffprobe":
+
+            class _FakeCompletedProcess:
+                stdout = json.dumps(
+                    {"streams": [{"codec_type": "audio", "channels": 1, "sample_rate": "22050"}]}
+                ).encode("utf-8")
+
+            return _FakeCompletedProcess()
+        # ffmpeg call -- write a tiny real f32le file so np.fromfile succeeds.
+        out_path = cmd[-1]
+        np.zeros(4, dtype=np.float32).tofile(out_path)
+        return None
+
+    monkeypatch.setattr(separation.subprocess, "run", _fake_run)
+
+    _decode_first_audio_stream(source_path, 22050)
+
+    assert len(captured_calls) == 2
+    assert all(kwargs.get("creationflags") == 0x0800_0000 for kwargs in captured_calls)

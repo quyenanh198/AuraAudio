@@ -5,7 +5,7 @@ from pathlib import Path
 
 from score_schema.models import JobErrorCode
 
-from aura_worker.binaries import resolve_binary
+from aura_worker.binaries import resolve_binary, subprocess_flags
 from aura_worker.errors import JobFailure
 from aura_worker.ffmpeg_utils import sha256_file
 from aura_worker.stage_runner import StageContext, find_cached_artifact, save_artifact
@@ -39,6 +39,7 @@ def run(ctx: StageContext, source_path: Path) -> Path:
                 str(out_path),
             ],
             capture_output=True, timeout=120, check=True,
+            **subprocess_flags(),
         )
     except subprocess.CalledProcessError as exc:
         raise JobFailure(JobErrorCode.DECODE_FAILED, f"ffmpeg normalize failed: {exc.stderr!r}") from exc

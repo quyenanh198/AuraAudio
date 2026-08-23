@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from aura_worker.binaries import ResolvedBinary, resolve_binary
+from aura_worker.binaries import ResolvedBinary, resolve_binary, subprocess_flags
 from fastapi import APIRouter, HTTPException
 
 from aura_api.config import settings
@@ -220,6 +220,7 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
                 text=True,
                 timeout=_YT_DLP_TIMEOUT_SECONDS,
                 check=False,
+                **subprocess_flags(),
             )
         except subprocess.TimeoutExpired as exc:
             raise HTTPException(

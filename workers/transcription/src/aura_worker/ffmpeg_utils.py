@@ -8,7 +8,7 @@ from pathlib import Path
 
 from score_schema.models import JobErrorCode
 
-from aura_worker.binaries import resolve_binary
+from aura_worker.binaries import resolve_binary, subprocess_flags
 from aura_worker.errors import JobFailure
 
 _ALLOWED_CODECS = {"pcm_s16le", "mp3", "aac", "h264"}
@@ -40,6 +40,7 @@ def probe_media(path: Path) -> ProbeInfo:
                 "-show_format", "-show_streams", str(path),
             ],
             capture_output=True, text=True, timeout=30, check=True,
+            **subprocess_flags(),
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise JobFailure(JobErrorCode.DECODE_FAILED, f"ffprobe failed: {exc}") from exc

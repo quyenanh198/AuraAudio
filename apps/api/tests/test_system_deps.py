@@ -1,4 +1,5 @@
 from aura_api.main import create_app
+from aura_worker import binaries
 from aura_worker.binaries import ResolvedBinary
 from fastapi.testclient import TestClient
 
@@ -217,3 +218,33 @@ def test_system_deps_yt_dlp_missing_never_blocks_all_found(monkeypatch):
     assert body["ffmpeg"]["found"] is True
     assert body["ffprobe"]["found"] is True
     assert body["allFound"] is True
+
+
+def test_system_deps_version_checks_pass_windows_creationflags_on_win32(monkeypatch):
+    """Windows hidden-console audit: the ffmpeg/ffprobe/yt-dlp `-version`
+    subprocess calls this endpoint makes must splat
+    `aura_worker.binaries.subprocess_flags()`. `subprocess.run` is fully
+    faked (not just wrapped) so `sys.platform` can be forced to `"win32"`
+    (via `aura_worker.binaries.sys`) without also handing a Windows-only
+    `creationflags` kwarg to this suite's real POSIX `subprocess.Popen`,
+    which would raise."""
+    import aura_api.routers.system as system_module
+
+    monkeypatch.setattr(binaries.sys, "platform", "win32")
+    monkeypatch.setattr(system_module, "resolve_binary", _resolve_on_path)
+
+    captured_calls: list[dict] = []
+
+    def _fake_run(*_args, **kwargs):
+        captured_calls.append(kwargs)
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(system_module.subprocess, "run", _fake_run)
+
+    client = TestClient(create_app())
+    resp = client.get("/v1/system/deps")
+    assert resp.status_code == 200
+
+    # ffmpeg + ffprobe + yt-dlp -- one `-version`/`--version` call each.
+    assert len(captured_calls) == 3
+    assert all(kwargs.get("creationflags") == 0x0800_0000 for kwargs in captured_calls)

@@ -475,3 +475,37 @@ def test_ffmpeg_location_flag_omitted_when_ffmpeg_cannot_be_resolved_at_all(clie
     resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
     assert resp.status_code == 201, resp.text
     assert "--ffmpeg-location" not in captured_cmd["cmd"]
+
+
+def test_yt_dlp_spawn_passes_windows_creationflags_on_win32(client, monkeypatch):
+    """Windows hidden-console audit: the yt-dlp subprocess call this
+    endpoint makes must splat `aura_worker.binaries.subprocess_flags()`.
+    `subprocess.run` is fully faked (not just wrapped) so `sys.platform`
+    can be forced to `"win32"` (via `aura_worker.binaries.sys`) without
+    also handing a Windows-only `creationflags` kwarg to this suite's real
+    POSIX `subprocess.Popen`, which would raise."""
+    from aura_worker import binaries
+
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(binaries.sys, "platform", "win32")
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
+
+    captured: dict = {}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        out_dir = _find_output_dir(cmd)
+        (out_dir / "abc123.mp3").write_bytes(b"bytes")
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+    assert captured.get("creationflags") == 0x0800_0000

@@ -40,14 +40,42 @@ None (verified directly against demucs/pretrained.py) -- this module always
 passes an explicit local weights directory (fetched at BUILD time by
 scripts/fetch_demucs_weights.py), so the network is never touched during a
 real transcription request.
+
+OWN DECODE, NOT `demucs.audio.AudioFile` (Windows hidden-console audit):
+`AudioFile.read()` (what this module used to call directly) shells out to
+BOTH `ffprobe` (its module-level `_read_info`) and `ffmpeg` (inside
+`read()` itself) via ITS OWN internal `subprocess.check_output`/
+`subprocess.run` calls, using a bare `["ffprobe", ...]`/`["ffmpeg", ...]`
+argv this module has no way to reach or pass `creationflags` into --
+confirmed directly against the installed `demucs/audio.py`. On Windows
+that means every "Isolate instrument from mix" run would flash TWO console
+windows regardless of `apps/desktop/src-tauri/src/backend.rs`'s own
+`--noconsole`/`CREATE_NO_WINDOW` work, since neither shellout is one this
+app's own code performs. `_decode_first_audio_stream` below replicates
+BOTH of demucs's commands byte-for-argv identical (loglevel/format/map/
+threads flags all match `demucs/audio.py`'s `_read_info`/`AudioFile.read`
+exactly, for the single-stream, no-seek, no-duration case this module
+always uses -- `streams=0, seek_time=None, duration=None`) through this
+app's OWN `resolve_binary`-resolved paths and
+`aura_worker.binaries.subprocess_flags()`, so the exact same bytes reach
+`apply_model` with no decode-quality difference, verified by a byte-for-
+byte identical `separate_guitar()` WAV output before/after this change
+(see `docs/benchmarks/2026-08-21-dq3.md`'s determinism protocol, repeated
+for this change in the same way).
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
 import numpy as np
+
+from aura_worker.binaries import resolve_binary, subprocess_flags
 
 _WEIGHTS_ENV_VAR = "AURA_DEMUCS_WEIGHTS_DIR"
 _WEIGHTS_FROZEN_SUBDIR = "demucs_weights"
@@ -67,8 +95,6 @@ class DemucsWeightsMissingError(RuntimeError):
 
 
 def _resolve_weights_dir() -> Path:
-    import os
-
     env_override = os.environ.get(_WEIGHTS_ENV_VAR)
     if env_override:
         return Path(env_override)
@@ -110,9 +136,97 @@ def _load_model():
         return _model
 
 
+def _ffprobe_stream_info(ffprobe_path: str, path: Path) -> dict:
+    """Runs `ffprobe -loglevel panic <path> -print_format json -show_format
+    -show_streams` -- argv-identical to `demucs.audio._read_info` -- but
+    through THIS module's own, `creationflags`-safe `subprocess.run` call
+    (see `aura_worker.binaries.subprocess_flags`) instead of demucs's own
+    internal `subprocess.check_output`. See the module docstring's "OWN
+    DECODE" paragraph for why this replaces demucs's internal ffprobe call
+    entirely rather than running alongside it.
+    """
+    proc = subprocess.run(
+        [ffprobe_path, "-loglevel", "panic", str(path), "-print_format", "json", "-show_format", "-show_streams"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+        **subprocess_flags(),
+    )
+    return json.loads(proc.stdout.decode("utf-8"))
+
+
+def _decode_first_audio_stream(source_path: Path, samplerate: int):
+    """Decodes the FIRST audio stream of `source_path` to a `[channels,
+    samples]` float32 tensor at `samplerate`, replicating
+    `demucs.audio.AudioFile(source_path).read(streams=0,
+    samplerate=samplerate, channels=None)` command-for-command (same
+    ffprobe/ffmpeg argv, same channel-count-from-metadata reshape) for the
+    single-stream, no-seek, no-duration case `separate_guitar` always uses
+    -- but via THIS module's own, `creationflags`-safe subprocess calls
+    (`aura_worker.binaries.subprocess_flags`) instead of letting demucs
+    shell out internally. See the module docstring's "OWN DECODE"
+    paragraph for the full rationale and the byte-identical-output
+    verification this was checked against.
+
+    `channels` conversion (mono/stereo up- or down-mix) is deliberately
+    NOT done here -- `separate_guitar` calls `demucs.audio.
+    convert_audio_channels` itself afterward, exactly mirroring
+    `AudioFile.read`'s own two-step shape (decode at native channel count,
+    THEN convert), not duplicating that logic in this module.
+    """
+    import torch
+
+    ffmpeg = resolve_binary("ffmpeg")
+    ffprobe = resolve_binary("ffprobe")
+    if ffmpeg is None or ffprobe is None:
+        missing = "ffmpeg" if ffmpeg is None else "ffprobe"
+        raise RuntimeError(
+            f"{missing} not found -- install it (see the app's dependency banner) and try again"
+        )
+
+    info = _ffprobe_stream_info(ffprobe.path, source_path)
+    audio_stream_indices = [
+        index for index, stream in enumerate(info["streams"]) if stream["codec_type"] == "audio"
+    ]
+    if not audio_stream_indices:
+        raise RuntimeError(f"no audio stream found in {source_path}")
+    stream_index = audio_stream_indices[0]
+    source_channels = int(info["streams"][stream_index]["channels"])
+
+    # `NamedTemporaryFile(delete=False)` + explicit `os.unlink` in `finally`,
+    # not a `with`-managed auto-delete file: ffmpeg needs to open this path
+    # itself (by name) AFTER this handle is created, which requires closing
+    # our own handle first on Windows (an already-open file can't be reopened
+    # for writing there) -- exactly `demucs.utils.temp_filenames`'s own
+    # pattern, replicated here rather than imported since that's a private
+    # helper this module doesn't otherwise depend on.
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        command = [
+            ffmpeg.path, "-y",
+            "-loglevel", "panic",
+            "-i", str(source_path),
+            "-map", f"0:{stream_index}",
+            "-threads", "1",
+            "-f", "f32le",
+            "-ar", str(samplerate),
+            tmp_path,
+        ]
+        subprocess.run(command, check=True, timeout=120, **subprocess_flags())
+        raw = np.fromfile(tmp_path, dtype=np.float32)
+    finally:
+        os.unlink(tmp_path)
+
+    return torch.from_numpy(raw).view(-1, source_channels).t()
+
+
 def separate_guitar(source_path: Path, out_path: Path) -> Path:
     """Runs demucs over `source_path` (any container/codec ffmpeg can
-    decode -- demucs.audio.AudioFile shells out to ffmpeg itself) and
+    decode -- decoded by THIS module's own `_decode_first_audio_stream`,
+    see the module docstring's "OWN DECODE" paragraph for why that replaced
+    demucs.audio.AudioFile's internal ffmpeg/ffprobe shellouts) and
     writes the isolated guitar signal (the "guitar" and "other" stems
     summed -- see module docstring's "STEM MAPPING" paragraph for why both)
     to `out_path` as a mono WAV at the model's native sample rate. Returns
@@ -148,13 +262,12 @@ def separate_guitar(source_path: Path, out_path: Path) -> Path:
     """
     import torch
     from demucs.apply import apply_model
-    from demucs.audio import AudioFile
+    from demucs.audio import convert_audio_channels
     from scipy.io import wavfile
 
     model = _load_model()
-    wav = AudioFile(str(source_path)).read(
-        streams=0, samplerate=model.samplerate, channels=model.audio_channels
-    )
+    wav = _decode_first_audio_stream(source_path, model.samplerate)
+    wav = convert_audio_channels(wav, model.audio_channels)
     ref = wav.mean(0)
     ref_std = ref.std()
     if ref_std == 0:

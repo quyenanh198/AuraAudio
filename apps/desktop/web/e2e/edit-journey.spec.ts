@@ -244,6 +244,7 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     // guitar project, so it's enabled and defaults to "Both" (no persisted
     // choice yet in this fresh browser context).
     const viewModeGroup = page.getByRole("group", { name: "Notation view" });
+    const notationButton = viewModeGroup.getByRole("button", { name: "Notation", exact: true });
     const bothButton = viewModeGroup.getByRole("button", { name: "Both", exact: true });
     const tabButton = viewModeGroup.getByRole("button", { name: "Tab", exact: true });
     await expect(bothButton).toHaveAttribute("aria-pressed", "true");
@@ -252,6 +253,22 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     // previous step clicked) are rendered on the standard notation staff.
     const noteheadCountBoth = await page.locator(".notation-host .vf-notehead").count();
     expect(noteheadCountBoth).toBeGreaterThan(0);
+
+    // Real render-probe for the "hiding a staff reclaims its vertical
+    // space" question: OSMD's `Staff.Visible` toggle + `updateGraphic()` +
+    // `render()` (Notation.svelte's `applyViewMode()`) is supposed to
+    // re-lay-out the whole page, not just blank the hidden staff in place
+    // — the only way to actually prove that (rather than assume it from
+    // reading the OSMD API) is to measure the rendered SVG's own height in
+    // each mode. `boundingBox()` reads the real, laid-out CSS pixel size
+    // Playwright/Chromium computed for the element, independent of
+    // whatever internal SVG viewBox/unit system OSMD used to get there.
+    const svgHeight = async (): Promise<number> => {
+      const box = await page.locator(".notation-host svg").first().boundingBox();
+      if (!box) throw new Error("svgHeight: .notation-host svg has no bounding box (not rendered/visible?)");
+      return box.height;
+    };
+    const bothHeight = await svgHeight();
 
     await tabButton.click();
     await expect(tabButton).toHaveAttribute("aria-pressed", "true");
@@ -270,11 +287,141 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     const pitchRow = page.locator(".inspector-row").filter({ has: page.locator(".inspector-label", { hasText: "Pitch" }) });
     await expect(pitchRow.locator(".stepper-value")).toHaveText(originalPitchDisplay);
 
+    // The actual "no large empty gap" proof: with the TAB staff hidden,
+    // OSMD's re-layout must shrink the total page height, not just hide
+    // the staff's own ink and leave the space it used to occupy blank.
+    // A strict `<` (not `<=`) means a real regression — OSMD leaving a
+    // staff-sized gap behind, or falling back to a stale cached layout —
+    // fails this assertion instead of silently passing.
+    const tabOnlyHeight = await svgHeight();
+    expect(tabOnlyHeight, "Tab-only page height should shrink once the notation staff is hidden").toBeLessThan(
+      bothHeight,
+    );
+
+    // Symmetric check for the other single-staff mode (Notation-only hides
+    // the TAB staff instead) — same mechanism (applyViewMode() flags the
+    // TAB staff's own Visible=false this time), so the same shrink must
+    // hold here too, not just for the Tab-only direction.
+    await notationButton.click();
+    await expect(notationButton).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".notation-host .vf-notehead")).toHaveCount(noteheadCountBoth);
+    const notationOnlyHeight = await svgHeight();
+    expect(
+      notationOnlyHeight,
+      "Notation-only page height should shrink once the TAB staff is hidden",
+    ).toBeLessThan(bothHeight);
+
     await bothButton.click();
     await expect(bothButton).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".notation-host .vf-notehead")).toHaveCount(noteheadCountBoth);
     await expect(page.locator(".event-highlight")).toBeVisible();
     await expect(pitchRow.locator(".stepper-value")).toHaveText(originalPitchDisplay);
+    // Round-trip: back to "Both" must restore the original, taller layout
+    // (not get stuck at whichever single-staff height it last computed).
+    await expect(async () => {
+      expect(await svgHeight()).toBe(bothHeight);
+    }).toPass({ timeout: RENDER_TIMEOUT_MS });
+  });
+
+  test("playback cursor renders and tracks in Tab-only mode", async () => {
+    // Task 3 (playback cursor visibility across view modes): the cursor is
+    // OSMD's own `Cursor.cursorElement` — Notation.svelte's `getCursor()`
+    // exposes it (see that module's doc comment), and OSMD gives it a
+    // stable default DOM id ("cursorImg-0", confirmed against the
+    // installed 2.1.2 bundle) regardless of which staves are currently
+    // visible. Starts from Tab-only (left selected by the previous test
+    // switching modes, but set explicitly here so this test doesn't
+    // depend on that ordering) specifically because a hidden staff is the
+    // scenario most likely to leave the cursor mis-sized/mis-positioned —
+    // OSMD constructs a brand-new Cursor on every view-mode re-render (see
+    // Notation.svelte's `getCursor()` doc comment), so this also proves
+    // that fresh Cursor actually gets shown and driven, not just present
+    // in the DOM inert.
+    const viewModeGroup = page.getByRole("group", { name: "Notation view" });
+    const tabButton = viewModeGroup.getByRole("button", { name: "Tab", exact: true });
+    const bothButton = viewModeGroup.getByRole("button", { name: "Both", exact: true });
+    await tabButton.click();
+    await expect(tabButton).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".notation-host .vf-notehead")).toHaveCount(0);
+
+    // Synth playback needs no external recording file and produces its own
+    // real WebAudio-scheduled clock (see lib/synth.ts) — the more robust of
+    // the two sources to drive from a headless browser, and exactly the
+    // source Task 8's own audition work already exercises.
+    const sourceGroup = page.getByRole("group", { name: "Playback source" });
+    await sourceGroup.getByRole("button", { name: "Synth", exact: true }).click();
+
+    const playButton = page.getByRole("button", { name: "Play", exact: true });
+    await expect(playButton).toBeEnabled();
+    await playButton.click();
+    const pauseButton = page.getByRole("button", { name: "Pause", exact: true });
+    await expect(pauseButton).toBeVisible();
+
+    // Existence: OSMD actually drew and showed a cursor element in
+    // Tab-only mode (not skipped/hidden just because a staff is hidden) —
+    // checked while a real playback session is genuinely active.
+    const cursor = page.locator("#cursorImg-0");
+    await expect(cursor).toBeVisible({ timeout: RENDER_TIMEOUT_MS });
+
+    // Pause immediately: this fixture's clip is only ~2s long, so racing
+    // real WebAudio wall-clock scheduling against Playwright's own
+    // round-trip overhead in a headless sandbox is inherently marginal —
+    // by the time a first position read completes, real-time playback may
+    // already be at (or past) the position a later deterministic seek
+    // would also land on, making "did it move" a coin flip. Pausing
+    // freezes playback position so the "moved" check below is driven
+    // entirely by deterministic scrubber seeks instead (the scrubber
+    // remains fully functional while paused — see Transport.svelte's own
+    // `onSeek` doc comment: "whether the transport is playing or paused").
+    await pauseButton.click();
+    await expect(playButton).toBeVisible();
+
+    async function waitForCursorBox(): Promise<{ x: number; y: number }> {
+      let box: { x: number; y: number } | null = null;
+      await expect(async () => {
+        box = await cursor.boundingBox();
+        expect(box).not.toBeNull();
+      }).toPass({ timeout: RENDER_TIMEOUT_MS });
+      return box!;
+    }
+
+    // Driven via the scrubber (real UI, same `onSeek` -> `scheduleCursorSync`
+    // -> `applyCursorForTime()` path real-time rAF playback uses — see
+    // ScoreView.svelte's own comment on `onSeek`) — `.fill()` is unreliable
+    // for a `type="range"` input (Playwright's own text-input-oriented
+    // value-setting doesn't reliably dispatch a real `input` event for
+    // range controls), so the value is set and the event dispatched
+    // directly instead, exactly what `handleScrubberInput`'s `oninput`
+    // binding listens for.
+    const scrubber = page.getByRole("slider", { name: "Playback position" });
+    const maxPosition = Number(await scrubber.getAttribute("max"));
+    expect(maxPosition, "scrubber max should reflect a real, positive clip duration").toBeGreaterThan(0);
+    async function seekTo(fractionOfDuration: number): Promise<void> {
+      await scrubber.evaluate(
+        (el: HTMLInputElement, value: number) => {
+          el.value = String(value);
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        maxPosition * fractionOfDuration,
+      );
+    }
+
+    await seekTo(0);
+    const startBox = await waitForCursorBox();
+    await seekTo(0.9);
+    await expect(async () => {
+      const box = await waitForCursorBox();
+      const moved = box.x !== startBox.x || box.y !== startBox.y;
+      expect(moved, "cursor should have moved from its initial position after seeking").toBe(true);
+    }).toPass({ timeout: RENDER_TIMEOUT_MS });
+
+    // Clean up: restore "Both" mode so later steps in this journey (pitch
+    // edit, undo/redo, exports) start from the same state they always
+    // have, unaffected by this test having run. Playback itself is already
+    // paused (paused deliberately above, right after confirming it started
+    // — never resumed since).
+    await bothButton.click();
+    await expect(bothButton).toHaveAttribute("aria-pressed", "true");
   });
 
   test("pitch-up edit applies and settles", async () => {

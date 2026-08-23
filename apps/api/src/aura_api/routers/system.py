@@ -4,7 +4,7 @@ import logging
 import re
 import subprocess
 
-from aura_worker.binaries import ResolvedBinary, resolve_binary
+from aura_worker.binaries import ResolvedBinary, resolve_binary, subprocess_flags
 from fastapi import APIRouter
 
 from aura_api.schemas import DependencyStatus, SystemDepsResponse
@@ -38,6 +38,7 @@ def _parse_version(binary: str, executable_path: str) -> str | None:
             text=True,
             timeout=_VERSION_CHECK_TIMEOUT_SECONDS,
             check=False,
+            **subprocess_flags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return None
@@ -99,6 +100,7 @@ def _parse_yt_dlp_version(executable_path: str) -> str | None:
             text=True,
             timeout=_VERSION_CHECK_TIMEOUT_SECONDS,
             check=False,
+            **subprocess_flags(),
         )
     except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         return None

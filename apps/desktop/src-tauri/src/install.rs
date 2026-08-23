@@ -23,6 +23,23 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Same `CREATE_NO_WINDOW` flag `backend.rs` sets on the bundled backend's
+/// own spawn (see that module's `CREATE_NO_WINDOW` doc comment for the full
+/// rationale) -- duplicated here rather than shared, since the two modules
+/// otherwise have no dependency on each other and this is a single, stable
+/// ABI constant, not real logic to factor out. Every `Command` this module
+/// spawns (`winget`/`brew`/`pkexec`, see `execute` below) is a CONSOLE
+/// subsystem program: without this flag, Windows would pop a visible
+/// console window for each one, defeating the whole point of `backend.rs`'s
+/// own `--noconsole`/`CREATE_NO_WINDOW` work for a user who never expects to
+/// see a terminal flash open just because they clicked "Install" on the
+/// dependency banner.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// The two dependencies this app knows how to auto-install. Parsed from the
 /// frontend's `DepName` string (`apps/desktop/web/src/lib/deps.ts`) --
 /// anything else is rejected before any process is spawned.
@@ -254,6 +271,14 @@ fn execute(program: &str, args: &[&str], timeout: Duration) -> InstallDependency
   let mut command = Command::new(program);
   command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
+  // Belt-and-braces alongside `backend.rs`'s identical flag on the bundled
+  // backend's own spawn -- see this module's `CREATE_NO_WINDOW` doc comment.
+  // A no-op on every other target (the field simply isn't set).
+  #[cfg(windows)]
+  {
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
+
   let mut child = match command.spawn() {
     Ok(child) => child,
     Err(err) => {
@@ -386,6 +411,19 @@ pub async fn install_dependency(name: String) -> Result<InstallDependencyResult,
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Pins this module's `CREATE_NO_WINDOW` to the exact same numeric value
+  /// as `backend.rs`'s own constant of the same name (0x0800_0000, the real
+  /// `CREATE_NO_WINDOW` win32 `CreateProcess` flag) -- both modules spawn
+  /// console-subsystem children and must suppress the popped console window
+  /// identically. Only compiled on Windows since the constant itself is
+  /// `#[cfg(windows)]`-gated (see its own doc comment for why it can't
+  /// exist at all on other targets).
+  #[cfg(windows)]
+  #[test]
+  fn create_no_window_matches_the_real_win32_flag_value() {
+    assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+  }
 
   fn always(result: bool) -> impl Fn(&str) -> bool {
     move |_name: &str| result

@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 
 import pytest
 from aura_worker import binaries
@@ -497,3 +498,40 @@ def test_known_location_prepend_is_visible_to_a_separate_stage(monkeypatch, tmp_
     assert resolved is not None
     assert resolved.source == binaries.KNOWN_LOCATION
     assert shutil.which("ffmpeg") == str(exe)
+
+
+class TestSubprocessFlags:
+    """`subprocess_flags()` -- the shared, platform-correct kwargs every
+    call site in this app splats into its `subprocess.run` calls so a
+    packaged Windows build never flashes a console window for a child
+    process (see backend.rs's `--noconsole`/`CREATE_NO_WINDOW` work for the
+    parent app itself, and this function's own doc comment for why every
+    CHILD process needs its own opt-out too)."""
+
+    def test_returns_empty_dict_on_non_windows(self, monkeypatch):
+        monkeypatch.setattr(binaries.sys, "platform", "linux")
+        assert binaries.subprocess_flags() == {}
+
+    def test_returns_empty_dict_on_macos(self, monkeypatch):
+        monkeypatch.setattr(binaries.sys, "platform", "darwin")
+        assert binaries.subprocess_flags() == {}
+
+    def test_returns_create_no_window_creationflags_on_win32(self, monkeypatch):
+        monkeypatch.setattr(binaries.sys, "platform", "win32")
+        assert binaries.subprocess_flags() == {"creationflags": 0x0800_0000}
+
+    def test_never_references_the_real_stdlib_attribute_off_windows(self):
+        """`subprocess.CREATE_NO_WINDOW` genuinely does not exist as an
+        attribute on `subprocess` outside real Windows Python -- this test
+        runs on Linux (like the rest of this suite), so if `binaries`
+        referenced that name anywhere (import time or call time) instead of
+        keeping its own hardcoded `_CREATE_NO_WINDOW` copy, importing
+        `binaries` above, or the `win32`-forced test just before this one,
+        would already have raised `AttributeError`. Asserting the module's
+        own constant matches the real flag's known value pins that it's a
+        real, always-defined literal, not a lazy read of the (here,
+        nonexistent) stdlib attribute."""
+        assert not hasattr(subprocess, "CREATE_NO_WINDOW")
+        assert binaries._CREATE_NO_WINDOW == 0x0800_0000
+
+

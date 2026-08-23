@@ -1,6 +1,8 @@
 import wave
 
 import pytest
+from aura_worker import binaries
+from aura_worker.binaries import ResolvedBinary
 from aura_worker.errors import JobFailure
 from aura_worker.stage_runner import StageContext
 from aura_worker.stages import normalize
@@ -77,3 +79,43 @@ def test_normalize_raises_clear_error_when_ffmpeg_unresolved(
         normalize.run(ctx, source_path=source_path)
     assert exc_info.value.code.value == "DECODE_FAILED"
     assert "ffmpeg" in exc_info.value.detail
+
+
+def test_normalize_stage_passes_windows_creationflags_when_on_win32(
+    db_session, sample_job, workdir, monkeypatch
+):
+    """Windows hidden-console audit: the normalize stage's ffmpeg spawn
+    must splat `aura_worker.binaries.subprocess_flags()` into its
+    `subprocess.run` call. `subprocess.run` is fully faked here (not just
+    wrapped) rather than letting the real ffmpeg run: `creationflags` is a
+    Windows-only `Popen` kwarg that the real POSIX implementation rejects,
+    so this test can't force `sys.platform == "win32"` (via
+    `aura_worker.binaries.sys`) AND still exec a real ffmpeg on this
+    suite's actual Linux/macOS/CI host in the same call."""
+    monkeypatch.setattr(binaries.sys, "platform", "win32")
+    monkeypatch.setattr(normalize, "resolve_binary", lambda _name: ResolvedBinary(path="ffmpeg", source=binaries.ON_PATH))
+
+    source_path = workdir / "source" / "input.wav"
+    write_guitar_pluck_wav(source_path, duration_s=1.0, sample_rate=44100)
+    storage = FakeStorage()
+    ctx = StageContext(job=sample_job, session=db_session, storage=storage, workdir=workdir)
+
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        # normalize.run reads the output path's bytes afterward (sha256 +
+        # storage upload) -- write a real, tiny WAV so that succeeds. The
+        # output path is the command's last argv element (see normalize.run).
+        with wave.open(cmd[-1], "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(22050)
+            wav_file.writeframes(b"\x00\x00")
+        return None
+
+    monkeypatch.setattr(normalize.subprocess, "run", _fake_run)
+
+    normalize.run(ctx, source_path=source_path)
+
+    assert captured.get("creationflags") == 0x0800_0000

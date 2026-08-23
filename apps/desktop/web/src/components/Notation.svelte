@@ -1,5 +1,51 @@
 <script lang="ts" module>
+  import { Instrument } from "opensheetmusicdisplay";
   import type { GraphicalNote, Note } from "opensheetmusicdisplay";
+
+  /** Module-load-time patch for a real, confirmed OSMD 2.1.2 defect that
+   * blocks the view-mode feature's playback cursor (Task 3) — see
+   * `setStaffAndVoicesVisible`'s own doc comment below for the full
+   * mechanism this fixes and why toggling `Voice.Visible` (not just
+   * `Staff.Visible`) is required in the first place.
+   *
+   * THE DEFECT: the installed bundle's `Instrument` class defines
+   * `get Visible(){return this.voices.length>0 && this.Voices[0].Visible}`
+   * — i.e. "instrument visible" is hardcoded to just its FIRST voice's own
+   * flag, not "any staff/voice of this instrument is visible" (confirmed
+   * directly against `opensheetmusicdisplay.min.js`'s own source — no
+   * non-minified build ships the implementation to link here). For a
+   * SINGLE-staff instrument this is harmless (Voices[0] IS the only
+   * voice). For a MULTI-staff instrument (this app's guitar
+   * notation+TAB pair, `packages/musicxml/src/musicxml/export.py`'s
+   * `_build_guitar_notation_and_tab`) it's a real bug: hiding the
+   * notation staff's own voices (to fix the CURSOR ambiguity below) also
+   * hides `Instrument.Voices[0]` specifically (notation's staff is
+   * created first, so its own first voice always ends up at index 0),
+   * which makes `Instrument.Visible` -- and therefore `Staff.isVisible()`
+   * (`this.Visible && this.ParentInstrument.Visible`, for EVERY staff of
+   * this instrument, including the one still meant to be shown) -- return
+   * `false` for the whole instrument. Confirmed via a real e2e run: with
+   * only this patch missing, `walkCursor`'s `note.ParentStaff.isVisible()`
+   * check (ScoreView.svelte) started rejecting even the visible TAB
+   * staff's own notes, and OSMD's internal `Cursor.update()` /
+   * `findVisibleGraphicalMeasure` (which also gate on `.isVisible()`)
+   * broke the same way.
+   *
+   * THE FIX: this app never hides a whole `Instrument` (only individual
+   * `Staff`s within one, via view-mode) -- so `Instrument.Visible` can
+   * simply always be `true` here, sidestepping the buggy `Voices[0]`
+   * dependency entirely, without touching anything this app doesn't
+   * already rely on (`Staff.Visible`, which this patch never reads).
+   * `configurable: true` on class accessors is the default (not
+   * explicitly frozen anywhere in the bundle), so `defineProperty` is a
+   * legitimate override, not a hack around a sealed property -- and this
+   * runs exactly once per module load (`Instrument.prototype` is shared
+   * across every `Instrument` instance OSMD ever constructs, present or
+   * future, in this app). */
+  Object.defineProperty(Instrument.prototype, "Visible", {
+    get: () => true,
+    configurable: true,
+  });
 
   /** The handle Task 7 drives for cursor-synced playback. Method names/shapes
    * mirror Task 1's verified OSMD idioms directly (task-1-report.md
@@ -209,6 +255,63 @@
    * no real TAB staff to distinguish, every mode renders identically (full
    * display), matching the OLD toggle's existing no-op-for-piano behavior
    * (`if (staves.length === 0) return;`) exactly. */
+  /** Sets a staff's own `Visible` (drives layout/ink — the mechanism the
+   * doc comment above already covers) AND every one of its `Voice`s'
+   * `Visible` (drives which staff's `VoiceEntry`s the OSMD *cursor*
+   * considers, a SEPARATE filter OSMD applies independently of staff-level
+   * visibility — see this function's own doc comment below for why both
+   * are required). */
+  function setStaffAndVoicesVisible(staff: Staff, visible: boolean): void {
+    staff.Visible = visible;
+    for (const voice of staff.Voices) voice.Visible = visible;
+  }
+
+  /** Real-render-probe regression, found via the view-mode e2e test's own
+   * new playback-cursor assertion (Task 3): flagging ONLY `Staff.Visible`
+   * (as this function did originally) hides the right noteheads and
+   * reflows layout correctly (Task 2's own e2e height assertions pass) —
+   * but leaves OSMD's playback CURSOR permanently stuck invisible
+   * (`cursorElement.style.display` stays `"none"` forever, confirmed via a
+   * real DOM inspection: `top`/`left` never get set even after repeated
+   * `next()` calls during real playback) in Tab-only/Notation-only mode.
+   * Root cause, traced into the installed 2.1.2 bundle's own minified
+   * `Cursor.update()`: for the normal (non-edge-case) step, it resolves
+   * the cursor's on-screen position from `iterator.
+   * CurrentVisibleVoiceEntries()` — mapping EACH entry to a graphical
+   * staff entry and taking the leftmost. That iterator method filters by
+   * `VoiceEntry.ParentVoice.Visible` (a SEPARATE flag from `Staff.
+   * Visible`, confirmed in the bundle's own `getVisibleEntries`), NOT by
+   * staff visibility — so with only `Staff.Visible` toggled, BOTH the
+   * notation staff's AND the TAB staff's own real, independent voice
+   * entries (this app's guitar exporter genuinely duplicates the note
+   * data onto two real `PartStaff`s — see `packages/musicxml/src/
+   * musicxml/export.py`'s `_build_guitar_notation_and_tab`, not an
+   * OSMD-auto-generated TAB) still come back from that call in a HIDDEN
+   * staff's mode, including the one belonging to the now-invisible staff.
+   * Its graphical-entry lookup then fails (that staff's own graphical
+   * staff entries aren't part of the currently-rendered layout), the
+   * internal position computation bails out early, and the cursor is left
+   * exactly where `init()` put it: hidden, at no position, forever —
+   * regardless of `show()`/`next()` calls afterward, since every one of
+   * them hits the same early-out. Toggling each hidden staff's `Voice`s'
+   * own `Visible` too (via `setStaffAndVoicesVisible`) makes
+   * `CurrentVisibleVoiceEntries()` return ONLY the one entry belonging to
+   * the staff actually being displayed — the ambiguity (and the bug) goes
+   * away, since there's no longer a hidden-staff candidate for that lookup
+   * to pick and fail on. Verified via a real e2e run: synth playback
+   * started in Tab-only mode, cursor visible and its rendered
+   * bounding-box position advances as playback runs.
+   *
+   * REQUIRES the module-level `Instrument.prototype.Visible` patch above
+   * this component's `<script module>` block: without it, hiding a
+   * multi-staff instrument's voices this way trips a SEPARATE OSMD defect
+   * (`Instrument.Visible` incorrectly deriving from only its first voice)
+   * that makes `Staff.isVisible()` wrongly report `false` for every staff
+   * of the instrument, including the one still meant to be shown — see
+   * that patch's own doc comment for the full trail. Found via this exact
+   * function's own e2e regression: fixing the cursor this way, alone,
+   * broke click-to-select (`.event-highlight` stopped appearing in
+   * Tab-only mode) until that second patch was added too. */
   function applyViewMode(): void {
     if (!osmd) return;
     const tab = tabStaves();
@@ -216,8 +319,8 @@
     const notation = notationStaves();
     const showNotation = viewMode !== "tab";
     const showTab = viewMode !== "notation";
-    for (const staff of notation) staff.Visible = showNotation;
-    for (const staff of tab) staff.Visible = showTab;
+    for (const staff of notation) setStaffAndVoicesVisible(staff, showNotation);
+    for (const staff of tab) setStaffAndVoicesVisible(staff, showTab);
     osmd.updateGraphic();
     osmd.render();
     onRerender?.();
