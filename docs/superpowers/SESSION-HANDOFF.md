@@ -1566,6 +1566,27 @@ next; 3 and 4 proceed only if 0-2 land OK:
 
 ## Release
 
+**v1.3.0 IS LIVE** (published 2026-08-23T08:29Z, tag at main@07665c3,
+green first attempt, run 32627718425):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.3.0 —
+`AuraAudio_1.3.0_amd64.deb` (1,123,977,626 B),
+`AuraAudio_1.3.0_aarch64.dmg` (809,982,759 B),
+`AuraAudio_1.3.0_x64_en-US.msi` (760,088,092 B). Contents: PDF export
+page-size choice (A4 / US Letter, persisted; fixed the offscreen
+render width being hardcoded to A4's 794px while driving OSMD's
+engraving scale); Windows hardening wave 2 — deps/imports endpoints
+structurally never-500 (pathlib doesn't swallow PermissionError /
+WinError 1920 from OneDrive-redirected profiles; _safe_* wrappers +
+router guards), backend console hidden (--noconsole + CREATE_NO_WINDOW)
+with logging unified under AURA_DATA_DIR/logs/ (backend.log rotating +
+backend-stdio.log raw capture; run_backend.py guards the PyInstaller
+None-stdio pitfall), piano hand-assignment DP capped at 24-note chords
+(DP measured polynomial — the cap targets O(k^2) adjacent-group
+transitions), tie-aware playback-sync cursor walk (quantized "5/16"
+durations split into tied MusicXML notes that OSMD counts as extra
+steps), real project title + rounded tempo in exported MusicXML
+(including the rederive path).
+
 **v1.2.1 IS LIVE** (published 2026-08-23T05:43Z, tag at main@9ac1e05,
 green first attempt, run 32620375786):
 https://github.com/quyenanh198/AuraAudio/releases/tag/v1.2.1 —
