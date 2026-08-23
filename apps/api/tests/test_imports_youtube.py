@@ -252,7 +252,7 @@ def test_no_output_file_produced_returns_502(client, monkeypatch):
 
     class _FakeCompletedProcess:
         returncode = 0
-        stdout = ""
+        stdout = "[youtube] abc123: Downloading webpage\n[info] some unanticipated no-op"
         stderr = ""
 
     def _fake_run(cmd, **kwargs):
@@ -264,3 +264,117 @@ def test_no_output_file_produced_returns_502(client, monkeypatch):
 
     resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
     assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    # Bug 1 fix: the generic "no audio file" 502 must carry yt-dlp's own
+    # output tail so future cases are diagnosable from the UI instead of a
+    # bare, undiagnosable string.
+    assert "no-op" in detail
+
+
+def test_max_filesize_skip_returns_422_not_generic_502(client, monkeypatch):
+    """Known yt-dlp behavior (bug 1, scenario a): `--max-filesize 200m`
+    SKIPS the download and exits 0 with a "File is larger than
+    max-filesize" message -- no file is ever written. Before the fix this
+    fell through to the same undiagnosable "produced no audio file" 502 as
+    a genuine failure; it must instead surface a specific, actionable 422."""
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+
+        def __init__(self, stderr: str) -> None:
+            self.stderr = stderr
+
+    def _fake_run(cmd, **kwargs):
+        return _FakeCompletedProcess(
+            stderr="[download] abc123: File is larger than max-filesize (250.00MiB > 200.00MiB); not downloading"
+        )
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "200MB" in detail
+    assert "large" in detail.lower()
+
+
+def test_max_filesize_skip_detected_even_on_nonzero_returncode(client, monkeypatch):
+    # Real yt-dlp exits 0 for this case, but the detection is content-based
+    # (the message), not exit-code-based -- it must still win over the
+    # generic "yt-dlp failed" 502 if some version/wrapper ever returns
+    # nonzero for the same skip.
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+
+        def __init__(self, stderr: str) -> None:
+            self.stderr = stderr
+
+    def _fake_run(cmd, **kwargs):
+        return _FakeCompletedProcess(stderr="File is larger than max-filesize (300.00MiB > 200.00MiB)")
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 422, resp.text
+
+
+def test_non_mp3_audio_output_is_accepted(client, monkeypatch):
+    """Bug 1, scenario (b): format-selection/postprocessing can leave a
+    non-mp3 audio file behind (e.g. mp3 postprocessing silently no-ops
+    without ffmpeg on yt-dlp's own PATH) even though `-x --audio-format
+    mp3` was requested. The worker's probe step validates the real codec,
+    not the extension, so this must succeed rather than report "no audio
+    file" just because the glob only looked for *.mp3."""
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+
+    def _fake_run(cmd, **kwargs):
+        out_dir = _find_output_dir(cmd)
+        (out_dir / "abc123.m4a").write_bytes(b"fake-m4a-bytes")
+        return _FakeCompletedProcess(returncode=0, stdout="", stderr="")
+
+    class _FakeCompletedProcess:
+        def __init__(self, returncode, stdout, stderr):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["object_key"].endswith("abc123.m4a")
+
+
+def test_mp3_preferred_over_other_extensions_when_both_present(client, monkeypatch):
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module.shutil, "which", _fake_which)
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        out_dir = _find_output_dir(cmd)
+        # A leftover .webm alongside the real mp3 output shouldn't win.
+        (out_dir / "abc123.webm").write_bytes(b"fake-webm-bytes")
+        (out_dir / "abc123.mp3").write_bytes(b"fake-mp3-bytes")
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["object_key"].endswith("abc123.mp3")

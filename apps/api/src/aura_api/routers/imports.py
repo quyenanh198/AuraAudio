@@ -28,12 +28,46 @@ _ALLOWED_HOSTS = {
 }
 
 _YT_DLP_TIMEOUT_SECONDS = 300
-_MAX_FILESIZE = "200m"
+_MAX_FILESIZE = "200m"  # yt-dlp's own --max-filesize syntax (lowercase "m" = MiB)
+_MAX_FILESIZE_HUMAN = "200MB"  # for user-facing messages -- keep in sync with _MAX_FILESIZE above
 _STDERR_TAIL_CHARS = 300
 # Prefix marker for the `--print` line yt-dlp emits for the video title, so
 # it can be picked out of stdout without a second (non-"cheap") metadata
 # request — normal progress/status lines never start with this literal.
 _TITLE_MARKER = "AURA_YT_TITLE:"
+
+# yt-dlp's real message (verified against yt-dlp's own source) when
+# `--max-filesize` rejects a video: it SKIPS the download entirely and
+# still exits 0 -- there is no file to find afterward, and (without this
+# check) that skip fell through to the same generic "produced no audio
+# file" 502 as a genuine bug, giving the user zero signal that the fix was
+# simply "pick a smaller/lower-quality video". Matched case-insensitively
+# against combined stdout+stderr, independent of returncode, since this is
+# a content-based signal, not an exit-code one.
+_MAX_FILESIZE_SKIP_MARKER = "file is larger than max-filesize"
+
+# `-x --audio-format mp3` normally guarantees an mp3 output, but yt-dlp can
+# still finish (exit 0) without one -- e.g. the mp3 postprocess step
+# silently no-ops when ffmpeg isn't on yt-dlp's own PATH, leaving the
+# originally-downloaded audio container behind instead. mp3 is checked
+# first (the expected/common case); the rest are fallback containers
+# actually seen from yt-dlp's audio-only format selection. Whichever file
+# is found is uploaded as-is -- no transcoding is performed here (the
+# worker's probe step validates the actual codec, not the extension, and
+# rejects anything it can't handle with its own clear error).
+_FALLBACK_AUDIO_EXTENSIONS = ("mp3", "m4a", "opus", "webm", "wav")
+
+
+def _is_max_filesize_skip(combined_output: str) -> bool:
+    return _MAX_FILESIZE_SKIP_MARKER in combined_output.lower()
+
+
+def _find_downloaded_audio(tmp_dir: Path) -> Path | None:
+    for ext in _FALLBACK_AUDIO_EXTENSIONS:
+        matches = sorted(tmp_dir.glob(f"*.{ext}"))
+        if matches:
+            return matches[0]
+    return None
 
 
 def _validate_youtube_url(url: str) -> str:
@@ -150,17 +184,35 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
             # deliberately not included).
             raise HTTPException(status_code=422, detail="invalid URL") from exc
 
+        # Checked before the returncode branch below and independent of it:
+        # the max-filesize skip is a content-based signal (yt-dlp's own
+        # message), not an exit-code one -- real yt-dlp exits 0 for this
+        # case, but a future/different version misbehaving with a nonzero
+        # code here should still get the specific, actionable 422 rather
+        # than the generic 502.
+        combined_output = f"{proc.stdout}\n{proc.stderr}"
+        if _is_max_filesize_skip(combined_output):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"video is larger than the {_MAX_FILESIZE_HUMAN} import size limit; "
+                    "yt-dlp skipped the download"
+                ),
+            )
+
         if proc.returncode != 0:
             raise HTTPException(status_code=502, detail=f"yt-dlp failed: {_stderr_tail(proc.stderr)}")
 
-        mp3_files = sorted(tmp_dir.glob("*.mp3"))
-        if not mp3_files:
+        downloaded = _find_downloaded_audio(tmp_dir)
+        if downloaded is None:
             raise HTTPException(
                 status_code=502,
-                detail="yt-dlp reported success but produced no audio file",
+                detail=(
+                    "yt-dlp reported success but produced no audio file. "
+                    f"yt-dlp output: {_stderr_tail(combined_output)}"
+                ),
             )
 
-        downloaded = mp3_files[0]
         object_key = make_upload_object_key(downloaded.name)
         storage_client.put_bytes(object_key, downloaded.read_bytes())
 
