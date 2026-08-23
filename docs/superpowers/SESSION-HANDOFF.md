@@ -1564,6 +1564,74 @@ next; 3 and 4 proceed only if 0-2 land OK:
    prototypes and report (not committed to the repo — scratchpad-only
    investigation per this task's constraints).
 
+## Note audition + view mode (2026-08-23, held for review — NOT released)
+
+Two features on `claude/multi-ai-skills-caveman-7tx5l0`, two commits
+(7811174 view mode, 61d7356 audition), built on top of v1.3.0 (main@4fb4281).
+Release is deliberately held pending review — do not tag/publish from this
+branch without an explicit go-ahead.
+
+**Note audition** ("nghe để kiểm tra nốt"): selecting a note, or changing
+its pitch via the Inspector stepper or ArrowUp/ArrowDown, briefly plays that
+pitch through the SAME smplr instrument `synth.ts`'s `SynthPlaybackSource`
+already owns — no second audio stack. `SynthPlaybackSource.auditionNote()`
+is a short-lived (~0.6s, velocity 90) voice with its own `StopFn`, kept
+apart from `play()`'s `scheduledStops` so it can never be cut off by
+pause()/seek() and never leaks into real playback scheduling. New
+`lib/auditioner.ts` owns the pure debounce (~100ms)/suppression state
+machine — both the mute toggle and "is the transport playing" gates are
+re-checked at FIRE time, not request time. Sidebar's VIEW section gained an
+"Audition notes" toggle (default ON, persisted to localStorage). Unit-tested
+with fake timers in `auditioner.test.ts`; the actual sound is a
+webview-only concern no automated suite here covers.
+
+**View mode (Notation / Tab / Both)**: replaces the old two-state "Tab
+staff" toggle. New `lib/viewMode.ts` (persistence + per-project
+`resolveViewMode` defaulting — "both" for guitar, always "notation" for a
+score with no TAB staff, regardless of what's persisted).
+`Notation.svelte`'s `applyViewMode()` extends the exact same mechanism the
+old toggle used (OSMD's per-staff `Staff.Visible`) symmetrically to both
+staff kinds. PDF export intentionally keeps exporting BOTH staves regardless
+of view mode (a viewing preference, not an export one) — not changed.
+
+**Two real bugs found and fixed while wiring Tab-only mode end-to-end**
+(both would have shipped broken without the new e2e coverage — see
+`e2e/edit-journey.spec.ts`'s "switches the notation view to Tab-only..."
+test):
+1. **Click/highlight correlation must exclude hidden-staff notes.**
+   `correlate.ts`'s cross-staff dedupe (`dedupeStepNotes`) always kept the
+   FIRST-seen staff's graphical position for a cross-staff same-pitch
+   duplicate — safe under the OLD toggle (only ever hid TAB, notation was
+   always first-seen and always visible), broken under Tab-only (hides that
+   exact staff). Fixed in `ScoreView.svelte`'s `walkCursor`: notes on a
+   currently-hidden staff (`note.ParentStaff.isVisible()` false) are
+   excluded from position/click-correlation entirely, not just deduped
+   away — a hidden staff isn't part of the current OSMD layout pass, so its
+   graphical position can't be trusted.
+2. **NEW OSMD gotcha: `.event-highlight` must NOT be a DOM child of the
+   `container` div passed to `new OpenSheetMusicDisplay(container, ...)`.**
+   OSMD's `render()` (any re-render after the first — zoom, view mode)
+   directly clears/redraws that container's own DOM. This silently drops
+   ANY Svelte-rendered sibling node living inside it too, even though the
+   Svelte `$state` driving it (`highlightBox`) stays completely correct —
+   confirmed by direct inspection: `highlightEvent()` computed the right
+   box every time, the reactive state held it, but the actual DOM node
+   Svelte thought it had already inserted was gone. This is a LATENT bug
+   for zoom changes too (same re-render path) — just never one an existing
+   e2e assertion happened to check right after a zoom change until the
+   view-mode work added one. Fixed by moving `.event-highlight` to be a
+   SIBLING of `.notation-host` inside a new `.notation-wrapper` (which now
+   owns the `position: relative` the overlay's `unitToPx()` coordinate math
+   needs) instead of a child of it — takeaway for future work: any
+   Svelte-rendered UI that must survive an OSMD re-render (cursor overlay,
+   selection box, annotations, ...) needs to live OUTSIDE the OSMD-owned
+   container, as a positioned sibling, not nested inside it.
+
+Verified green on this branch: `npx vitest run` (apps/desktop/web) —
+17 files / 308 tests; `npm run check` (svelte-check + tsc) — 0 errors;
+`npm run build`; `npm run test:e2e` (Playwright, real backend + real
+transcription) — 9/9, including the new Tab-only mode-switch test.
+
 ## Release
 
 **v1.3.0 IS LIVE** (published 2026-08-23T08:29Z, tag at main@07665c3,
