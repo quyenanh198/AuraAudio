@@ -34,7 +34,7 @@ export function isTauri(): boolean {
 
 /** Mirrors `apps/desktop/src-tauri/src/install.rs`'s `InstallOutcome`
  * verbatim (serde `rename_all = "snake_case"`). */
-export type InstallOutcome = "success" | "failed" | "unsupported" | "brew_missing";
+export type InstallOutcome = "success" | "failed" | "unsupported" | "brew_missing" | "winget_missing";
 
 /** Mirrors `install.rs`'s `InstallDependencyResult` (serde `rename_all =
  * "camelCase"` on the struct, so `exit_code`/`output_tail` arrive as

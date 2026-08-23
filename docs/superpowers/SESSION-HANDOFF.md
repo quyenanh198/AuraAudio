@@ -816,6 +816,29 @@ resolved absolute `path` and `source` (`"env"` | `"path"` |
 the app still says it's missing" report is diagnosable from the response
 alone.
 
+**Review-round fix: `resolve_binary` also patches this process's own
+`PATH` on a known-location hit.** Code review caught a real gap in the
+first cut: this module can only fix call sites IT owns (the three listed
+above). `aura_worker.separation` (guitar source-separation) depends on
+`demucs`, and `demucs`'s own `AudioFile.read()` shells out with a
+hardcoded bare `["ffmpeg", ...]` via ITS OWN `subprocess` call
+(`.venv/.../demucs/audio.py`) — invisible to and uncontrollable by
+`resolve_binary`. Without a fix, a Windows user who resolved ffmpeg for
+transcription would still hit demucs's own internal failure the instant
+they enabled "Isolate instrument from mix". The fix: a known-location hit
+now calls `_ensure_on_process_path`, which prepends that directory to the
+REAL `os.environ["PATH"]` (idempotent — checks membership first, so
+repeated resolves across every job don't grow PATH unbounded). This
+mutates the actual process environment on purpose: any code in the same
+process doing its own bare-name PATH lookup afterward — demucs included —
+sees it too. Tests build a real fake binary under `tmp_path`, force the
+known-location branch, and prove (a) PATH gets the directory prepended
+exactly once even across repeated `resolve_binary` calls, and (b) a
+SEPARATE, unmocked `shutil.which()` call afterward (standing in for
+demucs's own lookup) finds it — see
+`test_binaries.py::TestKnownLocationPathPrepend` and
+`test_known_location_prepend_is_visible_to_a_separate_stage`.
+
 **Auto-install, from the Tauri shell, not the backend
 (`apps/desktop/src-tauri/src/install.rs`).** Actually running a
 package-manager install is a privileged action — launching another
@@ -833,6 +856,11 @@ regardless of what a malicious `name` might contain. Per OS:
   for yt-dlp — the id verified against the real winget-pkgs manifest
   (`microsoft/winget-pkgs`, `manifests/y/yt-dlp/yt-dlp`); it is
   `yt-dlp.yt-dlp`, not `yt-dlp` alone.
+  Winget's own presence is checked the same way FIRST (`command_exists`
+  again) — Windows Server/LTSC editions don't ship App Installer by
+  default, so a missing `winget` itself now returns a typed
+  `winget_missing` outcome (mirroring `brew_missing` below) instead of
+  surfacing as a generic failure with a confusing raw OS spawn error.
 - **macOS**: `brew install ffmpeg` / `brew install yt-dlp`, but only after
   confirming `brew` itself resolves on PATH first (a lightweight PATH
   scan, not a spawn — spawning just to test existence would trigger
@@ -849,6 +877,39 @@ regardless of what a malicious `name` might contain. Per OS:
   ONLY if `pkexec` itself is present (same PATH-scan-not-spawn check as
   Homebrew); otherwise returns a typed `unsupported` outcome with
   guidance to use the distro's own package manager.
+
+The `windows_plan`/`macos_plan`/`linux_plan` functions all take an
+`exists: impl Fn(&str) -> bool` parameter (production passes the real
+`command_exists`) specifically so unit tests can simulate winget/brew/
+pkexec being absent deterministically, without depending on what's
+actually installed on whatever machine runs `cargo test`.
+
+**Review-round fix: a bounded timeout on the install command itself.**
+The first cut had no upper bound on how long `winget`/`brew`/`pkexec`
+could run — a stalled installer (e.g. a `pkexec` polkit dialog nobody
+answers) would leave the frontend's spinner spinning forever with no
+recovery short of restarting the app. `execute()` now polls
+`child.try_wait()` against a 600s `INSTALL_TIMEOUT` deadline and kills the
+child on timeout, still reporting a typed `Failed` outcome (not a new
+outcome variant — the explanatory "did not finish within 600s and was
+terminated" text lives in `output_tail`, which the frontend already
+renders under any `Failed` outcome). Getting this right needed two
+non-obvious pieces, both driven out by writing the test first rather than
+assumed: (1) stdout/stderr must be drained on background threads
+CONCURRENTLY with the `try_wait()` poll loop, not read after — reading
+only after `wait()` (the naive approach) risks a real deadlock if the
+child fills the OS pipe buffer before exiting, since nothing would be
+reading the other end (the same reason std's own `Command::output()`
+spawns reader threads internally). (2) Those reader threads must be
+joined via a BOUNDED `mpsc::Receiver::recv_timeout`, not a plain
+`JoinHandle::join()` — confirmed by the timeout test itself initially
+FAILING with a ~5s wait instead of returning promptly: `sh -c "sleep 5"`
+forks a grandchild that inherits the pipe file descriptors, so
+`child.kill()` on the direct `sh` child does not close them — the
+orphaned grandchild keeps holding the pipe's write end open until it
+exits on its own, and an unbounded `join()` on the reader thread blocked
+right along with it. `READER_DRAIN_GRACE` (500ms) bounds that wait
+instead; see `install::tests::execute_kills_and_reports_failed_when_the_timeout_elapses`.
 
 **ACL wiring (Tauri v2, verified against the installed `tauri-build
 2.6.3`/`tauri 2.11.5` crate source, not memory).** `install_dependency` is

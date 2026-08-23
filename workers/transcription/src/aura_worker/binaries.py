@@ -24,6 +24,19 @@ Resolution order (first hit wins), matching `resolve_binary`'s docstring:
 3. A fixed list of well-known per-OS install locations (see
    `_known_locations`), checked in order, first existing file wins.
 
+A known-location hit additionally PREPENDS that directory to this
+process's own `os.environ["PATH"]` (see `_ensure_on_process_path`).
+This isn't just cosmetic: this app doesn't own every ffmpeg call site --
+demucs's own `AudioFile.read()` (used by `aura_worker.separation`, guitar
+source-separation) shells out with a hardcoded bare `["ffmpeg", ...]`
+via its OWN `subprocess` call, doing its own independent PATH lookup that
+`resolve_binary` has no visibility into or control over. Without this
+mutation, a Windows user who fixed ffmpeg-via-winget for probe/normalize
+(this module's own call sites) would still hit demucs's internal failure
+the moment they enabled "Isolate instrument from mix" -- same root
+disease, a call site this module can't wrap. Mutating the process's real
+PATH is the only fix that reaches code outside this module's control.
+
 This module intentionally has ZERO dependency on `aura_api` -- `aura-worker`
 is a dependency of `aura-api` (see workers/transcription/pyproject.toml),
 not the other way around in the general case (the one existing exception,
@@ -91,6 +104,20 @@ def _windows_locations(name: str) -> list[Path]:
         # nothing for it, which is fine.
         packages_root = winget_root / "Packages"
         if packages_root.is_dir():
+            # `sorted()` here is deliberately just deterministic lexicographic
+            # ordering, not "newest version wins" -- glob()'s own order isn't
+            # guaranteed stable across platforms/Python versions, and a
+            # trailing "-full_build"/"-essentials_build"-style suffix in the
+            # real directory name doesn't sort in a version-meaningful way
+            # regardless. This only matters at all in the rare case of two
+            # distinct Gyan.FFmpeg installs coexisting under one user's
+            # WinGet Packages dir, which winget itself doesn't normally
+            # produce (its own upgrade path replaces this dir in place); a
+            # newest-mtime tiebreak was considered and skipped as
+            # not-actually-trivial (mtime reflects the LAST FILE WRITE
+            # inside the tree, not "the install winget currently considers
+            # active" -- e.g. an unrelated later `chmod`/AV-scan touch would
+            # silently change the winner) for a case this unlikely to occur.
             candidates.extend(sorted(packages_root.glob(f"Gyan.FFmpeg*/**/bin/{exe}")))
 
     program_files = os.environ.get("ProgramFiles")
@@ -120,6 +147,26 @@ def _linux_locations(name: str) -> list[Path]:
     ]
 
 
+def _ensure_on_process_path(directory: Path) -> None:
+    """Prepends `directory` to this process's own `PATH`, once.
+
+    Idempotent by construction: checks membership (as a plain string
+    comparison against the existing `os.pathsep`-split entries) before
+    prepending, so repeated calls -- every `probe_media`/`normalize` call
+    in every job re-resolves ffmpeg -- don't grow `PATH` without bound.
+    Mutates the REAL `os.environ`, not a copy: that's the point (see the
+    module docstring's demucs paragraph) -- any code in this same process
+    that shells out to a bare binary name via its own PATH lookup, done
+    at any point after this call, sees the same PATH this process does.
+    """
+    directory_str = str(directory)
+    current = os.environ.get("PATH", "")
+    entries = current.split(os.pathsep) if current else []
+    if directory_str in entries:
+        return
+    os.environ["PATH"] = os.pathsep.join([directory_str, *entries]) if entries else directory_str
+
+
 def _known_locations(name: str) -> list[Path]:
     system = platform.system()
     if system == "Windows":
@@ -141,7 +188,10 @@ def resolve_binary(name: str) -> ResolvedBinary | None:
     2. `shutil.which(name)` -- plain PATH lookup.
     3. `_known_locations(name)` -- fixed, per-OS package-manager install
        locations, checked in the order returned (first existing FILE wins;
-       a directory or broken symlink at that path is not a match).
+       a directory or broken symlink at that path is not a match). A hit
+       here also prepends its directory to this process's own `PATH` (see
+       `_ensure_on_process_path`) so third-party code in this same process
+       that does its own bare-name PATH lookup (e.g. demucs) finds it too.
     """
     env_var = _ENV_OVERRIDES.get(name)
     if env_var:
@@ -155,6 +205,7 @@ def resolve_binary(name: str) -> ResolvedBinary | None:
 
     for candidate in _known_locations(name):
         if candidate.is_file():
+            _ensure_on_process_path(candidate.parent)
             return ResolvedBinary(path=str(candidate), source=KNOWN_LOCATION)
 
     return None

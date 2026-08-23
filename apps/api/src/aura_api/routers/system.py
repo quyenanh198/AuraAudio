@@ -24,7 +24,9 @@ def _parse_version(binary: str, executable_path: str) -> str | None:
 
     Never raises: a subprocess failure, timeout, or unrecognized output shape
     all fall through to `None` — the binary is still reported as `found`,
-    since `shutil.which` already proved it's on PATH.
+    since `resolve_binary` already proved it exists (either on PATH or at
+    one of its known per-OS install locations — see
+    `aura_worker.binaries`).
     """
     try:
         proc = subprocess.run(
@@ -66,8 +68,8 @@ def _parse_yt_dlp_version(executable_path: str) -> str | None:
 
     Never raises, same contract as `_parse_version`: any subprocess
     failure, timeout, or unrecognized output shape falls through to
-    `None` — the binary is still reported as `found` since `shutil.which`
-    already proved it's on PATH.
+    `None` — the binary is still reported as `found` since `resolve_binary`
+    already proved it exists (PATH or a known install location).
     """
     try:
         proc = subprocess.run(

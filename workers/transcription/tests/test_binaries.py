@@ -9,7 +9,9 @@ filesystem check `resolve_binary` performs, not a mocked stand-in for it.
 
 from __future__ import annotations
 
+import os
 import platform
+import shutil
 
 import pytest
 from aura_worker import binaries
@@ -23,6 +25,17 @@ def _clear_env_overrides(monkeypatch):
     # test.
     for env_var in binaries._ENV_OVERRIDES.values():
         monkeypatch.delenv(env_var, raising=False)
+    # `resolve_binary` mutates the REAL process `PATH` on a known-location
+    # hit (see `_ensure_on_process_path`) -- by design, not a bug (that's
+    # how it fixes third-party bare-name shellouts like demucs's). Every
+    # test below that exercises a known-location hit would otherwise leak
+    # that mutation into the actual test-process environment and pollute
+    # later tests/files. Snapshotting PATH via `monkeypatch.setenv` here
+    # (even though its value doesn't change yet) makes monkeypatch the
+    # owner of restoring it, regardless of how the code under test mutates
+    # it afterward -- not just the tests that explicitly set PATH
+    # themselves.
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
 
 
 def test_env_override_wins_even_when_on_path(monkeypatch, tmp_path):
@@ -248,3 +261,88 @@ def test_real_system_platform_dispatch_smoke():
     assert isinstance(locations, list)
     if platform.system() == "Linux":
         assert any(str(p).endswith("/usr/bin/ffmpeg") for p in locations)
+
+
+class TestKnownLocationPathPrepend:
+    """Covers the demucs fix: a known-location hit must prepend its
+    directory to this process's real `PATH`, exactly once no matter how
+    many times it's re-resolved, and that mutation must be visible to
+    third-party code doing its own independent bare-name PATH lookup in
+    the same process (demucs's `AudioFile.read()` shells out to a
+    hardcoded `["ffmpeg", ...]`, invisible to `resolve_binary` itself)."""
+
+    @pytest.fixture(autouse=True)
+    def _force_linux_known_location_only(self, monkeypatch):
+        monkeypatch.setattr(binaries.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(binaries.shutil, "which", lambda _name: None)
+
+    def test_known_location_hit_prepends_its_directory_to_process_path(self, monkeypatch, tmp_path):
+        bin_dir = tmp_path / "usr-bin"
+        bin_dir.mkdir()
+        (bin_dir / "ffmpeg").write_bytes(b"stub")
+        monkeypatch.setattr(binaries, "_linux_locations", lambda name: [bin_dir / name])
+        original_path = os.environ["PATH"]
+
+        resolved = binaries.resolve_binary("ffmpeg")
+
+        assert resolved is not None
+        assert resolved.source == binaries.KNOWN_LOCATION
+        assert os.environ["PATH"] == f"{bin_dir}{os.pathsep}{original_path}"
+
+    def test_prepend_is_idempotent_across_repeated_resolves(self, monkeypatch, tmp_path):
+        bin_dir = tmp_path / "usr-bin"
+        bin_dir.mkdir()
+        (bin_dir / "ffmpeg").write_bytes(b"stub")
+        monkeypatch.setattr(binaries, "_linux_locations", lambda name: [bin_dir / name])
+
+        binaries.resolve_binary("ffmpeg")
+        binaries.resolve_binary("ffmpeg")
+        binaries.resolve_binary("ffmpeg")
+
+        entries = os.environ["PATH"].split(os.pathsep)
+        assert entries.count(str(bin_dir)) == 1
+
+    def test_prepend_does_not_duplicate_when_path_is_empty(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PATH", "")
+        bin_dir = tmp_path / "usr-bin"
+        bin_dir.mkdir()
+        (bin_dir / "ffmpeg").write_bytes(b"stub")
+        monkeypatch.setattr(binaries, "_linux_locations", lambda name: [bin_dir / name])
+
+        binaries.resolve_binary("ffmpeg")
+
+        assert os.environ["PATH"] == str(bin_dir)
+
+
+def test_known_location_prepend_is_visible_to_a_separate_stage(monkeypatch, tmp_path):
+    # Deliberately OUTSIDE `TestKnownLocationPathPrepend`: that class's
+    # autouse fixture patches `shutil.which` for the test's ENTIRE
+    # duration via the (function-scoped) `monkeypatch` fixture, so a
+    # nested scoped patch reverting mid-test would still land back on
+    # THAT patched lambda, not the real function. This test needs
+    # `shutil.which` patched ONLY around the `resolve_binary` call, so it
+    # sets up its own platform/PATH state directly and uses
+    # `pytest.MonkeyPatch.context()` (which reverts to whatever was
+    # active immediately before it, i.e. the real `shutil.which`, since
+    # nothing else in this test's own scope patched it first).
+    #
+    # Stands in for a SEPARATE call site in the same process (e.g.
+    # demucs's own internal subprocess lookup, or a later pipeline stage)
+    # doing its own bare-name PATH lookup with the REAL (unpatched)
+    # `shutil.which` -- proving the PATH mutation is visible process-wide,
+    # not just to aura_worker's own code path.
+    monkeypatch.setattr(binaries.platform, "system", lambda: "Linux")
+    bin_dir = tmp_path / "usr-bin"
+    bin_dir.mkdir()
+    exe = bin_dir / "ffmpeg"
+    exe.write_bytes(b"#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(binaries, "_linux_locations", lambda name: [bin_dir / name])
+
+    with pytest.MonkeyPatch.context() as scoped:
+        scoped.setattr(binaries.shutil, "which", lambda _name: None)
+        resolved = binaries.resolve_binary("ffmpeg")
+
+    assert resolved is not None
+    assert resolved.source == binaries.KNOWN_LOCATION
+    assert shutil.which("ffmpeg") == str(exe)

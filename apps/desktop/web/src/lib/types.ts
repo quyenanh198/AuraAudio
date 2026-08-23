@@ -177,10 +177,17 @@ export interface DependencyStatus {
   found: boolean;
   version: string | null;
   // Absolute resolved path, and how it was found ("env" | "path" |
-  // "known_location") -- both null when `found` is false. See
-  // apps/api/src/aura_api/schemas.py's DependencyStatus.
-  path: string | null;
-  source: string | null;
+  // "known_location") -- both null/absent when `found` is false.
+  // Optional (not just nullable) to match the Pydantic schema exactly:
+  // apps/api/src/aura_api/schemas.py's `DependencyStatus.path`/`.source`
+  // both carry `= None` defaults, which Pydantic's `model_dump`/JSON
+  // encoding still always includes as explicit `null` today (so real
+  // responses always have the key) -- but treating them as optional here
+  // matches the schema's actual contract precisely, rather than assuming
+  // a key is always present forever, and costs nothing since every real
+  // read site already treats `null` and `undefined` the same way.
+  path?: string | null;
+  source?: string | null;
 }
 
 export interface SystemDepsResponse {

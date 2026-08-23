@@ -130,6 +130,29 @@ describe("installDeps", () => {
       expect(state.outputTail).toBe("winget: package not found");
     });
 
+    it("surfaces install.rs's timeout message as ordinary 'failed' output (no dedicated outcome needed)", async () => {
+      // install.rs's own INSTALL_TIMEOUT kills a hung installer and still
+      // reports outcome: "failed" (not a distinct outcome) with an
+      // explanatory outputTail -- this proves that text reaches the store
+      // unmodified, which is what the UI renders under its generic
+      // "Automatic install failed." headline.
+      invokeMock.mockResolvedValueOnce({
+        outcome: "failed",
+        exitCode: null,
+        outputTail: "winget did not finish within 600s and was terminated. Partial output: ",
+      });
+
+      const { createInstallStore } = await import("./installDeps");
+      const store = createInstallStore("ffmpeg");
+      await store.install();
+
+      const state = get(store);
+      expect(state.phase).toBe("failed");
+      expect(state.outcome).toBe("failed");
+      expect(state.outputTail).toContain("did not finish within");
+      expect(recheckMock).not.toHaveBeenCalled();
+    });
+
     it("surfaces 'unsupported' (e.g. ffmpeg on Linux) as a distinct outcome", async () => {
       invokeMock.mockResolvedValueOnce({
         outcome: "unsupported",
@@ -159,6 +182,21 @@ describe("installDeps", () => {
       await store.install();
 
       expect(get(store).outcome).toBe("brew_missing");
+    });
+
+    it("surfaces 'winget_missing' as a distinct outcome (Windows, winget absent)", async () => {
+      invokeMock.mockResolvedValueOnce({
+        outcome: "winget_missing",
+        exitCode: null,
+        outputTail: "winget isn't available on this system",
+      });
+
+      const { createInstallStore } = await import("./installDeps");
+      const store = createInstallStore("ffmpeg");
+      await store.install();
+
+      expect(get(store).outcome).toBe("winget_missing");
+      expect(recheckMock).not.toHaveBeenCalled();
     });
 
     it("fails cleanly when invoke() itself rejects", async () => {

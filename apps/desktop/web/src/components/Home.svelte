@@ -87,6 +87,7 @@
    * here" read differently from a genuine install failure. */
   function installFailureHeadline(outcome: InstallOutcome | null): string {
     if (outcome === "brew_missing") return "Homebrew isn't installed.";
+    if (outcome === "winget_missing") return "winget isn't available on this system.";
     if (outcome === "unsupported") return "Automatic install isn't available here.";
     return "Automatic install failed.";
   }
