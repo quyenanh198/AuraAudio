@@ -114,6 +114,26 @@ def test_yt_dlp_missing_returns_409_with_machine_readable_detail(client, monkeyp
     assert "message" in detail
 
 
+def test_resolve_binary_raising_returns_502_not_500(client, monkeypatch):
+    # v1.2.1 regression: `resolve_binary` is documented to never raise (see
+    # aura_worker.binaries), but a real-Windows filesystem probe broke that
+    # contract and this endpoint bare-500'd. This is the router-level
+    # belt-and-braces: even if `resolve_binary` is ever broken again, the
+    # import flow must degrade to a diagnosable 502, never a bare 500.
+    import aura_api.routers.imports as imports_module
+
+    def _raise(_name: str):
+        raise OSError(1920, "The file cannot be accessed by the system")
+
+    monkeypatch.setattr(imports_module, "resolve_binary", _raise)
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert detail["code"] == "binary_resolution_failed"
+    assert "message" in detail
+
+
 def _resolve_nothing(_name: str) -> ResolvedBinary | None:
     return None
 

@@ -49,11 +49,14 @@ introducing a new circular or backward dependency.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 #: Binary name -> environment variable that, if set to a non-empty value,
 #: is trusted as the exact path to that binary without any further checks
@@ -80,6 +83,67 @@ class ResolvedBinary:
     source: str  # ENV_OVERRIDE | ON_PATH | KNOWN_LOCATION
 
 
+#: Exceptions a filesystem probe (`Path.is_file`/`is_dir`/`glob`) can raise
+#: that must NOT escape this module -- see `_safe_is_file`'s docstring for
+#: why `OSError` alone isn't the full story on Windows.
+_FS_PROBE_ERRORS = (OSError, ValueError)
+
+
+def _safe_is_file(path: Path) -> bool:
+    """`path.is_file()`, but never raises.
+
+    `pathlib.Path.is_file()`/`is_dir()` swallow OSError internally ONLY for
+    a small allowlisted set of errno/winerror values (ENOENT, ENOTDIR,
+    EBADF, ELOOP, and three specific WinErrors) -- see CPython's
+    `pathlib._ignore_error`. `PermissionError` (`EACCES`) is deliberately
+    NOT on that list, so it propagates straight out of `.is_file()`. On
+    real Windows this is reachable without any misconfiguration on this
+    app's part: a WinGet "Links" shim or per-package binary can be a
+    reparse point this process's token can list but can't stat (e.g. an
+    AV/EDR-quarantined or ACL-restricted entry, or a stale/self-referential
+    junction), and `%LOCALAPPDATA%` itself is routinely OneDrive-"Known
+    Folder Move"-redirected on managed/corporate machines, where a
+    cloud-only placeholder file's stat can fail with `OSError` (e.g.
+    WinError 1920, "file cannot be accessed by the system") that isn't in
+    pathlib's ignore-list either. `ValueError` covers the rarer
+    non-encodable-path case pathlib itself calls out. Any of these must
+    degrade to "this candidate doesn't count", not crash `resolve_binary`
+    (see the module docstring: this resolver is specifically designed to
+    never raise).
+    """
+    try:
+        return path.is_file()
+    except _FS_PROBE_ERRORS:
+        return False
+
+
+def _safe_is_dir(path: Path) -> bool:
+    """`path.is_dir()`, but never raises -- see `_safe_is_file`."""
+    try:
+        return path.is_dir()
+    except _FS_PROBE_ERRORS:
+        return False
+
+
+def _safe_glob(root: Path, pattern: str) -> list[Path]:
+    """`sorted(root.glob(pattern))`, but never raises -- see `_safe_is_file`.
+
+    `Path.glob`'s recursive (`**`) matching only ever swallows
+    `PermissionError` (and only some OSErrors, via the same narrow
+    errno/winerror allowlist, for a non-dironly `entry.is_dir()` check
+    inside the walk) -- a different, unlisted `OSError` (the OneDrive
+    WinError-1920 case above, hit while walking rather than at the final
+    stat) still propagates out of `glob()` itself. A failed glob here means
+    "no known-location candidates from this source", not "give up on
+    resolution entirely" -- the caller still has PATH and the other known
+    locations to fall back to.
+    """
+    try:
+        return sorted(root.glob(pattern))
+    except _FS_PROBE_ERRORS:
+        return []
+
+
 def _windows_locations(name: str) -> list[Path]:
     exe = f"{name}.exe"
     candidates: list[Path] = []
@@ -103,7 +167,7 @@ def _windows_locations(name: str) -> list[Path]:
         # distributed as a Gyan.FFmpeg package, so the glob simply matches
         # nothing for it, which is fine.
         packages_root = winget_root / "Packages"
-        if packages_root.is_dir():
+        if _safe_is_dir(packages_root):
             # `sorted()` here is deliberately just deterministic lexicographic
             # ordering, not "newest version wins" -- glob()'s own order isn't
             # guaranteed stable across platforms/Python versions, and a
@@ -118,7 +182,7 @@ def _windows_locations(name: str) -> list[Path]:
             # inside the tree, not "the install winget currently considers
             # active" -- e.g. an unrelated later `chmod`/AV-scan touch would
             # silently change the winner) for a case this unlikely to occur.
-            candidates.extend(sorted(packages_root.glob(f"Gyan.FFmpeg*/**/bin/{exe}")))
+            candidates.extend(_safe_glob(packages_root, f"Gyan.FFmpeg*/**/bin/{exe}"))
 
     program_files = os.environ.get("ProgramFiles")
     if program_files:
@@ -192,20 +256,34 @@ def resolve_binary(name: str) -> ResolvedBinary | None:
        here also prepends its directory to this process's own `PATH` (see
        `_ensure_on_process_path`) so third-party code in this same process
        that does its own bare-name PATH lookup (e.g. demucs) finds it too.
+
+    NEVER RAISES. Every filesystem probe this function or its helpers
+    perform (`_safe_is_file`/`_safe_is_dir`/`_safe_glob`, used throughout
+    step 3) already degrades individual failures to "not found here"; the
+    `try`/`except` below is the final, belt-and-braces backstop -- an
+    unexpected error anywhere in this resolution (this module's own bug, a
+    future call site added without going through the `_safe_*` helpers, or
+    a Windows filesystem failure mode not yet enumerated) must still fall
+    through to "not found" rather than 500 the two endpoints
+    (`GET /v1/system/deps`, `POST /v1/imports/youtube`) that call this.
     """
-    env_var = _ENV_OVERRIDES.get(name)
-    if env_var:
-        override = os.environ.get(env_var)
-        if override:
-            return ResolvedBinary(path=override, source=ENV_OVERRIDE)
+    try:
+        env_var = _ENV_OVERRIDES.get(name)
+        if env_var:
+            override = os.environ.get(env_var)
+            if override:
+                return ResolvedBinary(path=override, source=ENV_OVERRIDE)
 
-    on_path = shutil.which(name)
-    if on_path:
-        return ResolvedBinary(path=on_path, source=ON_PATH)
+        on_path = shutil.which(name)
+        if on_path:
+            return ResolvedBinary(path=on_path, source=ON_PATH)
 
-    for candidate in _known_locations(name):
-        if candidate.is_file():
-            _ensure_on_process_path(candidate.parent)
-            return ResolvedBinary(path=str(candidate), source=KNOWN_LOCATION)
+        for candidate in _known_locations(name):
+            if _safe_is_file(candidate):
+                _ensure_on_process_path(candidate.parent)
+                return ResolvedBinary(path=str(candidate), source=KNOWN_LOCATION)
 
-    return None
+        return None
+    except Exception:
+        _logger.warning("resolve_binary(%r) hit an unexpected error; treating as not found", name, exc_info=True)
+        return None

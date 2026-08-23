@@ -169,6 +169,33 @@ def test_system_deps_parses_real_shaped_yt_dlp_version(monkeypatch):
     assert body["allFound"] is True
 
 
+def test_system_deps_never_500s_when_resolve_binary_raises(monkeypatch):
+    # v1.2.1 regression: `resolve_binary` is documented to never raise, but
+    # a real-Windows filesystem probe broke that contract (see
+    # aura_worker.binaries's own regression tests) and both endpoints that
+    # call it bare-500'd. This is the router-level belt-and-braces: even if
+    # `resolve_binary` itself is ever broken again, this endpoint must
+    # degrade to a diagnosable `found: false`, never a bare 500.
+    import aura_api.routers.system as system_module
+
+    def _raise(_binary: str):
+        raise OSError(1920, "The file cannot be accessed by the system")
+
+    monkeypatch.setattr(system_module, "resolve_binary", _raise)
+
+    client = TestClient(create_app())
+    resp = client.get("/v1/system/deps")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "ffmpeg": {"found": False, "version": None, "path": None, "source": None},
+        "ffprobe": {"found": False, "version": None, "path": None, "source": None},
+        "ytDlp": {"found": False, "version": None, "path": None, "source": None},
+        "allFound": False,
+    }
+
+
 def test_system_deps_yt_dlp_missing_never_blocks_all_found(monkeypatch):
     # CRITICAL invariant: allFound means "required deps (ffmpeg+ffprobe)
     # present" — yt-dlp being absent must never flip it to False and must

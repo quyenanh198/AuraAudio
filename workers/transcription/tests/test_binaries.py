@@ -314,6 +314,134 @@ class TestKnownLocationPathPrepend:
         assert os.environ["PATH"] == str(bin_dir)
 
 
+class TestWindowsCrashRegression:
+    """v1.2.1 regression: BOTH `GET /v1/system/deps` and
+    `POST /v1/imports/youtube` returned bare 500s on real Windows machines
+    even though `resolve_binary` is documented (and, in v1.2.0's simpler
+    `shutil.which`-only implementation, was structurally guaranteed) to
+    never raise. Root cause: `pathlib.Path.is_file`/`is_dir`/`glob` only
+    swallow a narrow, allowlisted set of OSErrors internally (see
+    `pathlib._ignore_error`) -- notably NOT `PermissionError`, and NOT the
+    OneDrive-placeholder-style `OSError` real corporate Windows machines
+    can hit when `%LOCALAPPDATA%` is cloud-redirected. These tests force
+    exactly those raises out of the underlying `pathlib` calls (impossible
+    to trigger for real off a Windows box) and prove `resolve_binary`
+    degrades to "not found" instead of propagating.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_windows(self, monkeypatch):
+        monkeypatch.setattr(binaries.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(binaries.shutil, "which", lambda _name: None)
+
+    def test_permission_error_on_links_dir_stat_does_not_crash(self, monkeypatch, tmp_path):
+        # A WinGet Links shim that's a reparse point this process's token
+        # can list the parent of, but can't stat directly (ACL-restricted /
+        # AV-quarantined) -- Path.is_file() raises PermissionError here,
+        # unswallowed by pathlib itself.
+        local_app_data = tmp_path / "LocalAppData"
+        (local_app_data / "Microsoft" / "WinGet" / "Links").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+        from pathlib import Path as RealPath
+
+        real_is_file = RealPath.is_file
+
+        def _raising_is_file(self):
+            if self.name == "ffmpeg.exe":
+                raise PermissionError(13, "Access is denied")
+            return real_is_file(self)
+
+        monkeypatch.setattr(binaries.Path, "is_file", _raising_is_file)
+
+        resolved = binaries.resolve_binary("ffmpeg")
+
+        assert resolved is None
+
+    def test_onedrive_style_oserror_during_glob_does_not_crash(self, monkeypatch, tmp_path):
+        # A cloud-redirected %LOCALAPPDATA% (OneDrive "Known Folder Move")
+        # can fail mid-walk with an OSError that ISN'T PermissionError and
+        # ISN'T in pathlib's narrow ignore-list (e.g. WinError 1920) --
+        # simulated here as a generic OSError raised by glob() itself.
+        local_app_data = tmp_path / "LocalAppData"
+        packages_root = local_app_data / "Microsoft" / "WinGet" / "Packages"
+        packages_root.mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+        def _raising_glob(self, _pattern):
+            raise OSError(1920, "The file cannot be accessed by the system")
+
+        monkeypatch.setattr(binaries.Path, "glob", _raising_glob)
+
+        resolved = binaries.resolve_binary("ffmpeg")
+
+        assert resolved is None
+
+    def test_permission_error_from_is_dir_guard_does_not_crash(self, monkeypatch, tmp_path):
+        local_app_data = tmp_path / "LocalAppData"
+        (local_app_data / "Microsoft" / "WinGet").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
+        from pathlib import Path as RealPath
+
+        real_is_dir = RealPath.is_dir
+
+        def _raising_is_dir(self):
+            if self.name == "Packages":
+                raise PermissionError(13, "Access is denied")
+            return real_is_dir(self)
+
+        monkeypatch.setattr(binaries.Path, "is_dir", _raising_is_dir)
+
+        resolved = binaries.resolve_binary("ffmpeg")
+
+        assert resolved is None
+
+    def test_unexpected_exception_anywhere_in_known_locations_falls_through(self, monkeypatch):
+        # Belt-and-braces: even a completely unanticipated failure inside
+        # `_known_locations` itself (not just the specific pathlib probes
+        # above) must degrade to "not found", not propagate -- this is the
+        # top-level `try`/`except` in `resolve_binary`, not the targeted
+        # `_safe_*` helpers.
+        def _boom(_name):
+            raise RuntimeError("simulated unforeseen failure")
+
+        monkeypatch.setattr(binaries, "_known_locations", _boom)
+
+        assert binaries.resolve_binary("ffmpeg") is None
+
+    def test_permission_error_still_resolves_other_candidates(self, monkeypatch, tmp_path):
+        # A crash on ONE candidate must not stop resolution from finding a
+        # LATER, healthy candidate -- proves this degrades gracefully
+        # rather than just "fails safe by giving up everything".
+        local_app_data = tmp_path / "LocalAppData"
+        (local_app_data / "Microsoft" / "WinGet" / "Links").mkdir(parents=True)
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+        program_files = tmp_path / "Program Files"
+        bin_dir = program_files / "ffmpeg" / "bin"
+        bin_dir.mkdir(parents=True)
+        healthy_exe = bin_dir / "ffmpeg.exe"
+        healthy_exe.write_bytes(b"stub")
+        monkeypatch.setenv("ProgramFiles", str(program_files))
+
+        from pathlib import Path as RealPath
+
+        real_is_file = RealPath.is_file
+
+        def _raising_is_file(self):
+            # The Links dir candidate raises; the healthy ProgramFiles
+            # candidate (checked after it) must still resolve.
+            if "WinGet" in str(self):
+                raise PermissionError(13, "Access is denied")
+            return real_is_file(self)
+
+        monkeypatch.setattr(binaries.Path, "is_file", _raising_is_file)
+
+        resolved = binaries.resolve_binary("ffmpeg")
+
+        assert resolved == ResolvedBinary(path=str(healthy_exe), source=binaries.KNOWN_LOCATION)
+
+
 def test_known_location_prepend_is_visible_to_a_separate_stage(monkeypatch, tmp_path):
     # Deliberately OUTSIDE `TestKnownLocationPathPrepend`: that class's
     # autouse fixture patches `shutil.which` for the test's ENTIRE

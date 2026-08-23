@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from aura_worker.binaries import resolve_binary
+from aura_worker.binaries import ResolvedBinary, resolve_binary
 from fastapi import APIRouter, HTTPException
 
 from aura_api.config import settings
@@ -14,6 +15,7 @@ from aura_api.schemas import ImportYoutubeRequest, ImportYoutubeResponse, make_u
 from aura_api.storage import storage_client
 
 router = APIRouter(tags=["imports"])
+_logger = logging.getLogger(__name__)
 
 # YouTube import is the app's FIRST network-using feature (see
 # docs/superpowers/SESSION-HANDOFF.md). yt-dlp is an OPTIONAL PATH
@@ -57,6 +59,32 @@ _MAX_FILESIZE_SKIP_MARKER = "file is larger than max-filesize"
 # worker's probe step validates the actual codec, not the extension, and
 # rejects anything it can't handle with its own clear error).
 _FALLBACK_AUDIO_EXTENSIONS = ("mp3", "m4a", "opus", "webm", "wav")
+
+
+def _resolve_binary_or_502(name: str) -> ResolvedBinary | None:
+    """`resolve_binary`, but converts an unexpected exception into a
+    diagnosable 502 instead of letting it fall through as a bare 500.
+
+    `resolve_binary` documents itself as never-raising (see
+    `aura_worker.binaries`), but this is the SAME resolver whose new
+    known-location search already caused a real-Windows regression here
+    once (a filesystem probe raising where the old, dumber
+    `shutil.which`-only version structurally couldn't) -- this endpoint
+    stays a working, non-blocking import flow even if that contract is
+    ever violated again by a future change, instead of the whole request
+    dying with no machine-readable detail for the frontend to show.
+    """
+    try:
+        return resolve_binary(name)
+    except Exception as exc:
+        _logger.warning("resolve_binary(%r) raised unexpectedly", name, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "binary_resolution_failed",
+                "message": f"Could not determine whether {name} is installed on this machine.",
+            },
+        ) from exc
 
 
 def _is_max_filesize_skip(combined_output: str) -> bool:
@@ -127,7 +155,7 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
     # aura_worker.binaries's module docstring) even though it's really
     # installed. Checking winget's own stable install locations too closes
     # that gap without requiring a restart.
-    yt_dlp = resolve_binary("yt-dlp")
+    yt_dlp = _resolve_binary_or_502("yt-dlp")
     if yt_dlp is None:
         # Machine-readable so the frontend can show install guidance
         # (mirrors the ffmpeg-missing banner's install-command pattern)
@@ -151,7 +179,7 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
     # entirely (not passed as an empty string) when ffmpeg can't be
     # resolved at all -- yt-dlp then falls through to its own PATH search
     # and, ultimately, its own natural "ffmpeg not found" failure.
-    ffmpeg = resolve_binary("ffmpeg")
+    ffmpeg = _resolve_binary_or_502("ffmpeg")
     ffmpeg_location_args = (
         ["--ffmpeg-location", str(Path(ffmpeg.path).parent)] if ffmpeg is not None else []
     )

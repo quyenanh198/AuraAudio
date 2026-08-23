@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 
-from aura_worker.binaries import resolve_binary
+from aura_worker.binaries import ResolvedBinary, resolve_binary
 from fastapi import APIRouter
 
 from aura_api.schemas import DependencyStatus, SystemDepsResponse
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system"])
 
@@ -47,12 +50,30 @@ def _parse_version(binary: str, executable_path: str) -> str | None:
     return None
 
 
+def _resolve_binary_safe(binary: str) -> ResolvedBinary | None:
+    """`resolve_binary`, but never lets an unexpected exception escape.
+
+    `resolve_binary` is itself documented to never raise (see its own
+    docstring), but this endpoint exists SPECIFICALLY to report dependency
+    health -- it must stay a working diagnostic even if that contract is
+    ever violated by a future change (here, or in a dependency this router
+    doesn't control). Degrading to "not found" here is strictly better than
+    a bare 500: a wrong-but-diagnosable `found: false` still lets the
+    frontend show install guidance, instead of the whole panel erroring out.
+    """
+    try:
+        return resolve_binary(binary)
+    except Exception:
+        _logger.warning("resolve_binary(%r) raised unexpectedly; reporting not found", binary, exc_info=True)
+        return None
+
+
 def _check_binary(binary: str) -> DependencyStatus:
     # Resolved (not a bare `shutil.which`), so this reports "found" for the
     # exact same set of binaries the real probe/normalize/import call sites
     # can actually use -- see aura_worker.binaries's module docstring for
     # why plain PATH lookup alone isn't enough on Windows.
-    resolved = resolve_binary(binary)
+    resolved = _resolve_binary_safe(binary)
     if resolved is None:
         return DependencyStatus(found=False, version=None, path=None, source=None)
     return DependencyStatus(
@@ -89,7 +110,7 @@ def _parse_yt_dlp_version(executable_path: str) -> str | None:
 
 
 def _check_yt_dlp() -> DependencyStatus:
-    resolved = resolve_binary("yt-dlp")
+    resolved = _resolve_binary_safe("yt-dlp")
     if resolved is None:
         return DependencyStatus(found=False, version=None, path=None, source=None)
     return DependencyStatus(
