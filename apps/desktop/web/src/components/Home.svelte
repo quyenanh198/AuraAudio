@@ -1049,6 +1049,16 @@
   .chip-error {
     background: rgba(224, 99, 99, 0.12);
     color: #e58a8a;
+    /* The chip's `title` attribute already carries the real
+       error_detail/error_code (lazily fetched from GET /v1/jobs/{id} --
+       see loadErrorDetail above), but a bare `title` has zero visual
+       affordance: nothing on the chip hints that hovering reveals more
+       than the word "Failed". cursor+underline are the minimal signal
+       that there's detail to see, without changing the interaction
+       model or adding new UI. */
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
   }
 
   .chip-pending {

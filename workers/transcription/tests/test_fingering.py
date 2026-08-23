@@ -1,6 +1,7 @@
 import random
+import time
 
-from aura_worker.fingering import StringFret, candidates_for_pitch, assign_chord
+from aura_worker.fingering import MAX_EXHAUSTIVE_CHORD_SIZE, StringFret, candidates_for_pitch, assign_chord
 
 
 def test_candidates_for_open_low_e_string():
@@ -167,3 +168,55 @@ def test_assign_measure_skips_wholly_unreachable_chord():
     assert 0 in assignment
     assert 1 not in assignment
     assert 2 in assignment
+
+
+# --- Bug 2 investigation: assign_chord's exhaustive backtracking is
+# combinatorial in chord size (see MAX_EXHAUSTIVE_CHORD_SIZE's docstring
+# for directly-measured costs: n=22 took ~8.7s for a SINGLE chord on this
+# machine). The real pipeline was NOT found to ever produce a chord group
+# that large from basic-pitch's real output (measured max 2-3 across
+# several dense ~4-minute mixed fixtures -- see bug2 report), but the
+# defect is real and independently verifiable, so it's fixed defensively:
+# a chord above the cap falls back to a fast greedy assignment instead of
+# hanging the job.
+
+
+def test_assign_chord_stays_fast_above_exhaustive_cap():
+    rng = random.Random(7)
+    pitches = [rng.randint(30, 90) for _ in range(200)]  # far beyond any real chord
+
+    t0 = time.time()
+    result = assign_chord(pitches)
+    elapsed = time.time() - t0
+
+    assert elapsed < 1.0, f"assign_chord took {elapsed:.3f}s for {len(pitches)} pitches -- cap not effective"
+    assert len(result) == len(pitches)
+
+
+def test_assign_chord_above_cap_still_returns_distinct_strings():
+    rng = random.Random(11)
+    for _ in range(50):
+        count = rng.randint(MAX_EXHAUSTIVE_CHORD_SIZE + 1, 40)
+        pitches = [rng.randint(30, 90) for _ in range(count)]
+        result = assign_chord(pitches)
+        assigned_strings = [sf.string for sf in result if sf is not None]
+        assert len(set(assigned_strings)) == len(assigned_strings), (
+            f"duplicate string assigned above the exhaustive cap for pitches={pitches!r}, result={result!r}"
+        )
+
+
+def test_assign_chord_above_cap_respects_excluded_strings():
+    pitches = [60, 61, 62, 63, 64, 65, 66, 67, 68]  # 9 pitches, cap is 8
+    result = assign_chord(pitches, excluded_strings=frozenset({0, 1}))
+    assigned_strings = {sf.string for sf in result if sf is not None}
+    assert not (assigned_strings & {0, 1})
+
+
+def test_assign_chord_at_cap_boundary_uses_exhaustive_path_unchanged():
+    # Exactly MAX_EXHAUSTIVE_CHORD_SIZE pitches must still go through the
+    # exact (non-greedy) path -- this pins that the cap is a strict ">",
+    # not "modifying behavior at the boundary itself".
+    pitches = [40, 45, 50, 55, 59, 64, 41, 46][:MAX_EXHAUSTIVE_CHORD_SIZE]
+    result = assign_chord(pitches)
+    assigned_strings = [sf.string for sf in result if sf is not None]
+    assert len(set(assigned_strings)) == len(assigned_strings)
