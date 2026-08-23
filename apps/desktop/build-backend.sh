@@ -58,6 +58,24 @@ cd "$REPO_ROOT"
 # successfully. On Windows, convert each --add-data host path to native
 # Windows form with `cygpath -w` and join src:dest with ';' instead of ':'.
 # POSIX (Linux/macOS) paths and the ':' separator are unchanged from before.
+#
+# CONSOLE_FLAG (v1.2.1 regression -- real Windows machine report): a plain
+# `pyinstaller` build defaults to a CONSOLE-subsystem executable, which
+# Windows gives a visible console window on every launch -- for a desktop
+# app spawned as a background sidecar by Tauri (apps/desktop/src-tauri/src/
+# backend.rs), that's a black cmd-looking window with no purpose, sitting
+# next to the real app window. `--noconsole` (PyInstaller's flag for a
+# GUI-subsystem build with no console at all) fixes this, but is a
+# Windows-only concern: on Linux there is no attached console to begin with
+# for a background-spawned process (confirmed: `--noconsole` is a documented
+# no-op there), and on macOS `--windowed` controls a different, `.app`
+# bundle-specific concern this project's PyInstaller invocation isn't
+# targeting (`--onedir` without a `.app` wrapper) -- so the flag is added
+# ONLY on the Windows branch, leaving the existing Linux/macOS build
+# byte-for-byte unchanged. `run_backend.py` has the required follow-through
+# for the loss of a console (stdout/stderr can be None under --noconsole;
+# logging is routed to a rotating file under AURA_DATA_DIR/logs/ instead of
+# the now-gone console) -- see that file's module docstring.
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     ADD_DATA_SEP=';'
@@ -65,6 +83,7 @@ case "$(uname -s)" in
     THIRD_PARTY_NOTICES_PATH="$(cygpath -w "${REPO_ROOT}/THIRD_PARTY_NOTICES.md")"
     DEMUCS_WEIGHTS_PATH="$(cygpath -w "${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th")"
     DEMUCS_YAML_PATH="$(cygpath -w "${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml")"
+    CONSOLE_FLAG='--noconsole'
     ;;
   *)
     ADD_DATA_SEP=':'
@@ -72,6 +91,10 @@ case "$(uname -s)" in
     THIRD_PARTY_NOTICES_PATH="${REPO_ROOT}/THIRD_PARTY_NOTICES.md"
     DEMUCS_WEIGHTS_PATH="${REPO_ROOT}/workers/transcription/weights/demucs/5c90dfd2-34c22ccb.th"
     DEMUCS_YAML_PATH="${REPO_ROOT}/workers/transcription/weights/demucs/htdemucs_6s.yaml"
+    # Explicit (not just "omit the flag"): pins the existing, correct
+    # Linux/macOS behavior as a literal so a future edit can't silently
+    # change it by only ever looking at the Windows branch.
+    CONSOLE_FLAG='--console'
     ;;
 esac
 
@@ -84,6 +107,7 @@ uv run --package aura-api pyinstaller \
   --distpath apps/desktop/dist \
   --workpath apps/desktop/build \
   --specpath apps/desktop \
+  "${CONSOLE_FLAG}" \
   --collect-data basic_pitch \
   --add-data "${PIANO_WEIGHTS_PATH}${ADD_DATA_SEP}piano_weights" \
   --add-data "${THIRD_PARTY_NOTICES_PATH}${ADD_DATA_SEP}piano_weights" \

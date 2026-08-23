@@ -27,10 +27,13 @@
 //!   follow (`poll_health_and_gate_window`) run on a background thread. See
 //!   `spawn_backend_process`'s doc comment for why that split matters.
 //! - Poll `GET /healthz` until it succeeds, the child process is observed to
-//!   have exited, or a bounded timeout elapses. The child's stderr is
-//!   redirected to `<app_data_dir>/backend.log` (see `spawn_backend_process`)
-//!   so a packaged-app startup failure is diagnosable even when launched
-//!   from a desktop icon with no attached terminal.
+//!   have exited, or a bounded timeout elapses. The child's stdout AND
+//!   stderr are both redirected to `<app_data_dir>/backend.log` (see
+//!   `spawn_backend_process`) so a packaged-app startup failure is
+//!   diagnosable even when launched from a desktop icon with no attached
+//!   terminal — and, on Windows, so the child always has a valid stdio
+//!   handle even though it no longer has a console at all (Bug C's
+//!   `--noconsole` PyInstaller build, see `CREATE_NO_WINDOW`'s doc comment).
 //! - Show the main window once healthy, or once the failure is determined
 //!   (there is no frontend listener for a failure event today — see the
 //!   `poll_health_and_gate_window` doc comment — so the only externally
@@ -52,6 +55,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
@@ -79,6 +84,28 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 /// real Python traceback (bad data-dir permissions, `init_schema()`
 /// raising, a PyInstaller import failure, etc.) actually diagnosable.
 const BACKEND_LOG_FILENAME: &str = "backend.log";
+
+/// Windows `CreateProcess` flag suppressing the console window a
+/// console-subsystem child would otherwise get (`CREATE_NO_WINDOW`, winapi
+/// constant `0x08000000` — see
+/// `windows-sys`/`winapi::um::winbase::CREATE_NO_WINDOW`; hardcoded rather
+/// than pulled from a crate dependency since this is the only flag this
+/// process ever needs and the numeric value is stable ABI, not an
+/// implementation detail).
+///
+/// Belt-and-braces alongside `apps/desktop/build-backend.sh`'s new
+/// `--noconsole` PyInstaller flag, not a replacement for it: `--noconsole`
+/// changes the bundled `aura-backend.exe`'s OWN subsystem to GUI (no
+/// console window regardless of how it's spawned), while this flag
+/// controls whether the OS allocates a NEW console for a CONSOLE-subsystem
+/// child spawned from a process (this one) that itself doesn't already own
+/// one. Keeping both means a console-subsystem build (a future revert of
+/// the PyInstaller flag, or a manually-run dev exe fitting that shape)
+/// still doesn't pop a window when launched through this spawn path.
+/// Harmless if `aura-backend.exe` is already GUI-subsystem: `CreateProcess`
+/// simply has no console to suppress in that case.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Bounded window to wait for the backend to exit gracefully after
 /// `SIGTERM` on a clean app quit, before escalating to `SIGKILL`. uvicorn's
@@ -140,9 +167,35 @@ pub fn spawn_backend_process(app: &AppHandle) -> bool {
       return false;
     }
   };
+  // A SEPARATE handle to the same path, also captured (not just stderr):
+  // Bug C's Windows console-window fix (build-backend.sh's new PyInstaller
+  // `--noconsole` flag) means `aura-backend.exe` is no longer a
+  // console-subsystem process, and this `Command` never explicitly set
+  // `.stdout(...)` before now -- Rust's default for an unset stdio stream
+  // is to INHERIT the parent's, and this app's own Tauri process is
+  // itself a windowed (no-console) GUI application, so an inherited
+  // stdout handle here is exactly as likely to be invalid as the
+  // documented `sys.stdout is None` PyInstaller `--noconsole` pitfall
+  // `run_backend.py` guards against on the Python side. Explicitly
+  // capturing it here (rather than relying solely on that Python-side
+  // guard) means the child always gets a real, valid stdio handle
+  // regardless of what this parent process's own stdout looks like.
+  // Opening the SAME path twice (not reusing one `File` for both) is
+  // required: `Stdio::from(File)` takes ownership, and appending from two
+  // independent handles to one path is safe on both POSIX and Windows —
+  // each OS-level append write still atomically advances that handle's
+  // own file-position-at-write-time semantics.
+  let stdout_log = match OpenOptions::new().create(true).append(true).open(&log_path) {
+    Ok(file) => file,
+    Err(err) => {
+      log::error!("could not open backend log file {log_path:?} for stdout: {err}");
+      show_main_window(app);
+      return false;
+    }
+  };
 
   log::info!(
-    "spawning bundled backend at {} with AURA_DATA_DIR={} (stderr -> {})",
+    "spawning bundled backend at {} with AURA_DATA_DIR={} (stdout+stderr -> {})",
     exe_path.display(),
     data_dir.display(),
     log_path.display()
@@ -157,9 +210,23 @@ pub fn spawn_backend_process(app: &AppHandle) -> bool {
     .env("AURA_DATA_DIR", &data_dir)
     .env("DATABASE_URL", &database_url)
     // Captured instead of inherited: inheriting goes nowhere visible for a
-    // packaged `.deb` launched from a desktop icon (no attached terminal).
-    // See `BACKEND_LOG_FILENAME`'s doc comment.
+    // packaged `.deb` launched from a desktop icon (no attached terminal),
+    // and — since Bug C's `--noconsole` fix — goes nowhere USABLE on
+    // Windows either (see the stdout_log comment above). See
+    // `BACKEND_LOG_FILENAME`'s doc comment.
+    .stdout(Stdio::from(stdout_log))
     .stderr(Stdio::from(stderr_log));
+
+  // Belt-and-braces alongside build-backend.sh's PyInstaller `--noconsole`
+  // flag (see CREATE_NO_WINDOW's own doc comment for the division of
+  // responsibility between the two): suppresses the console window Windows
+  // would otherwise allocate for a console-subsystem child. A no-op
+  // constant on every other target (the field simply isn't set), so this
+  // has no effect on Linux/macOS spawn behavior.
+  #[cfg(windows)]
+  {
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
 
   // Linux-only orphan guard for the case Tauri itself can't run any of its
   // own shutdown code at all: a hard `kill -9` (or crash) of this process.

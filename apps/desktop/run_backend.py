@@ -13,10 +13,28 @@ time. In the normal dev workflow those come from `.envrc`. A standalone
 bundle has no `.envrc`, so this sets sane defaults *before* importing
 `aura_api.main` — a SQLite DB file next to the bundled executable — while
 still letting an operator override either var beforehand.
+
+Logging (Windows console-window fix follow-through): `build-backend.sh`
+now builds the Windows bundle with PyInstaller `--noconsole`, so there is
+no console window for uvicorn's/this app's own logging to print into —
+and, on the exact PyInstaller `--noconsole` condition, `sys.stdout`/
+`sys.stderr` can be `None` rather than a real (if invisible) stream,
+which crashes on the first `print()`/log write instead of just being
+silent. Both are handled below, before any other import that could write
+to either: a `None` stream is replaced with a real file, and every
+`logging`-module logger (this app's own, plus uvicorn's) is routed to a
+bounded, rotating file under `AURA_DATA_DIR/logs/backend.log` instead of
+the console — see the `_UVICORN_LOG_CONFIG` block below for the exact
+handler config. This applies whether or not this particular run is
+frozen/noconsole (harmless either way — see that block's own comment),
+which does mean a plain `python run_backend.py` dev run now logs to that
+file instead of the terminal; `tail -f` it during local development.
 """
 
 from __future__ import annotations
 
+import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -30,6 +48,96 @@ else:
 _data_dir = _base_dir / "data"
 os.environ.setdefault("AURA_DATA_DIR", str(_data_dir))
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_data_dir / 'aura.db'}")
+
+# Windows console-window fix (build-backend.sh now passes PyInstaller
+# `--noconsole` on Windows) has a well-documented side effect: a
+# `--noconsole`/`--windowed` Windows executable that inherits no stdio
+# handles at all (e.g. launched with no parent-provided handles) gets
+# `sys.stdout`/`sys.stderr` set to `None` by the CPython runtime itself,
+# not a closed/broken stream -- see
+# https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#sys-stdin-sys-stdout-and-sys-stderr-in-noconsole-windowed-applications.
+# Any code that calls `print()` (this app's own piano-engine "Segment
+# N/M" progress prints, or a third-party dependency) or that lets a
+# logging `StreamHandler` default to `sys.stderr` then raises
+# `AttributeError: 'NoneType' object has no attribute 'write'/'flush'` --
+# turning "no visible console" into a hard crash on first output, worse
+# than the visible-console regression this build change fixes. Both
+# streams are pointed at a real (rotating-logged) file *before* anything
+# else in this process can write to them, whether or not this particular
+# run is frozen/noconsole -- harmless when they're already real streams
+# (the `is None` guard only ever fires under the exact PyInstaller
+# --noconsole condition above), and gives the bundled app a working
+# stdout/stderr even when Tauri's own child-process stdio wiring
+# (apps/desktop/src-tauri/src/backend.rs) doesn't happen to provide one.
+_log_dir = Path(os.environ["AURA_DATA_DIR"]) / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+_BACKEND_LOG_PATH = _log_dir / "backend.log"
+
+if sys.stdout is None or sys.stderr is None:
+    _stdio_replacement = open(_BACKEND_LOG_PATH, "a", buffering=1, encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = _stdio_replacement
+    if sys.stderr is None:
+        sys.stderr = _stdio_replacement
+
+# Rotating file handler for everything logged through the standard
+# `logging` module (this app's own `logging.getLogger(__name__)` calls,
+# e.g. aura_worker.binaries's resolve_binary warnings, PLUS uvicorn's own
+# "uvicorn"/"uvicorn.error"/"uvicorn.access" loggers via the `log_config`
+# passed to `uvicorn.run()` below) -- a bounded, rotated file under
+# AURA_DATA_DIR/logs/ survives the process having no console to print to
+# at all, unlike uvicorn's own default (a plain StreamHandler on
+# sys.stderr, which is exactly the None-stream hazard described above,
+# and which even when non-None only ever reached an invisible window).
+# 5 * 1MiB is a deliberately small, bounded budget -- this is operational
+# diagnostic logging for a single-user desktop app, not an audit trail
+# that needs to be exhaustive; a handful of rotated 1MiB files is easy to
+# attach to a bug report without becoming its own storage problem.
+_LOG_MAX_BYTES = 1_000_000
+_LOG_BACKUP_COUNT = 5
+
+_UVICORN_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        },
+        "access": {
+            "format": '%(asctime)s %(levelname)-8s %(name)s: %(client_addr)s - "%(request_line)s" %(status_code)s',
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(_BACKEND_LOG_PATH),
+            "maxBytes": _LOG_MAX_BYTES,
+            "backupCount": _LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
+        },
+        "access": {
+            "formatter": "access",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(_BACKEND_LOG_PATH),
+            "maxBytes": _LOG_MAX_BYTES,
+            "backupCount": _LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
+        },
+    },
+    "loggers": {
+        # "" (root): catches this app's own `logging.getLogger(__name__)`
+        # calls (aura_api.*, aura_worker.*) that would otherwise have no
+        # handler configured at all (Python's logging is a no-op with no
+        # handler attached anywhere in a logger's propagation chain) and
+        # fall silent -- worse than a visible-but-noisy console, since a
+        # future bug report would have literally nothing to show.
+        "": {"handlers": ["default"], "level": "INFO"},
+        "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {"level": "INFO"},
+        "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+    },
+}
 
 import uvicorn  # noqa: E402
 from aura_api.db import Base, get_engine  # noqa: E402
@@ -203,4 +311,18 @@ def init_schema() -> None:
 
 if __name__ == "__main__":
     init_schema()
-    uvicorn.run(root_app, host="127.0.0.1", port=AURA_BACKEND_PORT)
+    # log_config=_UVICORN_LOG_CONFIG (not uvicorn's own default, a plain
+    # StreamHandler on sys.stderr): see this file's stdout/stderr setup
+    # above for why -- a packaged Windows build now runs PyInstaller
+    # `--noconsole` (apps/desktop/build-backend.sh), so the default would
+    # either raise on a None stream or silently vanish into an invisible
+    # window. Every uvicorn/uvicorn.error/uvicorn.access log line, and
+    # every plain `logging.getLogger(...)` call anywhere in aura_api /
+    # aura_worker (root logger), lands in AURA_DATA_DIR/logs/backend.log
+    # instead. print()-style output (e.g. aura_worker.piano_engine's
+    # "Segment N/M" progress prints) is not logging-module output and
+    # isn't captured by this handler; it still goes to sys.stdout, which
+    # is a real file at this point (patched above if it was None) but not
+    # this rotating log's own file — an accepted loss, matching this bug's
+    # own scope ("fine to lose or capture").
+    uvicorn.run(root_app, host="127.0.0.1", port=AURA_BACKEND_PORT, log_config=_UVICORN_LOG_CONFIG)
