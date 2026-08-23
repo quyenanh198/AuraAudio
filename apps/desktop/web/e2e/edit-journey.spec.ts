@@ -238,6 +238,45 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     keyString = await keySelect.inputValue();
   });
 
+  test("switches the notation view to Tab-only, then back, preserving the selection", async () => {
+    // The Notation/Tab/Both segmented control (Sidebar's VIEW section,
+    // replacing the old two-state "Tab staff" toggle) — this fixture is a
+    // guitar project, so it's enabled and defaults to "Both" (no persisted
+    // choice yet in this fresh browser context).
+    const viewModeGroup = page.getByRole("group", { name: "Notation view" });
+    const bothButton = viewModeGroup.getByRole("button", { name: "Both", exact: true });
+    const tabButton = viewModeGroup.getByRole("button", { name: "Tab", exact: true });
+    await expect(bothButton).toHaveAttribute("aria-pressed", "true");
+
+    // Baseline: real noteheads (VexFlow's `vf-notehead`, the same class the
+    // previous step clicked) are rendered on the standard notation staff.
+    const noteheadCountBoth = await page.locator(".notation-host .vf-notehead").count();
+    expect(noteheadCountBoth).toBeGreaterThan(0);
+
+    await tabButton.click();
+    await expect(tabButton).toHaveAttribute("aria-pressed", "true");
+
+    // Tab-only: Notation.svelte's applyViewMode() hides the standard
+    // notation staff (Staff.Visible = false) and re-renders — the notehead
+    // count is the real SVG-structure probe that the notation staff is
+    // actually gone, not just a claim the toggle "did something". OSMD
+    // builds a brand-new Cursor on every such render (see Notation.svelte's
+    // own doc comment on `getCursor()`), and its `onRerender` callback
+    // re-walks click-to-select positions and re-applies whatever is
+    // currently selected — the highlight + Inspector pitch below prove
+    // selection survived the mode switch, not just that the staff hid.
+    await expect(page.locator(".notation-host .vf-notehead")).toHaveCount(0);
+    await expect(page.locator(".event-highlight")).toBeVisible();
+    const pitchRow = page.locator(".inspector-row").filter({ has: page.locator(".inspector-label", { hasText: "Pitch" }) });
+    await expect(pitchRow.locator(".stepper-value")).toHaveText(originalPitchDisplay);
+
+    await bothButton.click();
+    await expect(bothButton).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".notation-host .vf-notehead")).toHaveCount(noteheadCountBoth);
+    await expect(page.locator(".event-highlight")).toBeVisible();
+    await expect(pitchRow.locator(".stepper-value")).toHaveText(originalPitchDisplay);
+  });
+
   test("pitch-up edit applies and settles", async () => {
     editedMidiPitch = clampPitch(originalMidiPitch + 1);
     editedPitchDisplay = pitchToName(editedMidiPitch);

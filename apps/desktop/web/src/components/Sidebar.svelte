@@ -18,6 +18,7 @@
   import type { PdfPageSize } from "../lib/exportPdf";
   import { isTauri, saveExport, savePdfBytes } from "../lib/saveExport";
   import type { EditOp, ProjectExportSummary, ScoreEvent, ScorePart } from "../lib/types";
+  import type { ViewMode } from "../lib/viewMode";
 
   interface Props {
     collapsed: boolean;
@@ -26,8 +27,8 @@
     projectId: string;
     part: ScorePart | null;
     tabAvailable: boolean;
-    tabVisible: boolean;
-    onTabVisibleChange: (visible: boolean) => void;
+    viewMode: ViewMode;
+    onViewModeChange: (mode: ViewMode) => void;
     zoomPercent: number;
     onZoomChange: (percent: number) => void;
     exports: ProjectExportSummary[];
@@ -40,8 +41,8 @@
     projectId,
     part,
     tabAvailable,
-    tabVisible,
-    onTabVisibleChange,
+    viewMode,
+    onViewModeChange,
     zoomPercent,
     onZoomChange,
     exports: exportItems,
@@ -244,6 +245,14 @@
     tempoClientError = null;
     applyOp("tempo", { type: "set_part_fact", field: "tempoBpm", value });
   }
+
+  // --- View: notation view mode ---------------------------------------------
+
+  const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
+    { value: "notation", label: "Notation" },
+    { value: "tab", label: "Tab" },
+    { value: "both", label: "Both" },
+  ];
 
   // --- Undo / redo / revert -------------------------------------------------
 
@@ -766,18 +775,22 @@
       <section class="section">
         <h2 class="section-title">View</h2>
         <div class="view-row">
-          <span class="view-label">Tab staff</span>
-          <button
-            type="button"
-            class="toggle"
-            class:on={tabVisible}
-            disabled={!tabAvailable}
-            aria-pressed={tabVisible}
-            title={tabAvailable ? "Show or hide the TAB staff" : "This score has no TAB staff"}
-            onclick={() => onTabVisibleChange(!tabVisible)}
-          >
-            <span class="toggle-knob"></span>
-          </button>
+          <span class="view-label">Notation view</span>
+          <div class="view-mode-picker" role="group" aria-label="Notation view">
+            {#each VIEW_MODE_OPTIONS as { value, label } (value)}
+              <button
+                type="button"
+                class="view-mode-button"
+                class:active={viewMode === value}
+                disabled={!tabAvailable}
+                aria-pressed={viewMode === value}
+                title={tabAvailable ? label : "This score has no TAB staff"}
+                onclick={() => onViewModeChange(value)}
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
         </div>
         <div class="view-row">
           <span class="view-label">Zoom</span>
@@ -974,6 +987,43 @@
   .view-label {
     font-size: 13px;
     color: var(--text);
+  }
+
+  /* Notation/Tab/Both segmented control — same visual language as the PDF
+   * page-size picker below (`.pdf-page-size`/`.pdf-page-size-button`),
+   * deliberately kept as its own class pair rather than reused: they live
+   * in different sections and nothing ties their markup together beyond
+   * looking alike. */
+  .view-mode-picker {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .view-mode-button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .view-mode-button:not(:first-child) {
+    border-left: 1px solid var(--border);
+  }
+
+  .view-mode-button.active {
+    background: var(--accent);
+    color: #1e1d21;
+  }
+
+  .view-mode-button:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   .toggle {

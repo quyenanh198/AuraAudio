@@ -27,16 +27,23 @@
 
   import { editor } from "../lib/editor";
   import { nearestEvent, type EventPosition } from "../lib/correlate";
+  import type { ViewMode } from "../lib/viewMode";
 
   interface Props {
     /** 1.0 = 100%. Applied via OSMD's `zoom` field + re-render (verified
      * lowercase `zoom`, not `Zoom`, against the installed 2.1.2 typings —
      * the brief's guess at casing was wrong). */
     zoom: number;
-    /** Whether the guitar TAB staff (if the loaded score has one) is shown. */
-    tabVisible: boolean;
+    /** Which staves show: standard notation only, TAB only, or both — see
+     * `applyViewMode()` below for the mechanism. For a score with no TAB
+     * staff at all (e.g. piano), every mode renders identically (full
+     * display) — `applyViewMode()` itself guards this, so an inconsistent
+     * value reaching this prop (e.g. a persisted "tab" from an earlier
+     * guitar project applied before the caller knows this project has no
+     * TAB staff) can never blank the score. */
+    viewMode: ViewMode;
     /** Called after every OSMD `render()` triggered by a prop change
-     * (zoom/tab visibility), i.e. every time OSMD is known to have built a
+     * (zoom/view mode), i.e. every time OSMD is known to have built a
      * brand-new `Cursor` internally. `osmd.render()` does not preserve or
      * re-attach the previous cursor — it constructs a fresh one — so the
      * caller must use this to re-assert cursor visibility/position against
@@ -49,7 +56,7 @@
     onRerender?: () => void;
   }
 
-  let { zoom, tabVisible, onRerender }: Props = $props();
+  let { zoom, viewMode, onRerender }: Props = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let osmd: OpenSheetMusicDisplay | null = null;
@@ -174,22 +181,43 @@
   // MusicalScore/VoiceData/Staff.d.ts) on every staff of every
   // `osmd.Sheet.Instruments[i].Staves`. The guitar exporter (task-1b,
   // `packages/musicxml` commit 0126abf) emits notation+TAB as two
-  // `PartStaff`s bracketed under one Instrument, so flagging the TAB staff's
-  // `Visible = false` and calling `updateGraphic()` + `render()` hides it
-  // cleanly through OSMD's own layout — no re-parsing or string surgery on
-  // the MusicXML needed. Piano scores have no `isTab` staff, so this is a
-  // no-op for them (tabAvailable is false and the toggle is hidden by the
-  // caller in that case anyway).
+  // `PartStaff`s bracketed under one Instrument, so flagging a staff's own
+  // `Visible` and calling `updateGraphic()` + `render()` hides it cleanly
+  // through OSMD's own layout — no re-parsing or string surgery on the
+  // MusicXML needed. Extends the SAME two-state mechanism the old "Tab
+  // staff" toggle used (it only ever flagged the TAB staff) to the new
+  // three-way view mode by *also* flagging the notation staff for the new
+  // "tab"-only case — one staff-visibility mechanism, symmetric across both
+  // staff kinds, not two different ones.
   function tabStaves(): Staff[] {
     if (!osmd?.Sheet) return [];
     return osmd.Sheet.Instruments.flatMap((instrument) => instrument.Staves).filter((staff) => staff.isTab);
   }
 
-  function applyTabVisibility(): void {
+  function notationStaves(): Staff[] {
+    if (!osmd?.Sheet) return [];
+    return osmd.Sheet.Instruments.flatMap((instrument) => instrument.Staves).filter((staff) => !staff.isTab);
+  }
+
+  /** Piano scores (and any other score with no TAB staff) have no `isTab`
+   * staff at all — self-guarding no-op here (rather than relying on the
+   * caller's own `tabAvailable` check) means an inconsistent `viewMode`
+   * value reaching this component (e.g. a "tab"/"notation" choice persisted
+   * from an earlier GUITAR project, applied for one render before the
+   * caller's own instrument check catches up — see viewMode.ts's
+   * `resolveViewMode`) can never hide EVERY staff and blank the score: with
+   * no real TAB staff to distinguish, every mode renders identically (full
+   * display), matching the OLD toggle's existing no-op-for-piano behavior
+   * (`if (staves.length === 0) return;`) exactly. */
+  function applyViewMode(): void {
     if (!osmd) return;
-    const staves = tabStaves();
-    if (staves.length === 0) return;
-    for (const staff of staves) staff.Visible = tabVisible;
+    const tab = tabStaves();
+    if (tab.length === 0) return;
+    const notation = notationStaves();
+    const showNotation = viewMode !== "tab";
+    const showTab = viewMode !== "notation";
+    for (const staff of notation) staff.Visible = showNotation;
+    for (const staff of tab) staff.Visible = showTab;
     osmd.updateGraphic();
     osmd.render();
     onRerender?.();
@@ -203,10 +231,10 @@
   }
 
   $effect(() => {
-    // Re-read here (not just call the functions) so this effect re-runs
-    // whenever `tabVisible` or `ready` changes.
-    void tabVisible;
-    if (ready) applyTabVisibility();
+    // Re-read here (not just call the function) so this effect re-runs
+    // whenever `viewMode` or `ready` changes.
+    void viewMode;
+    if (ready) applyViewMode();
   });
 
   $effect(() => {
@@ -227,7 +255,7 @@
     await osmd.load(xml);
     osmd.zoom = zoom;
     osmd.render();
-    applyTabVisibility();
+    applyViewMode();
     ready = true;
   }
 
@@ -243,7 +271,7 @@
     if (!osmd) throw new Error("loadMusicXml() must resolve before getCursor()");
     // Every method below reads `requireOsmd().cursor` freshly ON EACH CALL
     // rather than closing over a single `Cursor` captured here — `osmd.render()`
-    // (called by applyZoom()/applyTabVisibility() above on every zoom/tab
+    // (called by applyZoom()/applyViewMode() above on every zoom/view-mode
     // toggle) constructs a BRAND NEW Cursor internally and does not reuse or
     // update the previous one. A handle that captured `osmd.cursor` once
     // would keep driving that discarded Cursor forever after the first
@@ -288,8 +316,28 @@
      there isn't for e.g. a canvas. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="notation-host" bind:this={container} onclick={handleContainerClick}>
+<div class="notation-wrapper">
+  <div class="notation-host" bind:this={container} onclick={handleContainerClick}></div>
   {#if highlightBox}
+    <!-- DOM-ownership fix (found via the view-mode e2e test): `.event-highlight`
+         must NOT be a child of `.notation-host` — OSMD's `render()` (called by
+         applyZoom()/applyViewMode() on every zoom change or view-mode switch,
+         i.e. every re-render after the FIRST) directly manipulates `container`'s
+         DOM (it clears and redraws its own SVG output there), which silently
+         drops any Svelte-rendered sibling nodes living INSIDE that same
+         container along with it — the reactive `highlightBox` state stays
+         perfectly correct (confirmed by direct inspection), but the actual DOM
+         node Svelte thinks it already inserted is gone, so nothing ever
+         reappears despite highlightEvent() being re-run afterward and computing
+         the right box. A LATENT bug for zoom too (this is the exact same
+         re-render path), just never one an existing e2e assertion happened to
+         check right after a zoom change — the view-mode work is what surfaced
+         it. Moving this div to be a SIBLING of `.notation-host` (both inside
+         `.notation-wrapper`, which now owns the `position: relative` this
+         needs) keeps it entirely outside whatever `container` gets cleared to,
+         while `unitToPx()`'s coordinate math is unaffected: `.notation-host`
+         has no margin/border/padding of its own, so its top-left is still
+         pixel-identical to `.notation-wrapper`'s. -->
     <div
       class="event-highlight"
       style="left: {highlightBox.left}px; top: {highlightBox.top}px; width: {highlightBox.width}px; height: {highlightBox.height}px;"
@@ -298,6 +346,11 @@
 </div>
 
 <style>
+  .notation-wrapper {
+    width: 100%;
+    position: relative;
+  }
+
   .notation-host {
     width: 100%;
     position: relative;
@@ -306,7 +359,9 @@
   /* Deliberately distinct from OSMD's own playback cursor (a thin vertical
    * bar) — this is a filled, glowing amber rectangle so a selected note
    * reads as "selected", not "currently playing". Never touches OSMD's SVG
-   * internals — purely an absolutely-positioned overlay div. */
+   * internals — purely an absolutely-positioned overlay div, and — see the
+   * DOM-ownership comment above — deliberately NOT a child of `.notation-host`
+   * any more, so OSMD's own direct DOM writes there can never silently drop it. */
   .event-highlight {
     position: absolute;
     box-sizing: border-box;

@@ -12,6 +12,7 @@
   import { createSynthSource, type SynthInstrument, type SynthPlaybackSource } from "../lib/synth";
   import { buildTimeline, cursorIndexAt, desiredNextCallsFor, planCursorMove, type TimelineEntry } from "../lib/timeline";
   import type { ProjectListItem, ScoreJson, ScorePart } from "../lib/types";
+  import { loadStoredViewMode, resolveViewMode, saveStoredViewMode, type ViewMode } from "../lib/viewMode";
   import Notation, { type OSMDCursorHandle } from "./Notation.svelte";
   import Sidebar from "./Sidebar.svelte";
   import Transport from "./Transport.svelte";
@@ -52,7 +53,13 @@
 
   let sidebarCollapsed = $state(false);
   let zoomPercent = $state(100);
-  let tabVisible = $state(true);
+  /** Which staves show — see viewMode.ts's `resolveViewMode`/
+   * `defaultViewModeFor`-equivalent logic and Notation.svelte's
+   * `applyViewMode()` for the mechanism. Seeded with the OLD toggle's own
+   * default ("both" staves shown, i.e. nothing hidden) until `loadScore()`
+   * resolves the real per-project value (persisted choice vs. this
+   * project's own instrument — see there). */
+  let viewMode = $state<ViewMode>("both");
   /** Whether the user dismissed the current rederive-failure banner (Task 7
    * Step 4). Reset to `false` whenever a NEW `editor.rederiveError` value
    * arrives — see the refresh-loop `$effect` below — so a fresh failure
@@ -133,8 +140,9 @@
     zoomPercent = clampZoom(percent);
   }
 
-  function onTabVisibleChange(visible: boolean): void {
-    tabVisible = visible;
+  function onViewModeChange(mode: ViewMode): void {
+    viewMode = mode;
+    saveStoredViewMode(mode);
   }
 
   function toggleSidebar(): void {
@@ -197,6 +205,26 @@
         for (let i = 0; i < notes.length; i += 1) {
           const note = notes[i];
           if (note.isRest()) continue;
+          // View-mode fix: a note on a currently HIDDEN staff (Staff.Visible
+          // = false, from the view-mode staff filtering in Notation.svelte's
+          // applyViewMode()) is excluded from position/click-correlation
+          // entirely, not just deduped away in favor of a visible sibling —
+          // OSMD's cursor still walks it structurally either way (visibility
+          // is a rendering concern, not a musical/iterator one), but a
+          // hidden staff isn't part of the current layout pass, so its
+          // graphical position can't be trusted as a click/highlight target.
+          // Discovered via Tab-only mode: correlate.ts's cross-staff dedupe
+          // (dedupeStepNotes) always kept the FIRST-seen staff's position
+          // for a cross-staff same-pitch duplicate, which — before the
+          // three-way view mode existed — was always the notation staff,
+          // always visible (the old toggle only ever hid TAB). Tab-only
+          // hides that exact staff instead, so dedupe kept an untrustworthy
+          // hidden-staff position and the selection highlight silently
+          // vanished. Filtering hidden-staff notes out of the walk here
+          // means only the CURRENTLY VISIBLE staff's own note(s) are ever
+          // candidates, so dedupe/matching never has to choose between a
+          // visible and a hidden position in the first place.
+          if (!note.ParentStaff.isVisible()) continue;
           const pos = gNotes[i].PositionAndShape.AbsolutePosition;
           stepEntry.notes.push({
             pitch: midiPitchOf(note),
@@ -237,8 +265,8 @@
   }
 
   /** IMPORTANT 2: `osmd.render()` (triggered by Notation's applyZoom()/
-   * applyTabVisibility() on every zoom change or TAB-staff toggle)
-   * constructs a brand-new OSMD Cursor internally — the previous one is
+   * applyViewMode() on every zoom change or view-mode switch) constructs
+   * a brand-new OSMD Cursor internally — the previous one is
    * simply discarded, not updated in place. Notation's `getCursor()`
    * handle reads `osmd.cursor` fresh on every call (see its own comment),
    * so `cursorHandle` itself keeps driving whichever Cursor is current —
@@ -694,7 +722,11 @@
 
       project = found;
       score = scoreJson;
-      tabVisible = true;
+      // Resolved against THIS project's own instrument, not blindly applied
+      // — see viewMode.ts's `resolveViewMode` doc comment for why a
+      // persisted "tab"/"both" choice from an earlier guitar project must
+      // not carry over to a piano one.
+      viewMode = resolveViewMode(loadStoredViewMode(), scoreJson.parts[0]?.instrument === "guitar");
       zoomPercent = 100;
 
       synthSource = createSynthSource(scoreJson, resolveSynthInstrument(scoreJson.parts[0]));
@@ -810,8 +842,8 @@
         {projectId}
         {part}
         {tabAvailable}
-        {tabVisible}
-        {onTabVisibleChange}
+        {viewMode}
+        {onViewModeChange}
         {zoomPercent}
         {onZoomChange}
         exports={project?.exports ?? []}
@@ -852,7 +884,7 @@
           <Notation
             bind:this={notation}
             zoom={zoomPercent / 100}
-            {tabVisible}
+            {viewMode}
             onRerender={handleNotationRerender}
           />
         </div>
