@@ -14,6 +14,7 @@
     stepOnset,
     validateMeasureNumber,
   } from "../lib/noteEdit";
+  import type { PdfPageSize } from "../lib/exportPdf";
   import { isTauri, saveExport, savePdfBytes } from "../lib/saveExport";
   import type { EditOp, ProjectExportSummary, ScoreEvent, ScorePart } from "../lib/types";
 
@@ -318,6 +319,46 @@
    * formats do. */
   let pdfExporting = $state(false);
 
+  // --- PDF page size (A4 / Letter) --------------------------------------
+  //
+  // Client-side-only preference (nothing server-side depends on it, unlike
+  // the two `<a download>` exports above), so it's read/written straight
+  // to localStorage rather than plumbed through the project/editor state --
+  // no existing preference-persistence pattern to follow elsewhere in this
+  // codebase (checked: no other `localStorage` use in src/). This is the
+  // Tauri desktop webview (real localStorage, not a sandboxed third-party
+  // iframe), but reads/writes are still wrapped in try/catch: a private
+  // window, disabled site data, or a first render before any prior choice
+  // was ever saved should all just fall back to the default rather than
+  // throw and break the Export section.
+  const PDF_PAGE_SIZE_STORAGE_KEY = "auraaudio.pdfPageSize";
+  const PDF_PAGE_SIZE_OPTIONS: { value: PdfPageSize; label: string }[] = [
+    { value: "A4", label: "A4" },
+    { value: "Letter", label: "Letter" },
+  ];
+
+  function loadStoredPdfPageSize(): PdfPageSize {
+    try {
+      const stored = localStorage.getItem(PDF_PAGE_SIZE_STORAGE_KEY);
+      if (stored === "A4" || stored === "Letter") return stored;
+    } catch {
+      // Ignore -- fall back to the default below.
+    }
+    return "A4";
+  }
+
+  let pdfPageSize = $state<PdfPageSize>(loadStoredPdfPageSize());
+
+  function handlePdfPageSizeChange(value: PdfPageSize): void {
+    pdfPageSize = value;
+    try {
+      localStorage.setItem(PDF_PAGE_SIZE_STORAGE_KEY, value);
+    } catch {
+      // Ignore -- the picker still reflects the choice for this session
+      // even if it can't be persisted for the next one.
+    }
+  }
+
   function showExportSaved(format: string): void {
     exportSavedFormat = { ...exportSavedFormat, [format]: true };
     const pending = exportSavedTimeouts.get(format);
@@ -379,6 +420,11 @@
    * "fallback" mean a real download happened, so both show the same
    * transient confirmation; only "cancelled" (the user dismissed the
    * native dialog) is a no-op, matching the other two exports' contract.
+   *
+   * Page size: `pdfPageSize` (the segmented control next to this button,
+   * persisted to localStorage under PDF_PAGE_SIZE_STORAGE_KEY) is passed
+   * straight through to `exportScoreToPdf` — it drives both OSMD's own
+   * page layout and the PDF page dimensions, see exportPdf.ts.
    */
   async function handleExportPdfClick(): Promise<void> {
     if (pdfExporting) return;
@@ -406,7 +452,7 @@
       // actually clicks "Export PDF" (per rules/web/performance.md:
       // "Dynamically import heavy libraries").
       const { exportScoreToPdf } = await import("../lib/exportPdf");
-      const bytes = await exportScoreToPdf(xmlText);
+      const bytes = await exportScoreToPdf(xmlText, pdfPageSize);
       const result = await savePdfBytes(bytes, sanitizedFilename("pdf"));
       if (result === "saved" || result === "fallback") {
         showExportSaved("pdf");
@@ -765,6 +811,19 @@
             </div>
           {/each}
           <div class="export-row">
+            <div class="pdf-page-size" role="group" aria-label="PDF page size">
+              {#each PDF_PAGE_SIZE_OPTIONS as { value, label } (value)}
+                <button
+                  type="button"
+                  class="pdf-page-size-button"
+                  class:active={pdfPageSize === value}
+                  aria-pressed={pdfPageSize === value}
+                  onclick={() => handlePdfPageSizeChange(value)}
+                >
+                  {label}
+                </button>
+              {/each}
+            </div>
             <button
               type="button"
               class="export-button"
@@ -1004,6 +1063,36 @@
     opacity: 0.4;
     cursor: default;
     pointer-events: none;
+  }
+
+  /* --- PDF page size picker ---------------------------------------------- */
+
+  .pdf-page-size {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    align-self: center;
+  }
+
+  .pdf-page-size-button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .pdf-page-size-button:not(:first-child) {
+    border-left: 1px solid var(--border);
+  }
+
+  .pdf-page-size-button.active {
+    background: var(--accent);
+    color: #1e1d21;
   }
 
   /* --- Export native-save confirmation/error (Task 9) -------------------- */

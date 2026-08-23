@@ -1989,6 +1989,14 @@ for this sub-project; worth a small follow-up (e.g. an `autouse` fixture
 resetting the env vars, or simply keeping the two suites permanently
 separate in any future combined-sweep tooling).
 
+**PDF export page size (2026-08-23).** Sidebar.svelte's "Export PDF" now
+offers a page-size choice (A4/Letter, default A4, persisted to
+localStorage) — `exportPdf.ts`'s `PDF_PAGE_FORMATS` maps each to OSMD's
+own `A4_P`/`Letter_P` PageFormatStandards ids (both verified present in
+the installed 2.1.2 bundle) and the matching jsPDF/svg2pdf mm dimensions,
+and the offscreen render container width now derives from the selected
+format's own physical width instead of being hardcoded to A4's.
+
 ## Quick start for a fresh session
 
 ```bash

@@ -119,6 +119,32 @@ function expectedPitchXmlFragment(midiPitch: number, keyString: string, outPath:
   return normalizeXml(result.stdout);
 }
 
+/** Clicks "Export PDF", captures the resulting browser download, and
+ * asserts it's a plausible real PDF -- shared by the default-A4 case and
+ * the Letter-page-size case below so the (identical) download/assertion
+ * plumbing isn't duplicated per page size. See the A4 test's own inline
+ * comments for why each individual assertion (magic bytes, size floor,
+ * "Saved" confirmation timing) is checked the way it is; those apply
+ * here unchanged regardless of which page size produced the bytes.
+ */
+async function exportPdfAndAssertBytes(page: Page, workDir: string, downloadedFilename: string): Promise<void> {
+  const downloadPromise = page.waitForEvent("download", { timeout: RENDER_TIMEOUT_MS });
+  await page.getByRole("button", { name: "Export PDF", exact: true }).click();
+  const download = await downloadPromise;
+
+  const pdfRow = page
+    .locator(".export-row")
+    .filter({ has: page.getByRole("button", { name: "Export PDF", exact: true }) });
+  await expect(pdfRow.locator(".export-status")).toBeVisible();
+
+  const downloadedPath = path.join(workDir, downloadedFilename);
+  await download.saveAs(downloadedPath);
+  const bytes = fs.readFileSync(downloadedPath);
+
+  expect(bytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
+  expect(bytes.length).toBeGreaterThan(5_000);
+}
+
 test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
   let page: Page;
   let projectId: string;
@@ -277,34 +303,48 @@ test.describe.serial("transcribe -> edit -> undo -> export journey", () => {
     // MusicXML export above (that one's `<a>` is static/server-backed;
     // this one's is built and clicked from JS, but the resulting browser
     // download event is indistinguishable to Playwright either way).
-    const downloadPromise = page.waitForEvent("download", { timeout: RENDER_TIMEOUT_MS });
-    await page.getByRole("button", { name: "Export PDF", exact: true }).click();
-    const download = await downloadPromise;
-
-    // Checked BEFORE the file save/read below (not after): the "Saved"
-    // confirmation (`.export-status`, shown for both "saved" and
-    // "fallback" results — see handleExportPdfClick's own comment) fades
-    // out and is removed from the DOM after EXPORT_STATUS_MS (2s,
-    // Sidebar.svelte) — asserting on it immediately, before any
-    // additional file I/O, avoids racing that fade-out.
-    const pdfRow = page
-      .locator(".export-row")
-      .filter({ has: page.getByRole("button", { name: "Export PDF", exact: true }) });
-    await expect(pdfRow.locator(".export-status")).toBeVisible();
-
-    const downloadedPath = path.join(workDir, "exported.pdf");
-    await download.saveAs(downloadedPath);
-    const bytes = fs.readFileSync(downloadedPath);
-
+    //
+    // Runs with the page-size picker at its default (A4) — nothing in
+    // this test has touched it yet.
+    //
     // "%PDF" is the standard PDF file signature (the first thing any real
     // reader checks) -- confirms jsPDF actually produced a PDF document,
-    // not e.g. an empty file or a stringified error.
-    expect(bytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
-    // A real rendered page (fonts, engraving, at least one system) is
-    // comfortably more than a few KB -- jsPDF's own fixed per-document
-    // overhead alone is already a meaningful fraction of this. A value in
-    // the hundreds of bytes would mean an essentially-empty/blank page
-    // silently made it through instead of the real notation.
-    expect(bytes.length).toBeGreaterThan(5_000);
+    // not e.g. an empty file or a stringified error. A real rendered page
+    // (fonts, engraving, at least one system) is comfortably more than a
+    // few KB -- jsPDF's own fixed per-document overhead alone is already a
+    // meaningful fraction of this. A value in the hundreds of bytes would
+    // mean an essentially-empty/blank page silently made it through
+    // instead of the real notation. The "Saved" confirmation
+    // (`.export-status`) is checked BEFORE the file save/read (not after):
+    // it fades out and is removed from the DOM after EXPORT_STATUS_MS (2s,
+    // Sidebar.svelte), and asserting on it immediately, before any
+    // additional file I/O, avoids racing that fade-out. See
+    // exportPdfAndAssertBytes() above for the shared implementation.
+    await exportPdfAndAssertBytes(page, workDir, "exported.pdf");
+  });
+
+  test("selects Letter page size and exports a real Letter-sized PDF", async () => {
+    // Reuses the SAME transcribed/edited project state as the A4 case
+    // above (this describe.serial block shares one `page`) rather than
+    // re-running the whole upload -> transcribe -> edit journey a second
+    // time just to vary one export option -- per this spec's own
+    // "reuse, don't double the whole journey" design (see the PDF export
+    // Task brief this addresses).
+    const pageSizeGroup = page.getByRole("group", { name: "PDF page size" });
+    const letterButton = pageSizeGroup.getByRole("button", { name: "Letter", exact: true });
+    await letterButton.click();
+    await expect(letterButton).toHaveAttribute("aria-pressed", "true");
+
+    // Exercises the real, non-mocked exportPdf.ts path end-to-end with
+    // "Letter" selected -- OSMD's own `Letter_P` PageFormatStandards id
+    // (215.9mm x 279.4mm) drives the offscreen render, and jsPDF's page is
+    // constructed at the same physical size (see exportPdf.ts's
+    // PDF_PAGE_FORMATS) -- the exact pairing exportPdf.test.ts's unit
+    // tests assert in isolation with mocked jsPDF/svg2pdf.js. This is the
+    // one place that exercises a REAL Letter-sized OSMD render + PDF
+    // assembly together, the same role the A4 case above already plays
+    // for A4 (see that test's own comment on why this can't be covered by
+    // exportPdf.test.ts alone).
+    await exportPdfAndAssertBytes(page, workDir, "exported-letter.pdf");
   });
 });
