@@ -28,12 +28,16 @@
 //!   `spawn_backend_process`'s doc comment for why that split matters.
 //! - Poll `GET /healthz` until it succeeds, the child process is observed to
 //!   have exited, or a bounded timeout elapses. The child's stdout AND
-//!   stderr are both redirected to `<app_data_dir>/backend.log` (see
-//!   `spawn_backend_process`) so a packaged-app startup failure is
-//!   diagnosable even when launched from a desktop icon with no attached
-//!   terminal — and, on Windows, so the child always has a valid stdio
-//!   handle even though it no longer has a console at all (Bug C's
-//!   `--noconsole` PyInstaller build, see `CREATE_NO_WINDOW`'s doc comment).
+//!   stderr are both redirected to
+//!   `<app_data_dir>/logs/backend-stdio.log` (see `spawn_backend_process`
+//!   and `BACKEND_LOG_SUBDIR`'s doc comment for why that's the SAME `logs/`
+//!   directory, but a DIFFERENT file, than the one
+//!   `apps/desktop/run_backend.py`'s own `logging`-module output goes to)
+//!   so a packaged-app startup failure is diagnosable even when launched
+//!   from a desktop icon with no attached terminal — and, on Windows, so
+//!   the child always has a valid stdio handle even though it no longer
+//!   has a console at all (Bug C's `--noconsole` PyInstaller build, see
+//!   `CREATE_NO_WINDOW`'s doc comment).
 //! - Show the main window once healthy, or once the failure is determined
 //!   (there is no frontend listener for a failure event today — see the
 //!   `poll_health_and_gate_window` doc comment — so the only externally
@@ -77,13 +81,41 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// number, which is a separate concern this task does not need to cover.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// File name (relative to the resolved app-data directory) the backend
-/// child's stderr is redirected to. Stderr is inherited by default for a
+/// Subdirectory (relative to the resolved app-data directory) ALL backend
+/// logging lives under — the SAME `logs/` directory
+/// `apps/desktop/run_backend.py` creates and points its own rotating
+/// `logging`-module handler at (`AURA_DATA_DIR/logs/backend.log`, see that
+/// file's module docstring). Review fix: an earlier revision of this file
+/// wrote its raw stdio capture to a flat `<app_data_dir>/backend.log` —a
+/// DIFFERENT path from Python's own `logs/backend.log` — so the exact
+/// startup-crash scenario this capture exists to diagnose pointed users at
+/// a near-empty file while the real detail sat one directory over. Both
+/// writers now share the same parent directory (though never the same
+/// FILE — see `BACKEND_STDIO_LOG_FILENAME`'s doc comment for why).
+const BACKEND_LOG_SUBDIR: &str = "logs";
+
+/// File name (inside `BACKEND_LOG_SUBDIR`) the backend child's stdout AND
+/// stderr are redirected to. Both streams are inherited by default for a
 /// `Command`, which is fine under a terminal but goes nowhere visible for a
-/// packaged `.deb` launched from a desktop icon — capturing it here makes a
-/// real Python traceback (bad data-dir permissions, `init_schema()`
-/// raising, a PyInstaller import failure, etc.) actually diagnosable.
-const BACKEND_LOG_FILENAME: &str = "backend.log";
+/// packaged `.deb`/`.exe` launched from a desktop icon — capturing them
+/// here makes a real Python traceback (bad data-dir permissions,
+/// `init_schema()` raising, a PyInstaller import failure, etc.) actually
+/// diagnosable, including the class of crash that happens BEFORE
+/// `run_backend.py`'s own `logging`-module setup ever runs (e.g. a bare
+/// `ImportError` at module load).
+///
+/// Deliberately a DIFFERENT filename from Python's own `logs/backend.log`
+/// (not the same file): `run_backend.py` also redirects `sys.stdout`/
+/// `sys.stderr` into its own rotating handler when they'd otherwise be
+/// `None` (the PyInstaller `--noconsole` pitfall) — if this process's raw
+/// OS-level stdio capture and Python's own file-handle-level writes ever
+/// both targeted the exact same path, two independent writers appending to
+/// one file risks interleaved/corrupted lines (no coordination between a
+/// Rust-owned `File` handle and a Python-owned one). Separate files in the
+/// same directory means a startup crash is still one `ls logs/` away
+/// regardless of which side of that Python-internal handoff it happened
+/// on, with no shared-file risk.
+const BACKEND_STDIO_LOG_FILENAME: &str = "backend-stdio.log";
 
 /// Windows `CreateProcess` flag suppressing the console window a
 /// console-subsystem child would otherwise get (`CREATE_NO_WINDOW`, winapi
@@ -158,7 +190,22 @@ pub fn spawn_backend_process(app: &AppHandle) -> bool {
   };
   let database_url = format!("sqlite:///{}/aura.db", data_dir.display());
 
-  let log_path = data_dir.join(BACKEND_LOG_FILENAME);
+  // Same `logs/` directory `run_backend.py` creates and writes its own
+  // rotating `logging`-module output to (`AURA_DATA_DIR/logs/backend.log`)
+  // — see `BACKEND_LOG_SUBDIR`'s doc comment for why unifying the parent
+  // directory (while keeping the two FILES separate) matters. Created here
+  // too, not just assumed present: this spawn can run before
+  // `run_backend.py` has had a chance to create it itself (e.g. the crash
+  // this capture exists to diagnose happens before Python's own `_log_dir
+  // .mkdir()` call).
+  let log_dir = data_dir.join(BACKEND_LOG_SUBDIR);
+  if let Err(err) = std::fs::create_dir_all(&log_dir) {
+    log::error!("could not create backend log directory {log_dir:?}: {err}");
+    show_main_window(app);
+    return false;
+  }
+
+  let log_path = log_dir.join(BACKEND_STDIO_LOG_FILENAME);
   let stderr_log = match OpenOptions::new().create(true).append(true).open(&log_path) {
     Ok(file) => file,
     Err(err) => {
@@ -213,7 +260,7 @@ pub fn spawn_backend_process(app: &AppHandle) -> bool {
     // packaged `.deb` launched from a desktop icon (no attached terminal),
     // and — since Bug C's `--noconsole` fix — goes nowhere USABLE on
     // Windows either (see the stdout_log comment above). See
-    // `BACKEND_LOG_FILENAME`'s doc comment.
+    // `BACKEND_STDIO_LOG_FILENAME`'s doc comment.
     .stdout(Stdio::from(stdout_log))
     .stderr(Stdio::from(stderr_log));
 
@@ -327,14 +374,18 @@ pub fn poll_health_and_gate_window(app: &AppHandle) {
     HealthPollOutcome::ChildExited(status) => {
       log::error!(
         "backend process exited after {:.2}s (before ever answering GET /healthz) with {status}; \
-         see {BACKEND_LOG_FILENAME} in the app data directory for details",
+         see the {BACKEND_LOG_SUBDIR}/ directory in the app data directory for details \
+         ({BACKEND_STDIO_LOG_FILENAME} for a raw stdout/stderr crash trace, backend.log for \
+         anything that reached Python's own logging setup)",
         started.elapsed().as_secs_f64()
       );
     }
     HealthPollOutcome::Timeout => {
       log::error!(
         "backend did not respond OK on GET /healthz within {:?} and the child process is \
-         still running; see {BACKEND_LOG_FILENAME} in the app data directory for details",
+         still running; see the {BACKEND_LOG_SUBDIR}/ directory in the app data directory for \
+         details ({BACKEND_STDIO_LOG_FILENAME} for a raw stdout/stderr crash trace, backend.log \
+         for anything that reached Python's own logging setup)",
         HEALTH_TIMEOUT
       );
     }
@@ -673,4 +724,44 @@ fn check_health_once(port: u16) -> bool {
   let _ = stream.read_to_string(&mut response);
 
   response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Review fix regression: locks in that the raw stdio capture this
+  /// module writes lands under the SAME `AURA_DATA_DIR/logs/` directory
+  /// `run_backend.py` uses for its own `logging`-module output (both must
+  /// agree on the parent directory — see `BACKEND_LOG_SUBDIR`'s doc
+  /// comment), but under a DIFFERENT filename than Python's own
+  /// `backend.log` (both must NOT agree on the exact file — two
+  /// independent writers appending to one path risks interleaved lines).
+  #[test]
+  fn stdio_log_path_shares_the_logs_subdir_but_not_pythons_own_filename() {
+    let data_dir = PathBuf::from("/fake/app-data-dir");
+    let log_dir = data_dir.join(BACKEND_LOG_SUBDIR);
+    let log_path = log_dir.join(BACKEND_STDIO_LOG_FILENAME);
+
+    assert_eq!(log_dir, PathBuf::from("/fake/app-data-dir/logs"));
+    assert_eq!(log_path, PathBuf::from("/fake/app-data-dir/logs/backend-stdio.log"));
+    // run_backend.py's own rotating handler writes to "backend.log" in
+    // this SAME directory (_BACKEND_LOG_PATH = _log_dir / "backend.log")
+    // -- this constant must never collide with that literal.
+    assert_ne!(BACKEND_STDIO_LOG_FILENAME, "backend.log");
+  }
+
+  #[test]
+  fn error_pointer_messages_name_the_logs_subdirectory() {
+    // The two poll_health_and_gate_window log::error! messages format
+    // BACKEND_LOG_SUBDIR/BACKEND_STDIO_LOG_FILENAME into their text (see
+    // that function) -- this doesn't re-run the formatting (no AppHandle
+    // available outside a real Tauri context to exercise that function
+    // directly), but pins the two constants those messages are built from
+    // to the values a user would actually need to go find the file,
+    // catching a future rename of either constant that isn't also
+    // reflected in the message text at review/read time.
+    assert_eq!(BACKEND_LOG_SUBDIR, "logs");
+    assert_eq!(BACKEND_STDIO_LOG_FILENAME, "backend-stdio.log");
+  }
 }

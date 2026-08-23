@@ -360,21 +360,44 @@ class TestWindowsCrashRegression:
 
     def test_onedrive_style_oserror_during_glob_does_not_crash(self, monkeypatch, tmp_path):
         # A cloud-redirected %LOCALAPPDATA% (OneDrive "Known Folder Move")
-        # can fail mid-walk with an OSError that ISN'T PermissionError and
-        # ISN'T in pathlib's narrow ignore-list (e.g. WinError 1920) --
-        # simulated here as a generic OSError raised by glob() itself.
+        # can fail MID-WALK with an OSError that ISN'T PermissionError and
+        # ISN'T in pathlib's narrow ignore-list (e.g. WinError 1920) -- real
+        # pathlib glob() is a LAZY GENERATOR (walks the tree incrementally,
+        # not "get everything or fail immediately"), so the faithful shape
+        # of this failure is "found some real matches, THEN the walk hits
+        # an inaccessible entry deeper in the tree" -- not a call that fails
+        # before glob() has produced anything at all (review fix: a plain
+        # function that raises synchronously, the previous version of this
+        # test, can never actually exercise `_safe_glob`'s
+        # `sorted(root.glob(pattern))` consuming a PARTIALLY-successful
+        # generator, only a call that fails before `glob()` even starts
+        # returning). This version is itself a generator: it yields one
+        # REAL match (a genuine ffmpeg build the walk found first) before
+        # raising on its next iteration.
         local_app_data = tmp_path / "LocalAppData"
         packages_root = local_app_data / "Microsoft" / "WinGet" / "Packages"
-        packages_root.mkdir(parents=True)
+        good_build_bin = packages_root / "Gyan.FFmpeg_first_hit" / "bin"
+        good_build_bin.mkdir(parents=True)
+        good_exe = good_build_bin / "ffmpeg.exe"
+        good_exe.write_bytes(b"stub")
         monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
 
         def _raising_glob(self, _pattern):
+            yield good_exe  # one real match, found before the failure
             raise OSError(1920, "The file cannot be accessed by the system")
 
         monkeypatch.setattr(binaries.Path, "glob", _raising_glob)
 
         resolved = binaries.resolve_binary("ffmpeg")
 
+        # sorted(root.glob(pattern)) (_safe_glob) must fully consume the
+        # generator before it can return anything -- a failure partway
+        # through means even the real match already yielded is discarded,
+        # not just the ones that would have come after the failure. This
+        # is still the correct, safe outcome (never found is honest; it
+        # would be a worse bug to silently return a truncated/inconsistent
+        # partial result), so `resolved` is still None here, same as the
+        # fail-immediately version of this test.
         assert resolved is None
 
     def test_permission_error_from_is_dir_guard_does_not_crash(self, monkeypatch, tmp_path):

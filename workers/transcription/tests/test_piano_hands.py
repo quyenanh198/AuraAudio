@@ -111,17 +111,39 @@ class TestDenseChordCap:
     tests prove the cap kicks in, stays fast even far beyond it, and never
     drops a note."""
 
-    def test_chord_at_cap_still_uses_full_exhaustive_split(self):
+    def test_chord_at_cap_still_uses_full_exhaustive_split(self, monkeypatch):
         # Exactly MAX_CHORD_SIZE pitches -- must NOT trigger the fallback,
         # i.e. every existing (small-chord) test's exact behavior is
-        # preserved up to and including the cap itself.
+        # preserved up to and including the cap itself. Review fix: output
+        # validity alone (every note gets a hand, from either code path)
+        # doesn't prove WHICH path ran -- spy on _synthesize_locked_split
+        # (the fallback's only implementation) and assert it was NOT
+        # called, so a future off-by-one in the `len(in_range) >
+        # MAX_CHORD_SIZE` comparison (e.g. `>=` instead of `>`) would fail
+        # this test even though the assignment it produces might still
+        # happen to look valid.
         from aura_worker import piano_hands
+
+        calls = []
+        real_synthesize = piano_hands._synthesize_locked_split
+
+        def _spy_synthesize(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_synthesize(*args, **kwargs)
+
+        monkeypatch.setattr(piano_hands, "_synthesize_locked_split", _spy_synthesize)
 
         pitches = list(range(40, 40 + piano_hands.MAX_CHORD_SIZE))  # 24 consecutive pitches
         events = [_event(p, "0/1") for p in pitches]
         assignment = assign_measure(events)
+
         assert len(assignment) == piano_hands.MAX_CHORD_SIZE
         assert set(assignment.values()) <= {"left", "right"}
+        assert calls == [], (
+            f"_synthesize_locked_split (the oversized-group fallback) was called "
+            f"{len(calls)} time(s) for a chord AT the cap -- it must only run for "
+            f"chords strictly OVER MAX_CHORD_SIZE"
+        )
 
     def test_oversized_chord_assigns_every_note_a_hand_without_hanging(self):
         import time

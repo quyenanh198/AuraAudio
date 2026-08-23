@@ -151,6 +151,14 @@ def test_rederive_reassigns_unlocked_updates_revision_and_exports(db_session):
     storage = LocalStorageClient()
     xml_bytes = storage.get_bytes(refreshed_xml.object_key)
     assert xml_bytes.startswith(b"<?xml")
+    # Review fix regression: rederive.py's score_json_to_musicxml call must
+    # thread the real project title through (same as the transcription
+    # export stage) -- without it, every re-derived export reverted to
+    # music21's own "Untitled" fallback (musicxml.export._apply_metadata),
+    # even though the project's real title ("Riff", set in
+    # _arrange_project) was available the whole time.
+    assert b"<movement-title>Riff</movement-title>" in xml_bytes
+    assert b"Untitled" not in xml_bytes
     midi_bytes = storage.get_bytes(refreshed_midi.object_key)
     assert midi_bytes[:4] == b"MThd"
 
@@ -237,7 +245,7 @@ def test_rederive_export_failure_marks_job_failed_but_keeps_revision(db_session,
 
     import aura_worker.rederive as rederive_module
 
-    def _boom(score, path):
+    def _boom(score, path, title=None):
         raise RuntimeError("musicxml export exploded")
 
     monkeypatch.setattr(rederive_module, "score_json_to_musicxml", _boom)

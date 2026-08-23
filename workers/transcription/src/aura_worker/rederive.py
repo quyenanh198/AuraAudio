@@ -164,7 +164,14 @@ def run_rederive_job(job_id: str) -> None:
             midi_path = Path(tmp) / "output.mid"
             xml_path = Path(tmp) / "output.musicxml"
             _write_midi_from_score(score, midi_path)
-            score_json_to_musicxml(score, xml_path)
+            # Review fix: without `title=`, score_json_to_musicxml falls
+            # back to "Untitled" (musicxml.export._apply_metadata) -- a
+            # rederive's re-exported MusicXML was reverting a project's
+            # real title to that fallback on every edit, since this call
+            # site was never updated when export.py's own stage threaded
+            # `ctx.job.project.title` through. `project` is already in
+            # scope (fetched above for `head_id`).
+            score_json_to_musicxml(score, xml_path, title=project.title)
             base = f"projects/{project.id}/exports/rev{revision.revision}"
             midi_key, xml_key = f"{base}/output.mid", f"{base}/output.musicxml"
             storage.put_bytes(midi_key, midi_path.read_bytes())
