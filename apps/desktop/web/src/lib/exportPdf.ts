@@ -84,6 +84,92 @@ const PDF_PAGE_FORMATS: Record<PdfPageSize, PdfPageFormat> = {
  * instead of being hardcoded to one. */
 const CSS_PX_PER_MM = 96 / 25.4;
 
+// --- Bug 2 fix: TAB fret numbers (and other VexFlow text) invisible in the
+// exported PDF -----------------------------------------------------------
+//
+// PROVEN root cause (see the session report for the full investigation,
+// including page renders at 1 page and at 48 pages): OSMD's TAB rendering
+// goes through VexFlow, and VexFlow's own SVG backend
+// (`Vex.Flow.SVGContext`, confirmed directly against the installed 2.1.2
+// bundle's `setRawFont()`) writes text `font-size` attributes as
+// **point-sized strings** -- e.g. `"10pt"` for a fret number, `"14pt"` for
+// a tempo mark -- because VexFlow's own internal font specs are always
+// `"<N>pt <family>"`. OSMD's OWN native labels (the project title, the
+// "Guitar" instrument name) go through a different rendering path and end
+// up with a plain unitless/px `font-size` ("20px") -- those were never
+// affected.
+//
+// svg2pdf.js 2.7.0's own `toPixels()` unit parser (vendored in
+// node_modules, not ours to edit) recognizes exactly two forms for a
+// `font-size` value: a bare number ("20") or an explicit "px" suffix
+// ("20px") -- verified directly against its regex,
+// `/^([\-0-9.]+)(px|)$/`. Any other unit, "pt" included, falls through to
+// its final `return 0`. That 0 flows straight into the PDF's `Tf` (set
+// font + SIZE) operator for that text run. svg2pdf.js still emits a
+// perfectly correct `Tj` (show text) operator right after it, with the
+// right glyph content and position -- so the fret-number text IS honestly
+// present in the PDF bytes, just rendered at font-size 0: invisible, in
+// every PDF viewer, on EVERY page. This was proven NOT to be a
+// dropped-text bug and NOT a large-score/pagination bug (a hypothesis
+// this task's brief raised): a 1-page, 4-note fixture reproduces it
+// identically to a 48-page, 950-measure one -- the notation staff's
+// noteheads/stems/clefs survive regardless of score size because they're
+// drawn as PATH glyphs (`renderGlyph`), never as `<text>`, so they never
+// go through this code path at all. That is exactly why only the TAB
+// numbers (and, incidentally, the tempo mark) vanished while the
+// notation staff above them kept rendering normally.
+//
+// Fixed HERE (rewriting the cloned SVG before it reaches svg2pdf.js)
+// rather than by patching the vendored package: `ptFontSizeToPx()` is the
+// pure half (unit-testable under this project's Node-only vitest config
+// -- see exportPdf.test.ts); `normalizeSvgFontSizeUnits()` is the
+// DOM-walking half that applies it to a rendered page, called from
+// renderScorePagesToSvg() below on the SAME DOM-only seam as everything
+// else in that function.
+
+/** 1pt = 4/3 px at the 96-CSS-px-per-inch scale svg2pdf.js's own
+ * `toPixels()` assumes (same dpi baseline as CSS_PX_PER_MM above: 96px per
+ * 25.4mm/72pt-per-inch, i.e. 96/72 = 4/3 px per pt). */
+const PX_PER_PT = 4 / 3;
+
+/** Rewrites a CSS `font-size` value ending in the literal unit `"pt"` (the
+ * exact form VexFlow's SVG backend emits -- see this section's header
+ * comment) to the equivalent bare-px numeric string svg2pdf.js's own unit
+ * parser understands. Any other value (already unitless, "px"-suffixed,
+ * "em"-suffixed, or simply not parseable as "<number>pt") is returned
+ * UNCHANGED -- this only ever touches the exact shape that was silently
+ * zeroing out, never anything svg2pdf.js already handles correctly. Pure
+ * string/number logic, no DOM -- see exportPdf.test.ts. */
+export function ptFontSizeToPx(value: string): string {
+  const match = value.match(/^(-?[0-9]*\.?[0-9]+)pt$/);
+  if (match === null) return value;
+  const points = parseFloat(match[1]);
+  if (!Number.isFinite(points)) return value;
+  // Rounded to a few decimal places -- svg2pdf.js's own px regex accepts
+  // any number of decimals, but an exact binary-float tail (e.g.
+  // "13.333333333333334") is pure noise in the SVG attribute for no
+  // precision benefit at print scale.
+  const px = Math.round(points * PX_PER_PT * 1000) / 1000;
+  return `${px}px`;
+}
+
+/** Walks `root` and every descendant, rewriting any `font-size` attribute
+ * that carries a "pt" value (see ptFontSizeToPx()) to its px equivalent,
+ * in place. DOM-only (Element.querySelectorAll/getAttribute/setAttribute)
+ * -- called from renderScorePagesToSvg() below, never unit-tested
+ * directly (same limitation as the rest of that function -- see this
+ * file's header comment); ptFontSizeToPx() itself carries the tested
+ * logic. */
+function normalizeSvgFontSizeUnits(root: Element): void {
+  const candidates: Element[] = [root, ...Array.from(root.querySelectorAll("[font-size]"))];
+  for (const el of candidates) {
+    const current = el.getAttribute("font-size");
+    if (current === null) continue;
+    const next = ptFontSizeToPx(current);
+    if (next !== current) el.setAttribute("font-size", next);
+  }
+}
+
 /** Offscreen render container width, in CSS px, for the given page format.
  * OSMD's non-"Endless" PageFormat layout scales each page's SVG to fill
  * the container's own `offsetWidth` -- confirmed against the installed
@@ -185,7 +271,17 @@ export async function renderScorePagesToSvg(
     // `document.body` itself (and removes when done, `cleanupTextMeasuring()`
     // in the installed 2.7.0 bundle) -- it never relies on the passed-in
     // element itself being attached/laid-out.
-    return svgs.map((svg) => svg.cloneNode(true) as SVGElement);
+    //
+    // Bug 2 fix: normalized IN PLACE on each clone, before returning --
+    // see normalizeSvgFontSizeUnits()'s own doc comment above for why this
+    // must happen here (fret numbers, tempo marks, and any other
+    // VexFlow-drawn text would otherwise render at font-size 0, invisible,
+    // once svg2pdf.js gets these pages).
+    return svgs.map((svg) => {
+      const clone = svg.cloneNode(true) as SVGElement;
+      normalizeSvgFontSizeUnits(clone);
+      return clone;
+    });
   } finally {
     osmd.clear();
     container.remove();

@@ -143,6 +143,51 @@ async function exportPdfAndAssertBytes(page: Page, workDir: string, downloadedFi
 
   expect(bytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
   expect(bytes.length).toBeGreaterThan(5_000);
+  assertFretNumbersRenderVisibly(bytes);
+}
+
+/** Bug 2 regression guard: the TAB staff's fret-number text must not just
+ * be PRESENT in the PDF bytes but actually VISIBLE -- i.e. drawn with a
+ * nonzero font size. See exportPdf.ts's giant header comment on
+ * `ptFontSizeToPx`/`normalizeSvgFontSizeUnits` for the full root-cause
+ * story: before that fix, VexFlow's "<N>pt"-style `font-size` on TAB
+ * fret-number `<text>` elements silently became a PDF `Tf` (set font +
+ * size) operator of exactly 0 -- the `Tj` (show text) operator right
+ * after it was still perfectly correct (right glyph, right position), so
+ * the text was honestly present in the file, just rendered at 0x0 and
+ * invisible in every real PDF viewer. A byte/string search for "2"/"0"
+ * alone would have passed on the broken build (the digits ARE in the
+ * file); checking each digit run's OWN preceding `Tf` size is what
+ * actually catches that regression.
+ *
+ * This project has no PDF-text-extraction library as a dependency, so
+ * this parses jsPDF's own uncompressed content stream (jsPDF defaults
+ * `compress: false` -- verified directly, and assemblePdfFromSvgPages()
+ * in exportPdf.ts never overrides it) directly: `BT ... ET` marks one
+ * text object, `/FN <size> Tf` sets the font+size for everything after it
+ * in that object, and `(...) Tj` shows one text run. Guitar frets in this
+ * fixture (see the guitar-pluck WAV's real detected pitches/strings) are
+ * plain 1-2 digit numbers, so any bare-digit `Tj` run is a plausible fret
+ * number -- this asserts at least one exists AND that every one of them
+ * was drawn with a real (nonzero) font size. */
+function assertFretNumbersRenderVisibly(pdfBytes: Buffer): void {
+  const content = pdfBytes.toString("latin1");
+  const textObjects = content.match(/BT[\s\S]*?ET/g) ?? [];
+
+  const digitRuns: number[] = [];
+  for (const obj of textObjects) {
+    const sizeMatch = obj.match(/\/F\d+\s+([\d.]+)\s+Tf/);
+    if (!sizeMatch) continue;
+    const fontSize = parseFloat(sizeMatch[1]);
+    for (const tjMatch of obj.matchAll(/\(([^)]*)\)\s*Tj/g)) {
+      if (/^\d{1,2}$/.test(tjMatch[1])) digitRuns.push(fontSize);
+    }
+  }
+
+  expect(digitRuns.length).toBeGreaterThan(0);
+  for (const fontSize of digitRuns) {
+    expect(fontSize).toBeGreaterThan(0);
+  }
 }
 
 test.describe.serial("transcribe -> edit -> undo -> export journey", () => {

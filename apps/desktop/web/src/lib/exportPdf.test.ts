@@ -326,3 +326,62 @@ describe("wrapTitleLines", () => {
     expect(lines).toEqual(["…"]);
   });
 });
+
+// ptFontSizeToPx() -- Bug 2 fix's pure half (see exportPdf.ts's own giant
+// header comment on this section for the full root-cause story: VexFlow's
+// SVG backend writes TAB fret numbers' -- and other VexFlow text's --
+// `font-size` as a "<N>pt" string, which svg2pdf.js's own unit parser
+// doesn't recognize and silently treats as 0, making that text invisible
+// in the exported PDF regardless of score size). This is the ONLY half of
+// the fix testable under this project's Node-only vitest config;
+// normalizeSvgFontSizeUnits() (the DOM-walking half that actually applies
+// this to a rendered page) is DOM-only, same limitation as
+// renderScorePagesToSvg() itself -- see this file's header comment.
+describe("ptFontSizeToPx", () => {
+  it("converts a VexFlow-style integer pt value to its px equivalent", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    // 1pt = 4/3 px -> 10pt = 13.333px.
+    expect(ptFontSizeToPx("10pt")).toBe("13.333px");
+  });
+
+  it("converts a decimal pt value", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx("14pt")).toBe("18.667px");
+  });
+
+  it("round-trips the exact values VexFlow's SvgContext emits (verified against the installed bundle)", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    // TabNote fret numbers: `render_options.font = "10pt Arial"`.
+    expect(ptFontSizeToPx("10pt")).not.toBe("10pt");
+    // StaveTempo: `font = {family: "times", size: 14, ...}` -> "14pt times".
+    expect(ptFontSizeToPx("14pt")).not.toBe("14pt");
+  });
+
+  it("leaves an already-px value unchanged", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx("20px")).toBe("20px");
+  });
+
+  it("leaves a bare unitless number unchanged", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx("16")).toBe("16");
+  });
+
+  it("leaves an em value unchanged (svg2pdf.js already handles em itself)", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx("1.5em")).toBe("1.5em");
+  });
+
+  it("leaves garbage/unparseable input unchanged rather than throwing", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx("")).toBe("");
+    expect(ptFontSizeToPx("large")).toBe("large");
+    expect(ptFontSizeToPx("ptpt")).toBe("ptpt");
+    expect(ptFontSizeToPx("10 pt")).toBe("10 pt"); // internal space -- not VexFlow's own form
+  });
+
+  it("handles a fractional pt value with a leading decimal point", async () => {
+    const { ptFontSizeToPx } = await import("./exportPdf");
+    expect(ptFontSizeToPx(".5pt")).toBe("0.667px");
+  });
+});
