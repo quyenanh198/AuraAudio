@@ -422,6 +422,83 @@ def _resolve_yt_dlp_and_known_location_ffmpeg(name: str) -> ResolvedBinary | Non
     return None
 
 
+def test_print_flag_paired_with_no_simulate(client, monkeypatch):
+    """Regression guard for bug 1: yt-dlp's `--print TEMPLATE` implies
+    `--simulate` (download skipped) unless `--no-simulate` is ALSO passed.
+    Whenever the built command contains `--print` it must also contain
+    `--no-simulate`, or a real (non-stubbed) yt-dlp silently produces no
+    file while still exiting 0 with the title line printed."""
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
+
+    captured_cmd: dict[str, list[str]] = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        out_dir = _find_output_dir(cmd)
+        (out_dir / "abc123.mp3").write_bytes(b"bytes")
+        return _RealSemanticsFakeYtDlp(cmd)
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+    assert resp.status_code == 201, resp.text
+
+    cmd = captured_cmd["cmd"]
+    assert "--print" in cmd
+    assert "--no-simulate" in cmd
+
+
+class _RealSemanticsFakeYtDlp:
+    """A `subprocess.run` result stand-in that mimics REAL yt-dlp's
+    `--print`-implies-`--simulate` semantics (used only by the stub below,
+    not by the other tests' fully-faked stand-ins above, which already
+    write the file unconditionally and would otherwise mask this bug)."""
+
+    def __init__(self, cmd: list[str]) -> None:
+        self.returncode = 0
+        self.stderr = ""
+        self.stdout = "AURA_YT_TITLE:some title\n"
+
+
+def test_print_without_no_simulate_downloads_nothing_stub_semantics(client, monkeypatch, tmp_path):
+    """Drives the endpoint against a stub that honors yt-dlp's real
+    `--print`-implies-`--simulate` semantics: if `--print` is present and
+    `--no-simulate` is NOT, no output file is written (matching real
+    yt-dlp), which must surface as the "produced no audio file" 502. This
+    is the "before the fix" behavior, kept as a live check that the stub
+    itself models the trap correctly (not just a string-match on argv).
+    """
+    import aura_api.routers.imports as imports_module
+
+    monkeypatch.setattr(imports_module, "resolve_binary", _resolve_only_yt_dlp)
+
+    def _real_semantics_fake_run(cmd, **kwargs):
+        out_dir = _find_output_dir(cmd)
+        has_print = "--print" in cmd
+        has_no_simulate = "--no-simulate" in cmd
+        if has_print and not has_no_simulate:
+            # Real yt-dlp: simulate-only, prints the template line, writes
+            # NOTHING.
+            return _RealSemanticsFakeYtDlp(cmd)
+        # Real yt-dlp with --no-simulate: actually downloads.
+        (out_dir / "abc123.mp3").write_bytes(b"bytes")
+        return _RealSemanticsFakeYtDlp(cmd)
+
+    monkeypatch.setattr(imports_module.subprocess, "run", _real_semantics_fake_run)
+
+    resp = client.post("/v1/imports/youtube", json={"url": VALID_URLS[0]})
+
+    # With the bug 1 fix in place, `cmd` always carries `--no-simulate`
+    # alongside `--print`, so the stub takes the "actually downloads"
+    # branch and the request succeeds. If `--no-simulate` regressed out of
+    # `cmd`, this stub would instead produce no file and the endpoint would
+    # 502 with "produced no audio file" -- exactly the real-world bug 1
+    # symptom.
+    assert resp.status_code == 201, resp.text
+
+
 def test_ffmpeg_location_flag_present_when_ffmpeg_resolves_via_known_location(client, monkeypatch):
     import aura_api.routers.imports as imports_module
 

@@ -37,6 +37,16 @@ _STDERR_TAIL_CHARS = 300
 # Prefix marker for the `--print` line yt-dlp emits for the video title, so
 # it can be picked out of stdout without a second (non-"cheap") metadata
 # request — normal progress/status lines never start with this literal.
+#
+# TRAP (verified against yt-dlp's own source/docs, real-Windows regression):
+# `--print TEMPLATE` on its own IMPLIES `--simulate` (i.e. "skip download")
+# unless `--no-simulate` is *also* passed. Without `--no-simulate` in `cmd`
+# below, yt-dlp happily prints this title line, exits 0, and downloads
+# NOTHING -- which then fell through to the generic "produced no audio
+# file" 502 with zero signal that print-only mode, not a real failure, was
+# the cause. `--no-simulate` MUST stay in `cmd` alongside `--print` or this
+# regresses silently (the old stub-based tests didn't model this yt-dlp
+# semantic at all, which is exactly how it shipped broken).
 _TITLE_MARKER = "AURA_YT_TITLE:"
 
 # yt-dlp's real message (verified against yt-dlp's own source) when
@@ -203,6 +213,10 @@ def import_youtube(body: ImportYoutubeRequest) -> ImportYoutubeResponse:
             *ffmpeg_location_args,
             "--print",
             f"{_TITLE_MARKER}%(title)s",
+            # See the `_TITLE_MARKER` comment above: `--print` alone implies
+            # `--simulate` (no download). This flag is what makes the
+            # actual download happen.
+            "--no-simulate",
             "-o",
             f"{tmp_dir}/%(id)s.%(ext)s",
             # `--` marks the end of options: defense-in-depth so a future
