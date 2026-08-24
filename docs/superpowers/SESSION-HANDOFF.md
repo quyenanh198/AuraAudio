@@ -1814,6 +1814,35 @@ after the first produced a green-but-broken build) that adds the real
 actually works on Windows, backed by a smoke-test CI step on all three
 platforms so this class of gap can't ship silently again.
 
+**Windows-first iteration mode (2026-08-24, owner directive, not yet
+dispatched — no release cut by this change):** `release.yml` gained a
+`platforms` `workflow_dispatch` input (`all` default / `windows-only`) so
+upcoming iteration can build and publish just the Windows `.msi` without
+touching the Linux/macOS jobs, per the owner's call to iterate on Windows
+first; full 3-platform releases resume whenever the owner explicitly asks
+for one again. In `windows-only` mode the `build` (Linux) and `macos-dmg`
+jobs are skipped via job-level `if:`, `windows-msi` always runs, and the
+`release` job's `if:` was reworked to explicitly check each dependency's
+`result` (`!cancelled() && ... && needs.windows-msi.result == 'success' &&
+(inputs.platforms == 'windows-only' || (needs.build.result == 'success' &&
+needs.macos-dmg.result == 'success'))`) — a job whose `needs:` names a
+SKIPPED job is itself skipped by the default `if: success()` otherwise,
+since GitHub Actions treats "skipped" as not-success. The release step
+itself is now two mutually-exclusive `softprops/action-gh-release` steps
+(one `.msi`-only, one the current three-pattern list) rather than one step
+with a conditional `files:` list, since `fail_on_unmatched_files: true`
+would otherwise fail the job in `windows-only` mode against an unmatched
+`dist/*.deb`/`dist/*.dmg` pattern. Tag-push runs are unaffected — there is
+no dispatch `inputs` value to read on a push event, so the mode checks
+default to running all three platforms exactly as before this change.
+
+To dispatch a windows-only iteration release (once there is something to
+actually cut): trigger `workflow_dispatch` on `release.yml` with
+`platforms: windows-only` and `release_tag: vX.Y.Z` set to the version
+being cut; leave `release_tag` empty for a build-only `.msi` smoke run
+with no Release cut. Softprops still creates the tag at the run's commit
+the same way it does today for a normal dispatch release.
+
 **Runtime note, all three platforms (RESOLVED for Linux, mitigated for
 macOS/Windows):** none of the `.deb`, `.dmg`, or `.msi` bundles `ffmpeg`
 itself — the backend (`aura_worker/stages/probe.py`/`normalize.py`/

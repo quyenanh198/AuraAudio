@@ -16,6 +16,23 @@ on:
           available.
         required: false
         default: ""
+      platforms:
+        description: >-
+          Which platform artifacts this run builds (and, if release_tag is
+          also set, publishes). `windows-only` is for the owner's
+          iterate-on-Windows workflow: it skips the Linux and macOS build
+          jobs entirely and ships just the .msi while Windows-specific work
+          is still being iterated on. `all` is the normal full release:
+          build and publish all three platform installers. Only read on
+          workflow_dispatch runs -- a tag push always builds and publishes
+          all three platforms regardless of this input's default, since
+          there is no dispatch input to read on a push event.
+        required: false
+        type: choice
+        options:
+          - all
+          - windows-only
+        default: all
 
 # Default to read; the `release` job below elevates to write for itself
 # only, since a plain workflow_dispatch (build-only) run never needs it.
@@ -26,10 +43,35 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# --- Windows-first iteration mode -------------------------------------
+# Owner directive (2026-08-24): iterate on Windows only for now -- upcoming
+# releases build and publish ONLY the Windows .msi. Full 3-platform
+# releases resume on explicit request. Controlled by the `platforms`
+# workflow_dispatch input above (default `all`, opt into `windows-only`);
+# a tag-push run has no dispatch input to read, so it always builds all
+# three platforms, same as before this change.
+#
+# GitHub Actions trap this interacts with: a job whose `needs:` includes a
+# job that was SKIPPED (not failed) is itself skipped by the implicit
+# `if: success()` every job gets by default, because "skipped" does not
+# satisfy success(). The `release` job below keeps
+# `needs: [build, macos-dmg, windows-msi]` unchanged even in windows-only
+# mode -- `build`/`macos-dmg` are skipped, not removed from `needs` -- so
+# it can still read their `result` outputs. Its own `if:` therefore opens
+# with `!cancelled()` and checks each dependency's `result` explicitly
+# instead of relying on the default success() gate, which would otherwise
+# skip `release` entirely any time `build`/`macos-dmg` are (intentionally)
+# skipped.
+# -------------------------------------------------------------------------
 jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    # Skipped in windows-only mode (see the block above `jobs:`). Absent
+    # `inputs.platforms` (push events don't populate the `inputs` context)
+    # evaluates to null, which is never equal to 'windows-only', so this
+    # defaults to running -- i.e. tag-push runs always build this job.
+    if: inputs.platforms != 'windows-only'
     # Sum of this job's own step timeouts (18 ffmpeg + 15 Tauri deps + 25
     # PyInstaller + 30 tauri build = 88) intentionally leaves slack below
     # this job timeout rather than matching it exactly — each individual
@@ -243,6 +285,9 @@ jobs:
   macos-dmg:
     name: macos-dmg
     runs-on: macos-latest
+    # Skipped in windows-only mode -- same condition and null-safety
+    # reasoning as `build`'s `if:` above.
+    if: inputs.platforms != 'windows-only'
     # Mirrors `build`'s (Linux) budget for the same reason: a first-time
     # platform with no observed run history yet to size a tighter number
     # against. macos-latest is Apple Silicon (arm64) today, so this also
@@ -381,6 +426,9 @@ jobs:
 
   windows-msi:
     name: windows-msi
+    # No mode `if:` here -- this job always runs, in both `all` and
+    # `windows-only` modes and on tag-push runs, since the .msi is the one
+    # artifact every mode ships.
     runs-on: windows-latest
     # Same first-time-platform budget reasoning as macos-dmg above, plus
     # slack for the WiX Toolset download noted below.
@@ -553,25 +601,42 @@ jobs:
   # exist yet). A plain workflow_dispatch run (no tag, empty input) stops
   # after the build jobs' artifact uploads, so the workflow is testable
   # without tagging — and never needs `contents: write` to do so.
+  #
+  # `needs` keeps listing all three build jobs even in windows-only mode,
+  # where `build`/`macos-dmg` are SKIPPED rather than removed from `needs`
+  # -- see the "Windows-first iteration mode" comment block above `jobs:`
+  # for why that requires `!cancelled()` plus explicit per-job
+  # `result == 'success'` checks below instead of the implicit
+  # `if: success()` every job gets by default (which treats a skipped
+  # dependency as not-success and would skip `release` too).
   release:
     name: release
     needs: [build, macos-dmg, windows-msi]
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' &&
-       startsWith(github.event.inputs.release_tag, 'v'))
+      !cancelled() &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' &&
+        startsWith(github.event.inputs.release_tag, 'v'))) &&
+      needs.windows-msi.result == 'success' &&
+      (inputs.platforms == 'windows-only' ||
+       (needs.build.result == 'success' && needs.macos-dmg.result == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # Gated to `all` mode: in windows-only mode `build`/`macos-dmg` were
+      # skipped and never produced these artifacts, so downloading them
+      # here would fail the step outright (nothing to download).
       - name: Download .deb artifact
+        if: inputs.platforms != 'windows-only'
         uses: actions/download-artifact@v7
         with:
           name: auraaudio-linux-deb
           path: dist
 
       - name: Download .dmg artifact
+        if: inputs.platforms != 'windows-only'
         uses: actions/download-artifact@v7
         with:
           name: auraaudio-macos-dmg
@@ -583,7 +648,30 @@ jobs:
           name: auraaudio-windows-msi
           path: dist
 
-      - name: Create GitHub Release
+      # Two mutually-exclusive release steps, not one step with a
+      # mode-conditional `files:` list: `files:` is a static block, and
+      # `fail_on_unmatched_files: true` (kept deliberately -- see below)
+      # would fail the job in windows-only mode if the list still named
+      # dist/*.deb / dist/*.dmg, since those were never downloaded above.
+      # Splitting into per-mode steps keeps `fail_on_unmatched_files: true`
+      # correct in both modes instead of loosening it.
+      - name: Create GitHub Release (windows-only)
+        if: inputs.platforms == 'windows-only'
+        uses: softprops/action-gh-release@v2
+        with:
+          # Empty on tag-push runs (softprops falls back to github.ref's
+          # tag); set on dispatch runs, where softprops creates the tag
+          # at this run's commit if it doesn't exist. Tag-push runs never
+          # hit this step (windows-only mode is dispatch-only), but the
+          # same fallback logic is kept identical to the `all`-mode step
+          # below for consistency.
+          tag_name: ${{ github.event.inputs.release_tag }}
+          files: |
+            dist/*.msi
+          fail_on_unmatched_files: true
+
+      - name: Create GitHub Release (all platforms)
+        if: inputs.platforms != 'windows-only'
         uses: softprops/action-gh-release@v2
         with:
           # Empty on tag-push runs (softprops falls back to github.ref's
