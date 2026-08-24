@@ -1686,6 +1686,25 @@ transcription) — 10/10, including the new Tab-only mode-switch test.
 
 ## Release
 
+**v1.4.0 IS LIVE** (published 2026-08-23T23:25Z, tag at main@873b7a3,
+green first attempt, run 32672851538):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.4.0 —
+`AuraAudio_1.4.0_amd64.deb` (1,123,955,234 B),
+`AuraAudio_1.4.0_aarch64.dmg` (809,968,583 B),
+`AuraAudio_1.4.0_x64_en-US.msi` (760,096,284 B). Contents: note
+audition (select/edit a note → hear its pitch, debounced, persisted
+mute toggle, silent during transport playback); Notation/Tab/Both view
+mode (Staff+Voice visibility, layout reclaim verified by e2e SVG
+height measurements, playback cursor fixed in Tab-only via the two
+documented OSMD 2.1.2 defects); Unicode-safe PDF titles (canvas raster,
+single movement-title) + key ♭/♯ display glyphs; fully hidden
+child-process consoles on Windows (subprocess_flags at all 6 call
+sites, install.rs cfg(windows) flags, demucs internal ffmpeg replaced
+by an equivalence-proven in-house decode). Final pre-release review
+(whole-diff, high scrutiny) verdict "With fixes" — all fixes were
+release-hygiene items (version bump, handoff entries, dead import,
+comment placement), resolved before tagging; zero functional findings.
+
 **v1.3.0 IS LIVE** (published 2026-08-23T08:29Z, tag at main@07665c3,
 green first attempt, run 32627718425):
 https://github.com/quyenanh198/AuraAudio/releases/tag/v1.3.0 —
