@@ -1728,11 +1728,15 @@ not blocking.
 
 ## Release
 
-**v1.4.1 IS LIVE** (published 2026-08-24, **windows-only** dispatch —
-the first use of the `platforms: windows-only` mode; per the user's
-standing directive, patch releases ship Windows-only until they say to
-release all platforms): see run/asset details below once recorded.
-Contents: the three Windows feedback wave 3 fixes above.
+**v1.4.1 IS LIVE** (published 2026-08-24T04:14Z, tag at main@b795bdb,
+green first attempt, run 32688289978 — the first **windows-only**
+dispatch, proving the `platforms: windows-only` mode end-to-end; per
+the user's standing directive, patch releases ship Windows-only until
+they say to release all platforms):
+https://github.com/quyenanh198/AuraAudio/releases/tag/v1.4.1 —
+`AuraAudio_1.4.1_x64_en-US.msi` (760,088,092 B), the release's ONLY
+asset, as designed. Contents: the three Windows feedback wave 3 fixes
+above.
 
 **v1.4.0 IS LIVE** (published 2026-08-23T23:25Z, tag at main@873b7a3,
 green first attempt, run 32672851538):
