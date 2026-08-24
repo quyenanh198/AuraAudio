@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.4.0"
+version = "1.4.1"
 description = "AuraAudio - offline guitar and piano transcription to editable scores"
 authors = ["AuraAudio"]
 license = ""

@@ -1684,7 +1684,55 @@ Verified green on this branch: `npx vitest run` (apps/desktop/web) —
 `npm run build`; `npm run test:e2e` (Playwright, real backend + real
 transcription) — 10/10, including the new Tab-only mode-switch test.
 
+## Windows feedback wave 3 (2026-08-24, shipped in v1.4.1)
+
+Three user-screenshot reports from real Windows hardware, all fixed on
+this branch (commits d61084f, 5e64ca4, 7ea0cf2; reviewer verdict SHIP,
+zero CRITICAL/HIGH):
+
+1. **YouTube import downloaded nothing** ("yt-dlp reported success but
+   produced no audio file", output showing only the `AURA_YT_TITLE:`
+   line). Root cause: yt-dlp's `--print` **implies `--simulate`**
+   (skip download) unless `--no-simulate` is also passed — our title
+   `--print` silently turned every real import into a print-only run.
+   The stub yt-dlp used by earlier tests didn't model that semantic,
+   which is how it slipped through. Fixed by adding `--no-simulate`
+   (routers/imports.py); the test stub now honors the real semantic
+   (writes no file when `--print` lacks `--no-simulate`), and both
+   regression tests were verified to fail against pre-fix code.
+2. **Exported PDF TAB staff empty** (TAB clef drawn, zero fret
+   numbers; notation staff fine). Root cause — NOT view-mode leakage,
+   NOT svg2pdf dropping text, NOT page-count dependent (all three
+   ruled out with evidence): VexFlow writes `font-size="10pt"` on TAB
+   fret-number `<text>` elements, and svg2pdf.js 2.7.0's unit parser
+   only understands bare numbers/`px` — `pt` parses to **0**, so the
+   digits are in the PDF bytes at font size 0 (invisible everywhere).
+   Fixed in exportPdf.ts by normalizing pt→px (×4/3 — the same
+   PT_TO_PX factor OSMD itself uses internally, independently
+   confirmed by the reviewer) on the cloned page SVGs before svg2pdf.
+   Guarded by unit tests plus an e2e assertion that parses the PDF
+   content stream for visibly-sized digit `Tj` ops (verified to fail
+   pre-fix). The "extreme ledger lines" in the same screenshot are
+   pre-existing real-pitch guitar notation, identical on screen — not
+   touched.
+3. **Default window size** now fits Windows screens: main window
+   starts `maximized: true` (fallback 1280×800, min 1024×700,
+   centered) — was 800×600. Keys verified against the installed
+   tauri-cli 2.11.4 schema + `npx tauri info`.
+
+Validation: 631 Python tests (make test), 316 vitest, 10/10 Playwright
+e2e (real backend). Latent-only review findings (MEDIUM: e2e PDF
+parser attributes all `Tj` in a BT/ET block to the first `Tf`; LOW: no
+yt-dlp version floor for `--no-simulate`, added 2021) — both accepted,
+not blocking.
+
 ## Release
+
+**v1.4.1 IS LIVE** (published 2026-08-24, **windows-only** dispatch —
+the first use of the `platforms: windows-only` mode; per the user's
+standing directive, patch releases ship Windows-only until they say to
+release all platforms): see run/asset details below once recorded.
+Contents: the three Windows feedback wave 3 fixes above.
 
 **v1.4.0 IS LIVE** (published 2026-08-23T23:25Z, tag at main@873b7a3,
 green first attempt, run 32672851538):
